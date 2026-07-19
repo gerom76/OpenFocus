@@ -445,7 +445,8 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
 
 # ========== ECC对齐算法实现（高精度） ==========
 
-def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscale_width=1000, thread_count: int = 4):
+def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscale_width=1000, thread_count: int = 4,
+                    parallel_ecc: bool = True):
     """
     基于 ECC (增强相关系数) 的高精度图像栈对齐算法
     适用于：显微摄影、微距摄影中伴随呼吸效应的图像栈
@@ -522,38 +523,38 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         # map 保证结果顺序与输入一致
         preprocessed_data = list(executor.map(preprocess, images))
 
-    # 准备第一张图作为参考
-    last_gray, scale_factor = preprocessed_data[0]
+    # All images share the same width, so the first image's scale applies to all pairs
+    _, scale_factor = preprocessed_data[0]
 
     # 预先创建输出目录
     if output_path:
         os.makedirs(output_path, exist_ok=True)
 
-    # --- 4. 逐帧计算矩阵 (必须串行) ---
-    # print("  - Step 2/3: Calculating ECC matrices...")
-    
-    for idx in range(1, len(images)):
+    # --- 4. Pairwise matrix computation ---
+    # Each pair (frame idx-1 vs idx) is independent; only the chain accumulation
+    # below must stay sequential. findTransformECC releases the GIL, so the
+    # pairs can run concurrently when parallel_ecc is enabled.
+    def compute_pair_matrix(idx):
         curr_gray, _ = preprocessed_data[idx]
-        
-        # 初始化当前变换矩阵
+        prev_gray, _ = preprocessed_data[idx - 1]
+
         if warp_mode == cv2.MOTION_HOMOGRAPHY:
             warp_matrix = np.eye(3, 3, dtype=np.float32)
         else:
             warp_matrix = np.eye(2, 3, dtype=np.float32)
 
         try:
-            # 核心：计算当前帧相对于上一帧的变换
             cc, warp_matrix = cv2.findTransformECC(
-                last_gray,  # template
+                prev_gray,  # template
                 curr_gray,  # input
-                warp_matrix, 
-                warp_mode, 
+                warp_matrix,
+                warp_mode,
                 criteria,
-                None, 
+                None,
                 1
             )
-            
-            # 尺度还原
+
+            # Restore scale to full resolution
             if warp_mode == cv2.MOTION_HOMOGRAPHY:
                 warp_matrix[0, 2] /= scale_factor
                 warp_matrix[1, 2] /= scale_factor
@@ -563,14 +564,25 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
                 warp_matrix[0, 2] /= scale_factor
                 warp_matrix[1, 2] /= scale_factor
 
-        except cv2.error as e:
+        except cv2.error:
             print(f"Warning: ECC failed to converge at frame {idx}. Assuming no motion.")
             if warp_mode == cv2.MOTION_HOMOGRAPHY:
                 warp_matrix = np.eye(3, dtype=np.float32)
             else:
                 warp_matrix = np.eye(2, 3, dtype=np.float32)
 
-        # 矩阵累积
+        return warp_matrix
+
+    pair_indices = range(1, len(images))
+    if parallel_ecc and len(images) > 2:
+        print(f"    ECC: computing {len(images) - 1} pair matrices in parallel ({max_workers} workers)", flush=True)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            pair_matrices = list(executor.map(compute_pair_matrix, pair_indices))
+    else:
+        pair_matrices = [compute_pair_matrix(idx) for idx in pair_indices]
+
+    # --- Sequential chain accumulation (order-dependent) ---
+    for warp_matrix in pair_matrices:
         if warp_mode == cv2.MOTION_AFFINE:
             row = np.array([[0, 0, 1]], dtype=np.float32)
             H_local_3x3 = np.vstack([warp_matrix, row])
@@ -578,15 +590,9 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         else:
             H_global = np.matmul(H_global, warp_matrix)
 
-        # 记录变换矩阵（使用逆矩阵）
+        # Record the inverse transform (maps target back to source)
         H_inv = np.linalg.inv(H_global)
         H_matrices.append(H_inv.copy())
-
-        # 更新上一帧
-        last_gray = curr_gray
-        
-        # if idx % 5 == 0:
-            # print(f"    Calculated matrix {idx}/{len(images)}...")
 
     # --- 5. 并行应用变换与裁切 ---
     # print("  - Step 3/3: Warping and saving concurrently...")
@@ -900,22 +906,24 @@ class ImageRegistration:
     
     SUPPORTED_METHODS = ['homography', 'ecc', 'both']
     
-    def __init__(self, method: str = 'homography', downscale_width: int = 1024):
+    def __init__(self, method: str = 'homography', downscale_width: int = 1024, ecc_parallel: bool = True):
         """
         初始化配准器
-        
+
         Args:
             method (str): 配准方法名称，可选 'homography', 'ecc', 'both'
+            ecc_parallel (bool): Compute ECC pair matrices concurrently (identical results, faster)
         """
         if method not in self.SUPPORTED_METHODS:
             raise ValueError(
                 f"不支持的配准方法: {method}. "
                 f"支持的方法: {', '.join(self.SUPPORTED_METHODS)}"
             )
-        
+
         self.method = method
         # 用户可配置的下采样宽度，用于特征提取等预处理阶段
         self.downscale_width = int(downscale_width) if downscale_width is not None else 1024
+        self.ecc_parallel = bool(ecc_parallel)
     
     def process(self, 
                 input_source: Union[str, List[np.ndarray]], 
@@ -978,7 +986,8 @@ class ImageRegistration:
         Returns:
             配准后的图像列表
         """
-        return _align_ecc_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count)
+        return _align_ecc_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
+                               parallel_ecc=self.ecc_parallel)
     
     def set_method(self, method: str):
         """

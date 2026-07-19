@@ -19,10 +19,12 @@ class ROIAlignmentWorker(QThread):
     finished_signal = pyqtSignal(object, float)  # aligned_images, alignment_time
     error_signal = pyqtSignal(str)
 
-    def __init__(self, raw_images, reg_downscale_width=None, thread_count: int = DEFAULT_THREAD_COUNT):
+    def __init__(self, raw_images, reg_downscale_width=None, thread_count: int = DEFAULT_THREAD_COUNT,
+                 ecc_parallel: bool = True):
         super().__init__()
         self.raw_images = raw_images
         self.reg_downscale_width = reg_downscale_width
+        self.ecc_parallel = bool(ecc_parallel)
         try:
             self.thread_count = max(1, int(thread_count))
         except Exception:
@@ -35,9 +37,10 @@ class ROIAlignmentWorker(QThread):
 
             # 使用ECC方法进行配准
             if self.reg_downscale_width is not None:
-                registration = ImageRegistration(method="ecc", downscale_width=self.reg_downscale_width)
+                registration = ImageRegistration(method="ecc", downscale_width=self.reg_downscale_width,
+                                                 ecc_parallel=self.ecc_parallel)
             else:
-                registration = ImageRegistration(method="ecc")
+                registration = ImageRegistration(method="ecc", ecc_parallel=self.ecc_parallel)
 
             aligned_images = registration.process(self.raw_images, output_path=None, thread_count=self.thread_count)
             alignment_time = time.time() - alignment_start_time
@@ -80,6 +83,7 @@ class RenderWorker(QThread):
         roi_rect=None,
         roi_mode="crop", # 'crop' or 'paste'
         roi_base_index=0,
+        ecc_parallel: bool = True,
     ):
         super().__init__()
         self.raw_images = raw_images
@@ -111,6 +115,8 @@ class RenderWorker(QThread):
         self.stackmffv4_batch_size = max(1, int(stackmffv4_batch_size)) if stackmffv4_batch_size else 2
         # Registration downscale width passed from UI (optional)
         self.reg_downscale_width = reg_downscale_width
+        # Compute ECC pair matrices concurrently (identical results, faster)
+        self.ecc_parallel = bool(ecc_parallel)
         # 用户配置的线程数（用于控制内部 ThreadPool 大小）
         try:
             self.thread_count = max(1, int(thread_count))
@@ -209,9 +215,10 @@ class RenderWorker(QThread):
         print(f"Registration started: mode={mode}, {len(images)} images", flush=True)
 
         if self.reg_downscale_width is not None:
-            registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width)
+            registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
+                                             ecc_parallel=self.ecc_parallel)
         else:
-            registration = ImageRegistration(method=mode)
+            registration = ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
 
         processed = registration.process(images, output_path=None, thread_count=self.thread_count)
         alignment_time = time.time() - alignment_start_time
@@ -372,7 +379,7 @@ class BatchWorker(QThread):
                  tile_enabled=None, tile_block_size=None, tile_overlap=None, tile_threshold=None, thread_count: int = 4,
                  stackmffv4_batch_size: int = 2,
                  import_mode="multiple_folders", split_method=None, split_param=None,
-                 single_folder_images_with_times=None):
+                 single_folder_images_with_times=None, ecc_parallel: bool = True):
         super().__init__()
         self.folder_paths = folder_paths
         self.output_type = output_type
@@ -388,6 +395,7 @@ class BatchWorker(QThread):
         self.image_loader = ImageStackLoader()
         from core.registration import ImageRegistration
         self.reg_downscale_width = reg_downscale_width
+        self.ecc_parallel = bool(ecc_parallel)
         self.tile_enabled = tile_enabled
         self.tile_block_size = tile_block_size
         self.tile_overlap = tile_overlap
@@ -507,9 +515,10 @@ class BatchWorker(QThread):
             if mode:
                 from core.registration import ImageRegistration
                 if self.reg_downscale_width is not None:
-                    registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width)
+                    registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
+                                                     ecc_parallel=self.ecc_parallel)
                 else:
-                    registration = ImageRegistration(method=mode)
+                    registration = ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
                 aligned_images = registration.process(images, output_path=None, thread_count=self.thread_count)
 
         fusion_method = self.processing_settings.get('fusion_method')
@@ -617,9 +626,10 @@ class BatchWorker(QThread):
 
             if mode:
                 if getattr(self, 'reg_downscale_width', None) is not None:
-                    registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width)
+                    registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
+                                                     ecc_parallel=self.ecc_parallel)
                 else:
-                    registration = ImageRegistration(method=mode)
+                    registration = ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
                 aligned_images = registration.process(images, output_path=None, thread_count=self.thread_count)
             else:
                 # 如果没有选择任何配准方法，直接使用原始图像

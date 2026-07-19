@@ -95,6 +95,7 @@ class BatchManager:
             output_path=output_path,
             processing_settings=processing_settings,
             reg_downscale_width=getattr(self.window, "reg_downscale_width", None),
+            ecc_parallel=getattr(self.window, "ecc_parallel", True),
             tile_enabled=getattr(self.window, "tile_enabled", None),
             tile_block_size=getattr(self.window, "tile_block_size", None),
             tile_overlap=getattr(self.window, "tile_overlap", None),

@@ -329,7 +329,13 @@ class TranslationManager(QObject):
         registration accuracy is needed and you have sufficient CPU/GPU resources.</p>
 
         <p>Lowering this value speeds up registration and reduces memory usage;
-        increasing it can improve accuracy for very detailed images but increases runtime.</p>''',
+        increasing it can improve accuracy for very detailed images but increases runtime.</p>
+
+        <h3>Parallel ECC Computation</h3>
+        <p>Computes the ECC transform between each pair of adjacent frames concurrently
+        across CPU cores. Results are identical to sequential computation, only faster
+        (roughly 2x on typical stacks). Disable only for troubleshooting.</p>''',
+                'dialog_reg_parallel_ecc': 'Parallel ECC computation',
                 'dialog_thread_title': 'Thread Settings',
                 'dialog_thread_group': 'Thread Count',
                 'dialog_thread_label': 'Thread Count:',
@@ -815,7 +821,12 @@ class TranslationManager(QObject):
 
         <p>推荐值：对于大图像（>=2048px）使用 <code>1024</code>，对于中等图像使用 <code>1600</code>。仅在需要最大配准精度且有足够的CPU/GPU资源时才将其设置得更高。</p>
 
-        <p>降低此值可加速配准并减少内存使用；增加此值可以提高非常精细图像的准确性，但会增加运行时间。</p>'''
+        <p>降低此值可加速配准并减少内存使用；增加此值可以提高非常精细图像的准确性，但会增加运行时间。</p>
+
+        <h3>并行 ECC 计算</h3>
+        <p>在多个 CPU 核心上并发计算相邻帧之间的 ECC 变换。结果与串行计算完全一致，
+        只是速度更快（典型图像栈约 2 倍）。仅在排查问题时才需要禁用。</p>''',
+                'dialog_reg_parallel_ecc': '并行 ECC 计算'
             }
         }
 

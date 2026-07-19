@@ -56,7 +56,7 @@ from constants import (
     WINDOW_WIDTH, WINDOW_HEIGHT,
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
     REG_DOWNSCALE_WIDTH, DEFAULT_THREAD_COUNT,
-    STACKMFFV4_BATCH_SIZE,
+    STACKMFFV4_BATCH_SIZE, ECC_PARALLEL,
 )
 
 class OpenFocus(QMainWindow):
@@ -99,6 +99,8 @@ class OpenFocus(QMainWindow):
         self.tile_threshold = TILE_THRESHOLD
         # Registration downscale default (用户可在 Settings -> Registration 中修改)
         self.reg_downscale_width = REG_DOWNSCALE_WIDTH
+        # Parallel ECC pair computation (user-configurable in Settings -> Registration)
+        self.ecc_parallel = ECC_PARALLEL
         # 全局线程数设置，默认4（可在 Settings 中修改）
         self.thread_count = DEFAULT_THREAD_COUNT
         # StackMFF V4 批量大小设置，默认2（可在 Settings 中修改）
@@ -614,7 +616,8 @@ class OpenFocus(QMainWindow):
             self.roi_alignment_worker = ROIAlignmentWorker(
                 self.raw_images,
                 reg_downscale_width=self.reg_downscale_width,
-                thread_count=self.thread_count
+                thread_count=self.thread_count,
+                ecc_parallel=self.ecc_parallel
             )
             self.roi_alignment_worker.finished_signal.connect(self._on_roi_alignment_finished)
             self.roi_alignment_worker.error_signal.connect(self._on_roi_alignment_error)

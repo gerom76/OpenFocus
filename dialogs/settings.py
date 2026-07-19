@@ -464,7 +464,7 @@ class RegistrationSettingsDialog(QDialog):
         super().__init__(parent)
         self.parent_window = parent
         self.setWindowTitle(trans.t("dialog_reg_title"))
-        self.resize(360, 140)
+        self.resize(360, 180)
 
         self.setStyleSheet(f"""
             QDialog {{
@@ -498,23 +498,29 @@ class RegistrationSettingsDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        from PyQt6.QtWidgets import QGroupBox
+        from PyQt6.QtWidgets import QGroupBox, QCheckBox
 
         group = QGroupBox(trans.t("dialog_reg_group"))
-        g_layout = QHBoxLayout(group)
+        g_layout = QVBoxLayout(group)
 
+        downscale_layout = QHBoxLayout()
         lbl = QLabel(trans.t("dialog_reg_downscale"))
         lbl.setMinimumWidth(120)
-        g_layout.addWidget(lbl)
+        downscale_layout.addWidget(lbl)
 
         self.spin_downscale = QSpinBox()
         self.spin_downscale.setRange(256, 8192)
         self.spin_downscale.setSingleStep(1)
-        # 默认值会在 load_defaults 中设置
+        # Default value is set in load_defaults
         self.spin_downscale.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.spin_downscale.setValue(1024)
-        g_layout.addWidget(self.spin_downscale)
-        g_layout.addStretch()
+        downscale_layout.addWidget(self.spin_downscale)
+        downscale_layout.addStretch()
+        g_layout.addLayout(downscale_layout)
+
+        self.cb_parallel_ecc = QCheckBox(trans.t("dialog_reg_parallel_ecc"))
+        self.cb_parallel_ecc.setChecked(True)
+        g_layout.addWidget(self.cb_parallel_ecc)
 
         layout.addWidget(group)
 
@@ -548,11 +554,13 @@ class RegistrationSettingsDialog(QDialog):
                 self.spin_downscale.setValue(int(val))
             except Exception:
                 self.spin_downscale.setValue(1024)
+            self.cb_parallel_ecc.setChecked(bool(getattr(self.parent_window, "ecc_parallel", True)))
 
     def on_accept(self):
         val = int(self.spin_downscale.value())
         if self.parent_window:
             setattr(self.parent_window, "reg_downscale_width", val)
+            setattr(self.parent_window, "ecc_parallel", self.cb_parallel_ecc.isChecked())
         self.accept()
 
     def show_help(self):

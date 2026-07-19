@@ -144,6 +144,7 @@ class RenderManager:
             roi_rect=roi_rect,
             roi_mode=roi_mode,
             roi_base_index=roi_base_index,
+            ecc_parallel=getattr(window, "ecc_parallel", True),
         )
 
         self.worker.finished_signal.connect(self.on_render_finished)
