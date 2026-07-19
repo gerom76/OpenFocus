@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python \"f:\\\\Temp\\\\u\\\\claude\\\\f--src-OpenFocus\\\\ac9339b2-cfb7-4107-aa09-4513e0b96206\\\\scratchpad\\\\test_gpu_capacity.py\")"
+    ]
+  }
+}

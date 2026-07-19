@@ -378,7 +378,10 @@ class DepthTransformer(nn.Module):
         self.num_heads = num_heads
         self.num_layers = num_layers
         self.spatial_pool_ratio = spatial_pool_ratio  # 空间下采样比例
-        
+        # Peak-memory budget for one attention weight buffer; locations are
+        # processed in chunks so [chunk, heads, N, N] stays within this budget.
+        self.attn_mem_budget_bytes = 1 << 30
+
         # 创建多层 transformer layers
         self.layers = nn.ModuleList([
             DepthTransformerLayer(embed_dim, num_heads, ff_dim, dropout)
@@ -401,9 +404,24 @@ class DepthTransformer(nn.Module):
             
         # 在下采样后的特征图上执行注意力计算
         x_flat = x_pooled.permute(0, 3, 4, 1, 2).contiguous().reshape(B * target_h * target_w, N, C)
- 
-        for layer in self.layers:
-            x_flat = layer(x_flat)
+
+        # Each spatial location attends only along the depth axis, so locations
+        # are independent sequences: chunking dim 0 gives identical results while
+        # keeping the [chunk, heads, N, N] attention buffers within budget.
+        attn_bytes_per_location = 4 * self.num_heads * N * N
+        chunk = max(1, self.attn_mem_budget_bytes // max(1, attn_bytes_per_location))
+        total_locations = x_flat.shape[0]
+        if chunk >= total_locations:
+            for layer in self.layers:
+                x_flat = layer(x_flat)
+        else:
+            pieces = []
+            for i in range(0, total_locations, chunk):
+                piece = x_flat[i:i + chunk]
+                for layer in self.layers:
+                    piece = layer(piece)
+                pieces.append(piece)
+            x_flat = torch.cat(pieces, dim=0)
 
         x_processed = x_flat.reshape(B, target_h, target_w, N, C).permute(0, 3, 4, 1, 2)
         

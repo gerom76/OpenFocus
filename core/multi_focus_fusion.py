@@ -792,7 +792,7 @@ class MultiFocusFusion:
         single tile still does not fit.
         """
         if not self.use_gpu:
-            return _stackmffv4_batch_impl(tiles_list, model_path, False)
+            return self._run_stackmffv4_cpu(tiles_list, model_path)
 
         import torch
 
@@ -806,7 +806,7 @@ class MultiFocusFusion:
             return results
 
         if getattr(self, '_stackmffv4_force_cpu', False):
-            return _stackmffv4_batch_impl(tiles_list, model_path, False)
+            return self._run_stackmffv4_cpu(tiles_list, model_path)
 
         try:
             return _stackmffv4_batch_impl(tiles_list, model_path, True)
@@ -823,7 +823,25 @@ class MultiFocusFusion:
             print("Warning: CUDA out of memory even for a single tile; "
                   "falling back to CPU for the rest of this render. "
                   "Reduce Tile Block Size in Settings to keep GPU acceleration.")
+            return self._run_stackmffv4_cpu(tiles_list, model_path)
+
+    def _run_stackmffv4_cpu(self, tiles_list: list, model_path: str) -> list:
+        """
+        Run StackMFF V4 batch inference on the CPU, converting an allocator
+        out-of-memory failure into an actionable error message.
+        """
+        try:
             return _stackmffv4_batch_impl(tiles_list, model_path, False)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if 'not enough memory' in msg or 'DefaultCPUAllocator' in msg or 'bad allocation' in msg:
+                raise RuntimeError(
+                    "Out of memory during StackMFF-V4 fusion. The model's memory use "
+                    "grows with tile area and with the square of the number of images "
+                    "in the stack. Reduce Tile Block Size in Settings (e.g. 512 or 256) "
+                    "and/or fuse fewer images at once, then try again."
+                ) from exc
+            raise
 
     def set_device(self, use_gpu: bool):
         """
