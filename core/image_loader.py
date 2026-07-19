@@ -6,6 +6,7 @@ Responsible for loading image stacks from folders and generating thumbnails
 import os
 import cv2
 import numpy as np
+import concurrent.futures
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict, Any
 
@@ -50,6 +51,59 @@ class ImageStackLoader:
             return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         return cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_COLOR)
 
+    def _load_files_parallel(
+        self,
+        entries: List[Tuple[str, str]],
+        scale_factor: float = 1.0,
+        max_workers: Optional[int] = None,
+    ) -> List[Optional[np.ndarray]]:
+        """Decode a list of (filename, full_path) entries in parallel.
+
+        Decoding (cv2/rawpy) releases the GIL, so threads give near-linear speedup.
+        Returns decoded images in input order (None for entries that failed);
+        progress is printed as files complete.
+        """
+        if max_workers is None:
+            max_workers = min(8, os.cpu_count() or 4)
+        max_workers = max(1, min(max_workers, len(entries)))
+
+        total = len(entries)
+        results: List[Optional[np.ndarray]] = [None] * total
+
+        def decode(index: int, filename: str, full_path: str):
+            if not os.path.exists(full_path):
+                return index, filename, None, "not_found"
+            try:
+                img = self.read_image_bgr(full_path)
+                if img is not None and scale_factor != 1.0 and 0 < scale_factor < 1.0:
+                    width = int(img.shape[1] * scale_factor)
+                    height = int(img.shape[0] * scale_factor)
+                    img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+                return index, filename, img, None
+            except Exception as e:
+                return index, filename, None, str(e)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(decode, i, filename, full_path)
+                for i, (filename, full_path) in enumerate(entries)
+            ]
+            completed = 0
+            for future in concurrent.futures.as_completed(futures):
+                index, filename, img, error = future.result()
+                results[index] = img
+                completed += 1
+                if error == "not_found":
+                    print(f"[{completed}/{total}] File not found: {filename}", flush=True)
+                elif error is not None:
+                    print(f"[{completed}/{total}] Failed to load {filename}: {error}", flush=True)
+                elif img is None:
+                    print(f"[{completed}/{total}] Failed to load {filename}", flush=True)
+                else:
+                    print(f"[{completed}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
+
+        return results
+
     def load_from_folder(self, folder_path: str, scale_factor: float = 1.0) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not os.path.isdir(folder_path):
             return False, "Selected path is not a valid directory", [], []
@@ -66,34 +120,25 @@ class ImageStackLoader:
 
         image_files.sort(key=lambda x: x[0])
 
+        decoded = self._load_files_parallel(image_files, scale_factor)
+
         loaded_images = []
         filenames = []
+        loaded_paths = []
         failed_count = 0
-        total = len(image_files)
-
-        for index, (filename, full_path) in enumerate(image_files, start=1):
-            try:
-                img = self.read_image_bgr(full_path)
-                if img is not None:
-                    if scale_factor != 1.0 and 0 < scale_factor < 1.0:
-                        width = int(img.shape[1] * scale_factor)
-                        height = int(img.shape[0] * scale_factor)
-                        img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
-                    loaded_images.append(img)
-                    filenames.append(filename)
-                    print(f"[{index}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
-                else:
-                    failed_count += 1
-                    print(f"[{index}/{total}] Failed to load {filename}", flush=True)
-            except Exception as e:
+        for (filename, full_path), img in zip(image_files, decoded):
+            if img is None:
                 failed_count += 1
-                print(f"[{index}/{total}] Failed to load {filename}: {e}", flush=True)
+            else:
+                loaded_images.append(img)
+                filenames.append(filename)
+                loaded_paths.append(full_path)
 
         if not loaded_images:
             return False, "Could not load any image files", [], []
 
         self.images = loaded_images
-        self.image_paths = [f[1] for f in image_files[:len(loaded_images)]]
+        self.image_paths = loaded_paths
 
         message = f"Loaded {len(loaded_images)} image(s)"
         if failed_count > 0:
@@ -157,42 +202,26 @@ class ImageStackLoader:
         if not filepaths:
             return False, "No file paths provided", [], []
 
+        entries = [(os.path.basename(p), p) for p in filepaths]
+        decoded = self._load_files_parallel(entries, scale_factor)
+
         loaded_images = []
         filenames = []
+        loaded_paths = []
         failed_count = 0
-        total = len(filepaths)
-
-        for index, full_path in enumerate(filepaths, start=1):
-            filename = os.path.basename(full_path)
-            try:
-                if not os.path.exists(full_path):
-                    failed_count += 1
-                    print(f"[{index}/{total}] File not found: {filename}", flush=True)
-                    continue
-
-                img = self.read_image_bgr(full_path)
-                if img is None:
-                    failed_count += 1
-                    print(f"[{index}/{total}] Failed to load {filename}", flush=True)
-                    continue
-
-                if scale_factor != 1.0 and 0 < scale_factor < 1.0:
-                    width = int(img.shape[1] * scale_factor)
-                    height = int(img.shape[0] * scale_factor)
-                    img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
-
+        for (filename, full_path), img in zip(entries, decoded):
+            if img is None:
+                failed_count += 1
+            else:
                 loaded_images.append(img)
                 filenames.append(filename)
-                print(f"[{index}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
-            except Exception as e:
-                failed_count += 1
-                print(f"[{index}/{total}] Failed to load {filename}: {e}", flush=True)
+                loaded_paths.append(full_path)
 
         if not loaded_images:
             return False, "Could not load any image files", [], []
 
         self.images = loaded_images
-        self.image_paths = list(filepaths[:len(loaded_images)])
+        self.image_paths = loaded_paths
 
         message = f"Loaded {len(loaded_images)} image(s)"
         if failed_count > 0:
@@ -302,23 +331,16 @@ class ImageStackLoader:
         if not image_files:
             return False, "No supported image files found in the folder", [], []
 
+        decoded = self._load_files_parallel(image_files)
+
         loaded_data = []
         failed_count = 0
-        total = len(image_files)
-
-        for index, (filename, full_path) in enumerate(image_files, start=1):
-            try:
-                img = self.read_image_bgr(full_path)
-                if img is not None:
-                    timestamp = self.get_image_timestamp(full_path)
-                    loaded_data.append((filename, full_path, img, timestamp))
-                    print(f"[{index}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
-                else:
-                    failed_count += 1
-                    print(f"[{index}/{total}] Failed to load {filename}", flush=True)
-            except Exception as e:
+        for (filename, full_path), img in zip(image_files, decoded):
+            if img is None:
                 failed_count += 1
-                print(f"[{index}/{total}] Failed to load {filename}: {e}", flush=True)
+            else:
+                timestamp = self.get_image_timestamp(full_path)
+                loaded_data.append((filename, full_path, img, timestamp))
 
         if not loaded_data:
             return False, "Could not load any image files", [], []
