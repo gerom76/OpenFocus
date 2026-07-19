@@ -11,7 +11,7 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
-> 🎉 **2026.07.19**: Guided Filter fusion now runs on GPU (CUDA/MPS via PyTorch) with automatic CPU fallback — ~5x faster on large stacks.
+> 🎉 **2026.07.19**: Guided Filter and DCT fusion now run on GPU (CUDA/MPS via PyTorch) with automatic CPU fallback — up to ~5x faster on large stacks.
 
 > 🎉 **2026.07.19**: Image stacks now load in parallel across CPU cores (~4x faster for RAW and large stacks).
 

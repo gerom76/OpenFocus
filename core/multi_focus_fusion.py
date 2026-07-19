@@ -164,8 +164,18 @@ class MultiFocusFusion:
             ) from exc
 
         if self.use_gpu:
-            print("Note: DCT fusion currently runs on CPU only; switching to CPU mode.")
-            self.use_gpu = False
+            try:
+                import torch
+                has_gpu = torch.cuda.is_available() or (
+                    hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+                )
+                if not has_gpu:
+                    print("Note: No GPU acceleration available (CUDA/MPS); DCT fusion will run on CPU.")
+            except ImportError:
+                has_gpu = False
+                print("Note: PyTorch not installed; DCT fusion will run on CPU.")
+            if not has_gpu:
+                self.use_gpu = False
 
     def _validate_transform_environment(self) -> None:
         """Validate transform-domain fusion dependencies."""
@@ -387,6 +397,19 @@ class MultiFocusFusion:
         """
         if img_resize is not None:
             raise ValueError("DCT fusion does not support dynamic resizing. Resize images before processing.")
+
+        if self.use_gpu:
+            try:
+                from fusion_methods.dct_torch import dct_torch_impl
+                return dct_torch_impl(input_source, block_size=block_size, kernel_size=kernel_size)
+            except Exception as exc:
+                print(f"Warning: GPU DCT fusion failed ({exc}); falling back to CPU.")
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
         # thread_count (if passed) is ignored by this implementation
         return dct_focus_stack_fusion(
@@ -655,9 +678,9 @@ class MultiFocusFusion:
             h, w, channels, num_images, block_size, thread_count
         )
 
-        # The GPU guided-filter path is already parallel internally; running tiles
+        # GPU fusion paths are already parallel internally; running tiles
         # concurrently would only contend for the device and multiply GPU memory use
-        if self.use_gpu and algorithm == 'guided_filter':
+        if self.use_gpu and algorithm in ('guided_filter', 'dct'):
             optimal_threads = 1
 
         print(f"Tiled fusion: {len(tile_coords)} tiles, {optimal_threads} parallel workers (memory-optimized)", flush=True)
