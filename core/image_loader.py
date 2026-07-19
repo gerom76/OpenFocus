@@ -1,6 +1,6 @@
 """
-图像栈加载器模块
-负责从文件夹中加载图像栈并生成缩略图
+Image stack loader module
+Responsible for loading image stacks from folders and generating thumbnails
 """
 
 import os
@@ -15,19 +15,40 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+try:
+    import rawpy
+    RAWPY_AVAILABLE = True
+except ImportError:
+    RAWPY_AVAILABLE = False
+
 from PyQt6.QtGui import QPixmap, QImage
 
 
 class ImageStackLoader:
-    """图像栈加载器"""
+    """Image stack loader"""
 
-    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+    RAW_FORMATS = {'.nef', '.nrw'}  # Nikon RAW, requires rawpy (LibRaw)
+    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'} | (RAW_FORMATS if RAWPY_AVAILABLE else set())
     SUPPORTED_VIDEO_FORMATS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
 
     def __init__(self):
         self.image_paths = []
         self.images = []
         self.thumbnail_size = (600, 400)
+
+    @classmethod
+    def read_image_bgr(cls, full_path: str) -> Optional[np.ndarray]:
+        """Read an image as a BGR uint8 array; RAW formats are decoded via rawpy, others via cv2. Returns None on failure."""
+        ext = os.path.splitext(full_path)[1].lower()
+        if ext in cls.RAW_FORMATS:
+            if not RAWPY_AVAILABLE:
+                return None
+            # Pass a file object to support paths with non-ASCII characters
+            with open(full_path, 'rb') as f:
+                with rawpy.imread(f) as raw:
+                    rgb = raw.postprocess(use_camera_wb=True, output_bps=8)
+            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        return cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_COLOR)
 
     def load_from_folder(self, folder_path: str, scale_factor: float = 1.0) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not os.path.isdir(folder_path):
@@ -51,7 +72,7 @@ class ImageStackLoader:
 
         for filename, full_path in image_files:
             try:
-                img = cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+                img = self.read_image_bgr(full_path)
                 if img is not None:
                     if scale_factor != 1.0 and 0 < scale_factor < 1.0:
                         width = int(img.shape[1] * scale_factor)
@@ -143,7 +164,7 @@ class ImageStackLoader:
                     failed_count += 1
                     continue
 
-                img = cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+                img = self.read_image_bgr(full_path)
                 if img is None:
                     failed_count += 1
                     continue
@@ -278,7 +299,7 @@ class ImageStackLoader:
 
         for filename, full_path in image_files:
             try:
-                img = cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+                img = self.read_image_bgr(full_path)
                 if img is not None:
                     timestamp = self.get_image_timestamp(full_path)
                     loaded_data.append((filename, full_path, img, timestamp))
