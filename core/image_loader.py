@@ -69,8 +69,9 @@ class ImageStackLoader:
         loaded_images = []
         filenames = []
         failed_count = 0
+        total = len(image_files)
 
-        for filename, full_path in image_files:
+        for index, (filename, full_path) in enumerate(image_files, start=1):
             try:
                 img = self.read_image_bgr(full_path)
                 if img is not None:
@@ -80,11 +81,13 @@ class ImageStackLoader:
                         img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
                     loaded_images.append(img)
                     filenames.append(filename)
+                    print(f"[{index}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
                 else:
                     failed_count += 1
+                    print(f"[{index}/{total}] Failed to load {filename}", flush=True)
             except Exception as e:
                 failed_count += 1
-                print(f"Failed to load image {filename}: {e}")
+                print(f"[{index}/{total}] Failed to load {filename}: {e}", flush=True)
 
         if not loaded_images:
             return False, "Could not load any image files", [], []
@@ -157,16 +160,20 @@ class ImageStackLoader:
         loaded_images = []
         filenames = []
         failed_count = 0
+        total = len(filepaths)
 
-        for full_path in filepaths:
+        for index, full_path in enumerate(filepaths, start=1):
+            filename = os.path.basename(full_path)
             try:
                 if not os.path.exists(full_path):
                     failed_count += 1
+                    print(f"[{index}/{total}] File not found: {filename}", flush=True)
                     continue
 
                 img = self.read_image_bgr(full_path)
                 if img is None:
                     failed_count += 1
+                    print(f"[{index}/{total}] Failed to load {filename}", flush=True)
                     continue
 
                 if scale_factor != 1.0 and 0 < scale_factor < 1.0:
@@ -175,10 +182,11 @@ class ImageStackLoader:
                     img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
 
                 loaded_images.append(img)
-                filenames.append(os.path.basename(full_path))
+                filenames.append(filename)
+                print(f"[{index}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
             except Exception as e:
                 failed_count += 1
-                print(f"Failed to load image {full_path}: {e}")
+                print(f"[{index}/{total}] Failed to load {filename}: {e}", flush=True)
 
         if not loaded_images:
             return False, "Could not load any image files", [], []
@@ -296,18 +304,21 @@ class ImageStackLoader:
 
         loaded_data = []
         failed_count = 0
+        total = len(image_files)
 
-        for filename, full_path in image_files:
+        for index, (filename, full_path) in enumerate(image_files, start=1):
             try:
                 img = self.read_image_bgr(full_path)
                 if img is not None:
                     timestamp = self.get_image_timestamp(full_path)
                     loaded_data.append((filename, full_path, img, timestamp))
+                    print(f"[{index}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
                 else:
                     failed_count += 1
+                    print(f"[{index}/{total}] Failed to load {filename}", flush=True)
             except Exception as e:
                 failed_count += 1
-                print(f"Failed to load image {filename}: {e}")
+                print(f"[{index}/{total}] Failed to load {filename}: {e}", flush=True)
 
         if not loaded_data:
             return False, "Could not load any image files", [], []

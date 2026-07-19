@@ -124,6 +124,10 @@ class RenderWorker(QThread):
             fusion_time = 0
             device_name = "CPU"
 
+            if self.raw_images:
+                h, w = self.raw_images[0].shape[:2]
+                print(f"Render started: {len(self.raw_images)} images ({w}x{h})", flush=True)
+
             current_alignment_options = (
                 self.need_align_homography,
                 self.need_align_ecc,
@@ -142,6 +146,7 @@ class RenderWorker(QThread):
             if need_registration and can_reuse_aligned_images:
                 processed_images = self.aligned_images
                 registration_performed = True
+                print("Registration: reusing cached aligned images", flush=True)
             else:
                 processed_images = self.raw_images.copy()
                 registration_performed = False
@@ -150,9 +155,13 @@ class RenderWorker(QThread):
                     alignment_start_time = time.time()
                     processed_images, alignment_time = self._run_registration(processed_images)
                     registration_performed = True
+                    print(f"Registration completed in {alignment_time:.2f}s", flush=True)
 
             # 2. ROI裁剪阶段
             cropped_images, base_full_image, roi_rect_int = self._apply_roi_cropping(processed_images)
+            if roi_rect_int is not None:
+                rx, ry, rw, rh = roi_rect_int
+                print(f"ROI crop: {rw}x{rh} at ({rx}, {ry}), mode={self.roi_mode}", flush=True)
 
             # 3. 融合阶段
             fusion_result = None
@@ -167,6 +176,9 @@ class RenderWorker(QThread):
                     fusion_result = self._apply_roi_pasting(fusion_result, base_full_image, roi_rect_int)
 
                 fusion_time = time.time() - fusion_start_time
+                print(f"Fusion completed in {fusion_time:.2f}s", flush=True)
+
+            print(f"Render finished in {alignment_time + fusion_time:.2f}s total", flush=True)
 
             self.finished_signal.emit(
                 processed_images,
@@ -193,6 +205,8 @@ class RenderWorker(QThread):
             mode = "ecc"
         else:
             return images, 0
+
+        print(f"Registration started: mode={mode}, {len(images)} images", flush=True)
 
         if self.reg_downscale_width is not None:
             registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width)
@@ -261,6 +275,8 @@ class RenderWorker(QThread):
 
         info = fusion.get_info()
         device_name = info['device']
+
+        print(f"Fusion started: {algorithm} on {device_name}, {len(images)} images", flush=True)
 
         kernel_size = normalize_kernel_size(self.kernel_slider_value)
 

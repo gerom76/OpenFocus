@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.19**: Guided Filter fusion now runs on GPU (CUDA/MPS via PyTorch) with automatic CPU fallback — ~5x faster on large stacks.
+
 > 🎉 **2026.07.19**: Added support for loading Nikon RAW images (NEF/NRW) via rawpy (requires `pip install rawpy`).
 
 > 🎉 **2026.01.13**: Optimized ROI mode processing and fixed bugs to improve performance and stability.

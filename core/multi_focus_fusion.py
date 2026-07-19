@@ -199,8 +199,18 @@ class MultiFocusFusion:
     def _validate_spatial_environment(self) -> None:
         """Validate spatial-domain fusion dependencies."""
         if self.use_gpu:
-            print("Note: Guided-filter fusion runs on CPU only; switching to CPU mode.")
-            self.use_gpu = False
+            try:
+                import torch
+                has_gpu = torch.cuda.is_available() or (
+                    hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+                )
+                if not has_gpu:
+                    print("Note: No GPU acceleration available (CUDA/MPS); guided-filter fusion will run on CPU.")
+            except ImportError:
+                has_gpu = False
+                print("Note: PyTorch not installed; guided-filter fusion will run on CPU.")
+            if not has_gpu:
+                self.use_gpu = False
 
     def _validate_ai_environment(self) -> None:
         """Validate AI fusion dependencies."""
@@ -332,6 +342,19 @@ class MultiFocusFusion:
         kernel_size = max(1, int(kernel_size or 31))
         if kernel_size % 2 == 0:
             kernel_size += 1
+
+        if self.use_gpu:
+            try:
+                from fusion_methods.gff_torch import gff_torch_impl
+                return gff_torch_impl(input_source, img_resize, kernel_size=kernel_size)
+            except Exception as exc:
+                print(f"Warning: GPU guided-filter fusion failed ({exc}); falling back to CPU.")
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
 
         # allow optional thread_count forwarded via kwargs in fuse
         # (handled by fuse caller). Here simply pass through if present in kwargs
@@ -632,7 +655,12 @@ class MultiFocusFusion:
             h, w, channels, num_images, block_size, thread_count
         )
 
-        print(f"Tiled fusion: {optimal_threads} parallel workers (memory-optimized)")
+        # The GPU guided-filter path is already parallel internally; running tiles
+        # concurrently would only contend for the device and multiply GPU memory use
+        if self.use_gpu and algorithm == 'guided_filter':
+            optimal_threads = 1
+
+        print(f"Tiled fusion: {len(tile_coords)} tiles, {optimal_threads} parallel workers (memory-optimized)", flush=True)
 
         def call_algo(crops):
             if algorithm == 'guided_filter':
@@ -677,13 +705,20 @@ class MultiFocusFusion:
             return (x0, y0, fh, fw, fused_tile, weight2d)
 
         results = {}
+        total_tiles = len(tile_coords)
+        completed_tiles = 0
+        # Print at most ~10 progress lines to avoid flooding the terminal
+        progress_step = max(1, total_tiles // 10)
         with concurrent.futures.ThreadPoolExecutor(max_workers=optimal_threads) as executor:
-            futures = {executor.submit(process_single_tile, coords): coords 
+            futures = {executor.submit(process_single_tile, coords): coords
                        for coords in tile_coords}
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
                 x0, y0, fh, fw, fused_tile, weight2d = result
                 results[(x0, y0)] = result
+                completed_tiles += 1
+                if completed_tiles % progress_step == 0 or completed_tiles == total_tiles:
+                    print(f"  Tiled fusion progress: {completed_tiles}/{total_tiles} tiles", flush=True)
 
         for x0, y0, fh, fw, fused_tile, weight2d in results.values():
             w_exp = weight2d[:, :, np.newaxis]
