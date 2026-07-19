@@ -10,7 +10,8 @@ from fusion_methods.dtcwt import _dtcwt_impl
 from utils import resource_path
 
 
-# Tile 参数已改为 MultiFocusFusion 实例属性，见类构造函数中的默认值和访问器方法。
+# Tile parameters are now instance attributes of MultiFocusFusion; see the
+# constructor defaults and accessor methods.
 
 # Module-level defaults for backwards compatibility and convenience
 _DEFAULT_TILE_ENABLED = True
@@ -70,13 +71,13 @@ def is_stackmffv4_available() -> bool:
 
 class MultiFocusFusion:
     """
-    多焦点图像融合统一接口类
-    
-    支持的算法:
-    - 'guided_filter': 引导滤波融合
-    - 'dct': 基于DCT方差的一致性融合
-    - 'dtcwt': 双树复小波融合
-    - 'stackmffv4': StackMFF-V4 神经网络融合
+    Unified interface for multi-focus image fusion.
+
+    Supported algorithms:
+    - 'guided_filter': guided-filter fusion
+    - 'dct': DCT-variance consistency fusion
+    - 'dtcwt': dual-tree complex wavelet fusion
+    - 'stackmffv4': StackMFF-V4 neural network fusion
     """
     
     SUPPORTED_ALGORITHMS = ['guided_filter', 'dct', 'dtcwt', 'gfgfgf', 'stackmffv4']
@@ -86,28 +87,28 @@ class MultiFocusFusion:
                  tile_overlap: int = 256, tile_threshold: int = 2048,
                  stackmffv4_batch_size: int = 2):
         """
-        初始化融合器
-        
+        Initialize the fusion engine.
+
         Args:
-            algorithm (str): 融合算法名称,可选 'guided_filter', 'dct', 'dtcwt', 'stackmffv4'
-            use_gpu (bool): 是否使用GPU加速(CUDA/MPS),默认为False
-            stackmffv4_batch_size (int): StackMFF V4 批量处理大小，默认为2
+            algorithm (str): Fusion algorithm name; one of 'guided_filter', 'dct', 'dtcwt', 'stackmffv4'
+            use_gpu (bool): Whether to use GPU acceleration (CUDA/MPS), default False
+            stackmffv4_batch_size (int): StackMFF V4 batch size, default 2
         """
         self._ensure_supported_algorithm(algorithm)
         self.algorithm = algorithm
         self.use_gpu = bool(use_gpu)
         # Tile (tiled fusion) related instance-level settings
-        # 当图片最大边大于 tile_threshold 时，可在 tile_enabled 为 True 时启用分块融合
+        # Tiled fusion is used when tile_enabled is True and the image's longest side exceeds tile_threshold
         self.tile_enabled = bool(tile_enabled)
         self.tile_block_size = int(tile_block_size)
         self.tile_overlap = int(tile_overlap)
         self.tile_threshold = int(tile_threshold)
-        # StackMFF V4 批量处理大小
+        # StackMFF V4 batch size
         self.stackmffv4_batch_size = max(1, int(stackmffv4_batch_size))
         self._validate_environment()
     
     def _ensure_supported_algorithm(self, algorithm: str) -> None:
-        """验证算法是否受支持"""
+        """Ensure the algorithm is supported."""
         if algorithm not in self.SUPPORTED_ALGORITHMS:
             raise ValueError(
                 f"Unsupported algorithm: {algorithm}. "
@@ -115,7 +116,7 @@ class MultiFocusFusion:
             )
 
     def _validate_environment(self):
-        """验证运行环境"""
+        """Validate the runtime environment."""
         if self.algorithm == 'dtcwt':
             self._validate_transform_environment()
         elif self.algorithm == 'dct':
@@ -131,15 +132,15 @@ class MultiFocusFusion:
                      kernel_size: int = 7,
                      **kwargs) -> np.ndarray:
         """
-        GFG-FGF 融合接口
+        GFG-FGF fusion interface.
 
         Args:
-            input_source: 图像源
-            img_resize: 目标尺寸
-            kernel_size: 用于初始均值/模糊滤波的核大小（奇数优先），默认7
+            input_source: Image source
+            img_resize: Target size
+            kernel_size: Kernel size for the initial mean/blur filter (odd preferred), default 7
 
         Returns:
-            融合后的图像
+            Fused image
         """
         try:
             from fusion_methods.gfg_fgf import gfgfgf_impl
@@ -154,7 +155,7 @@ class MultiFocusFusion:
         return gfgfgf_impl(input_source, img_resize, kernel_size=kernel_size, thread_count=thread_count)
 
     def _validate_dct_environment(self) -> None:
-        """验证DCT融合依赖"""
+        """Validate DCT fusion dependencies."""
         try:
             import cv2  # noqa: F401
         except ImportError as exc:  # pragma: no cover - env dependency
@@ -167,7 +168,7 @@ class MultiFocusFusion:
             self.use_gpu = False
 
     def _validate_transform_environment(self) -> None:
-        """验证变换域融合依赖"""
+        """Validate transform-domain fusion dependencies."""
         # pytorch_available = False
         dtcwt_available = False
 
@@ -178,7 +179,7 @@ class MultiFocusFusion:
         #     importlib.import_module("pytorch_wavelets")
         #     pytorch_available = True
         #     if self.use_gpu and not torch.cuda.is_available():
-        #         print("警告: CUDA不可用,将自动降级到CPU")
+        #         print("Warning: CUDA unavailable, falling back to CPU")
         #         self.use_gpu = False
 
         dtcwt_spec = importlib.util.find_spec("dtcwt")
@@ -196,13 +197,13 @@ class MultiFocusFusion:
             self.use_gpu = False
 
     def _validate_spatial_environment(self) -> None:
-        """验证空间域融合依赖"""
+        """Validate spatial-domain fusion dependencies."""
         if self.use_gpu:
             print("Note: Guided-filter fusion runs on CPU only; switching to CPU mode.")
             self.use_gpu = False
 
     def _validate_ai_environment(self) -> None:
-        """验证AI融合依赖"""
+        """Validate AI fusion dependencies."""
         if not is_stackmffv4_available():
             raise RuntimeError(
                 "StackMFF-V4 fusion requires PyTorch. Install it with: pip install torch torchvision"
@@ -220,29 +221,29 @@ class MultiFocusFusion:
              img_resize: Optional[Tuple[int, int]] = None,
              **kwargs) -> np.ndarray:
         """
-        执行图像融合
-        
+        Run image fusion.
+
         Args:
-            input_source (str or list): 图像目录路径或预加载的图像列表
-            img_resize (tuple, optional): 目标尺寸 (width, height)
-            **kwargs: 算法特定参数
-                
-                guided_filter算法参数:
-                    - kernel_size (int): 引导滤波均值滤波核大小,默认31 (需为奇数)
-                dct算法参数:
-                    - block_size (int): DCT分块大小,默认8
-                    - kernel_size (int): 中值滤波核大小,默认7 (需为奇数)
-                
-                dtcwt算法参数:
-                    - N (int): DTCWT分解层数,默认4
-                
-                stackmffv4算法参数:
-                    - model_path (str): 模型权重文件路径,默认'./weights/stackmffv4.pth'
-        
+            input_source (str or list): Image directory path or list of preloaded images
+            img_resize (tuple, optional): Target size (width, height)
+            **kwargs: Algorithm-specific parameters
+
+                guided_filter parameters:
+                    - kernel_size (int): Mean filter kernel size for guided filtering, default 31 (must be odd)
+                dct parameters:
+                    - block_size (int): DCT block size, default 8
+                    - kernel_size (int): Median filter kernel size, default 7 (must be odd)
+
+                dtcwt parameters:
+                    - N (int): Number of DTCWT decomposition levels, default 4
+
+                stackmffv4 parameters:
+                    - model_path (str): Model weights file path, default './weights/stackmffv4.pth'
+
         Returns:
-            numpy.ndarray: 融合后的图像 (uint8格式)
+            numpy.ndarray: Fused image (uint8)
         """
-        # 如果传入的是已加载的图像列表且单张图像尺寸过大，则使用分块融合
+        # Use tiled fusion when given a list of preloaded images whose size is too large
         try:
             is_list_of_arrays = (
                 isinstance(input_source, list)
@@ -252,14 +253,14 @@ class MultiFocusFusion:
         except Exception:
             is_list_of_arrays = False
 
-        # 情况1: 已加载的图像列表
+        # Case 1: list of preloaded images
         if is_list_of_arrays:
             h, w = input_source[0].shape[:2]
             if self.tile_enabled and max(h, w) > self.tile_threshold:
-                # 使用分块融合，块大小和重叠均由实例属性控制
+                # Use tiled fusion; block size and overlap come from instance attributes
                 print(f"Info: Large image size detected ({w}x{h}). Using tiled fusion mode (block={self.tile_block_size}, overlap={self.tile_overlap}).")
                 kws = dict(kwargs)
-                # 防止外部 kwargs 中含有会与内部指定值冲突的同名参数
+                # Drop caller kwargs that would conflict with the internally specified values
                 kws.pop('block_size', None)
                 kws.pop('overlap', None)
                 return self._fuse_tiled(
@@ -271,14 +272,14 @@ class MultiFocusFusion:
                     **kws,
                 )
 
-        # 情况2: 传入的是目录路径，进行懒加载判断（只读取第一张图片以判断尺寸）
+        # Case 2: directory path input; lazily read only the first image to determine size
         if isinstance(input_source, str) and os.path.isdir(input_source):
             try:
-                import cv2  # 延迟导入
+                import cv2  # deferred import
             except Exception as exc:
                 raise RuntimeError("OpenCV is required to read image files for tiled fusion. Install with: pip install opencv-python") from exc
 
-            # 列出常见图片扩展
+            # Common image extensions
             exts = ('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp')
             files = [f for f in sorted(os.listdir(input_source)) if f.lower().endswith(exts)]
             if len(files) > 0:
@@ -288,7 +289,7 @@ class MultiFocusFusion:
                     raise RuntimeError(f"Unable to read first image: {first_path}")
                 fh, fw = first_img.shape[:2]
                 if self.tile_enabled and max(fh, fw) > self.tile_threshold:
-                    # 目录输入按文件懒加载方式分块融合（仅当实例 tile_enabled 开启时）
+                    # Directory input: tiled fusion with lazy per-file loading (only when tile_enabled is on)
                     kws = dict(kwargs)
                     kws.pop('block_size', None)
                     kws.pop('overlap', None)
@@ -318,15 +319,15 @@ class MultiFocusFusion:
                             kernel_size: int = 31,
                             **kwargs) -> np.ndarray:
         """
-        引导滤波融合
-        
+        Guided-filter fusion.
+
         Args:
-            input_source: 图像源
-            img_resize: 目标尺寸
-            kernel_size: 引导滤波中使用的均值滤波核大小 (需为奇数)
-        
+            input_source: Image source
+            img_resize: Target size
+            kernel_size: Mean filter kernel size used in guided filtering (must be odd)
+
         Returns:
-            融合后的图像
+            Fused image
         """
         kernel_size = max(1, int(kernel_size or 31))
         if kernel_size % 2 == 0:
@@ -350,16 +351,16 @@ class MultiFocusFusion:
                   kernel_size: int = 7,
                   **kwargs) -> np.ndarray:
         """
-        DCT 方差融合
+        DCT-variance fusion.
 
         Args:
-            input_source: 图像源
-            img_resize: 目标尺寸（当前未支持，若指定则抛出异常）
-            block_size: DCT分块大小
-            kernel_size: 一致性验证中值滤波核大小
+            input_source: Image source
+            img_resize: Target size (currently unsupported; raises if specified)
+            block_size: DCT block size
+            kernel_size: Median filter kernel size for consistency verification
 
         Returns:
-            融合后的图像
+            Fused image
         """
         if img_resize is not None:
             raise ValueError("DCT fusion does not support dynamic resizing. Resize images before processing.")
@@ -378,15 +379,15 @@ class MultiFocusFusion:
                     N: int = 4,
                     **kwargs) -> np.ndarray:
         """
-        DTCWT 变换域融合
-        
+        DTCWT transform-domain fusion.
+
         Args:
-            input_source: 图像源
-            img_resize: 目标尺寸
-            N: DTCWT分解层数
-        
+            input_source: Image source
+            img_resize: Target size
+            N: Number of DTCWT decomposition levels
+
         Returns:
-            融合后的图像
+            Fused image
         """
         return _dtcwt_impl(
             input_source,
@@ -401,15 +402,15 @@ class MultiFocusFusion:
                          model_path: Optional[str] = 'weights/stackmffv4.pth',
                          **kwargs) -> np.ndarray:
         """
-        StackMFF-V4 融合
-        
+        StackMFF-V4 fusion.
+
         Args:
-            input_source: 图像源
-            img_resize: 目标尺寸
-            model_path: 模型权重文件路径
-        
+            input_source: Image source
+            img_resize: Target size
+            model_path: Model weights file path
+
         Returns:
-            融合后的图像
+            Fused image
         """
         if not model_path:
             model_path = 'weights/stackmffv4.pth'
@@ -426,31 +427,31 @@ class MultiFocusFusion:
     
     def set_algorithm(self, algorithm: str):
         """
-        切换融合算法
-        
+        Switch the fusion algorithm.
+
         Args:
-            algorithm (str): 新的算法名称 ('guided_filter', 'dct', 'dtcwt', 'stackmffv4')
+            algorithm (str): New algorithm name ('guided_filter', 'dct', 'dtcwt', 'stackmffv4')
         """
         self._ensure_supported_algorithm(algorithm)
         self.algorithm = algorithm
         self._validate_environment()
 
-    # Tile control API (实例级)
+    # Tile control API (instance-level)
     def set_tile_mode(self, enabled: bool):
-        """启用或禁用分块融合（实例级）。"""
+        """Enable or disable tiled fusion (instance-level)."""
         self.tile_enabled = bool(enabled)
 
     def get_tile_mode(self) -> bool:
-        """返回当前实例的分块融合开关。"""
+        """Return this instance's tiled fusion flag."""
         return bool(self.tile_enabled)
 
     def set_tile_params(self, block_size: Optional[int] = None, overlap: Optional[int] = None, threshold: Optional[int] = None):
-        """设置分块参数。传入 None 表示不更改对应项。
+        """Set tile parameters. Passing None leaves the corresponding value unchanged.
 
         Args:
-            block_size: 分块大小（像素）
-            overlap: 重叠大小（像素）
-            threshold: 启用分块判断的边长阈值（像素）
+            block_size: Tile block size (pixels)
+            overlap: Overlap size (pixels)
+            threshold: Longest-side threshold above which tiling is used (pixels)
         """
         if block_size is not None:
             self.tile_block_size = max(1, int(block_size))
@@ -460,7 +461,7 @@ class MultiFocusFusion:
             self.tile_threshold = max(1, int(threshold))
 
     def get_tile_params(self) -> dict:
-        """返回当前实例的分块参数字典。"""
+        """Return this instance's tile parameters as a dict."""
         return {
             'block_size': int(self.tile_block_size),
             'overlap': int(self.tile_overlap),
@@ -475,10 +476,10 @@ class MultiFocusFusion:
         user_thread_count: int = None
     ) -> int:
         """
-        根据系统内存和图像属性计算最优线程数（保守策略）。
+        Compute the optimal thread count from system memory and image properties (conservative).
 
-        内存估算:
-        - 单个tile的crops: num_images * block_size * block_size * channels * 4 bytes
+        Memory estimate:
+        - crops for one tile: num_images * block_size * block_size * channels * 4 bytes
         - fused_tile: block_size * block_size * channels * 4 bytes
         - weight2d: block_size * block_size * 4 bytes
         """
@@ -503,16 +504,16 @@ class MultiFocusFusion:
                                fw: int, fh: int, w: int, h: int,
                                overlap: int) -> np.ndarray:
         """
-        计算单个tile的羽化权重（可分离的2D权重）。
+        Compute the feathering weights for a single tile (separable 2D weights).
 
         Args:
-            x0, y0, x1, y1: tile边界
-            fw, fh: 融合结果tile的宽和高
-            w, h: 原图宽和高
-            overlap: 重叠区域大小
+            x0, y0, x1, y1: Tile boundaries
+            fw, fh: Width and height of the fused tile
+            w, h: Width and height of the full image
+            overlap: Overlap region size
 
         Returns:
-            2D权重数组 (fh, fw), dtype=np.float32
+            2D weight array (fh, fw), dtype=np.float32
         """
         left_exists = x0 > 0
         right_exists = x1 < w
@@ -564,12 +565,14 @@ class MultiFocusFusion:
                     thread_count: int = None,
                     **kwargs) -> np.ndarray:
         """
-        分块（滑动窗口）融合：当单张图像尺寸过大时调用。
+        Tiled (sliding-window) fusion, used when a single image is too large.
 
-        - 将图像切成若干 `block_size` 大小的块，块间以 `overlap` 重叠。
-        - 对每个块调用对应算法的融合函数，最后对重叠区域简单平均融合以消除边界伪影。
-        - 支持多线程并行处理 tile，线程数根据系统内存自动计算（保守策略）。
-        - StackMFF V4 使用批量处理以利用 GPU 并行能力。
+        - Splits the image into `block_size` tiles with `overlap` between them.
+        - Runs the selected algorithm on each tile, then blends overlap regions
+          by simple averaging to remove seam artifacts.
+        - Tiles are processed in parallel threads; the thread count is derived
+          from available system memory (conservative).
+        - StackMFF V4 uses batched processing to exploit GPU parallelism.
         """
 
         imgs = None
@@ -605,7 +608,7 @@ class MultiFocusFusion:
         step = max(1, block_size - overlap)
         num_images = len(imgs) if imgs is not None else len(files)
 
-        # 计算 tile 坐标
+        # Compute tile coordinates
         tile_coords = []
         max_start_y = h - block_size
         max_start_x = w - block_size
@@ -617,14 +620,14 @@ class MultiFocusFusion:
                 x1 = x0 + block_size
                 tile_coords.append((x0, y0, x1, y1))
 
-        # StackMFF V4 使用批量处理
+        # StackMFF V4 uses batched processing
         if algorithm == 'stackmffv4':
             return self._fuse_tiled_stackmffv4_batched(
                 imgs, img_dir, tile_coords, h, w, channels,
                 block_size, overlap, **kwargs
             )
 
-        # 其他算法使用原有的多线程处理
+        # Other algorithms use the original multi-threaded processing
         optimal_threads = self._calculate_optimal_thread_count(
             h, w, channels, num_images, block_size, thread_count
         )
@@ -703,9 +706,9 @@ class MultiFocusFusion:
                                         block_size: int, overlap: int,
                                         **kwargs) -> np.ndarray:
         """
-        使用批量处理的 StackMFF V4 分块融合。
-        
-        通过将多个 tile 打包成一个 batch 进行 GPU 推理，提高效率。
+        Tiled StackMFF V4 fusion with batched processing.
+
+        Packs multiple tiles into one batch for GPU inference to improve efficiency.
         """
         import cv2
         
@@ -714,7 +717,7 @@ class MultiFocusFusion:
         
         print(f"StackMFF V4 batched tiled fusion: {total_tiles} tiles, batch_size={batch_size}")
         
-        # 获取模型路径
+        # Resolve model path
         model_path = kwargs.get('model_path', 'weights/stackmffv4.pth')
         if not model_path:
             model_path = 'weights/stackmffv4.pth'
@@ -724,13 +727,13 @@ class MultiFocusFusion:
         acc = np.zeros((h, w, channels), dtype=np.float32)
         weight = np.zeros((h, w, 1), dtype=np.float32)
         
-        # 获取文件列表（如果是目录输入）
+        # Get file list (for directory input)
         files = None
         if img_dir is not None:
             exts = ('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp')
             files = [f for f in sorted(os.listdir(img_dir)) if f.lower().endswith(exts)]
         
-        # 分批处理
+        # Process in batches
         for batch_start in range(0, total_tiles, batch_size):
             batch_end = min(batch_start + batch_size, total_tiles)
             batch_coords = tile_coords[batch_start:batch_end]
@@ -738,7 +741,7 @@ class MultiFocusFusion:
             
             print(f"  Processing batch {batch_start // batch_size + 1}/{(total_tiles + batch_size - 1) // batch_size} ({current_batch_size} tiles)")
             
-            # 准备这个 batch 的所有 tile 数据
+            # Prepare all tile data for this batch
             tiles_list = []
             for (x0, y0, x1, y1) in batch_coords:
                 if imgs is not None:
@@ -753,10 +756,10 @@ class MultiFocusFusion:
                         crops.append(full[y0:y1, x0:x1].copy())
                 tiles_list.append(crops)
             
-            # 批量处理
-            fused_tiles = _stackmffv4_batch_impl(tiles_list, model_path, self.use_gpu)
-            
-            # 将结果合并到累加器
+            # Batched inference
+            fused_tiles = self._run_stackmffv4_batch_with_fallback(tiles_list, model_path)
+
+            # Merge results into the accumulator
             for idx, (x0, y0, x1, y1) in enumerate(batch_coords):
                 fused_tile = fused_tiles[idx]
                 if fused_tile is None:
@@ -779,23 +782,65 @@ class MultiFocusFusion:
         if channels == 1:
             return fused[:, :, 0]
         return fused
-    
+
+    def _run_stackmffv4_batch_with_fallback(self,
+                                            tiles_list: list,
+                                            model_path: str) -> list:
+        """
+        Run StackMFF V4 batch inference, degrading automatically when VRAM
+        runs out: halve the batch progressively, then fall back to CPU if a
+        single tile still does not fit.
+        """
+        if not self.use_gpu:
+            return _stackmffv4_batch_impl(tiles_list, model_path, False)
+
+        import torch
+
+        # Largest GPU batch confirmed to work during this run; avoids re-triggering slow OOM retries
+        cap = getattr(self, '_stackmffv4_gpu_batch_cap', None)
+        if cap is not None and len(tiles_list) > cap:
+            results = []
+            for i in range(0, len(tiles_list), cap):
+                results.extend(self._run_stackmffv4_batch_with_fallback(
+                    tiles_list[i:i + cap], model_path))
+            return results
+
+        if getattr(self, '_stackmffv4_force_cpu', False):
+            return _stackmffv4_batch_impl(tiles_list, model_path, False)
+
+        try:
+            return _stackmffv4_batch_impl(tiles_list, model_path, True)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if len(tiles_list) > 1:
+                half = max(1, len(tiles_list) // 2)
+                self._stackmffv4_gpu_batch_cap = half
+                print(f"Warning: CUDA out of memory with batch_size={len(tiles_list)}; "
+                      f"retrying with batch_size={half}.")
+                return (self._run_stackmffv4_batch_with_fallback(tiles_list[:half], model_path)
+                        + self._run_stackmffv4_batch_with_fallback(tiles_list[half:], model_path))
+            self._stackmffv4_force_cpu = True
+            print("Warning: CUDA out of memory even for a single tile; "
+                  "falling back to CPU for the rest of this render. "
+                  "Reduce Tile Block Size in Settings to keep GPU acceleration.")
+            return _stackmffv4_batch_impl(tiles_list, model_path, False)
+
     def set_device(self, use_gpu: bool):
         """
-        切换计算设备
+        Switch the compute device.
 
         Args:
-            use_gpu (bool): 是否使用GPU
+            use_gpu (bool): Whether to use the GPU
         """
         self.use_gpu = bool(use_gpu)
         self._validate_environment()
     
     def get_info(self) -> dict:
         """
-        获取当前融合器信息
+        Get information about the current fusion engine.
 
         Returns:
-            dict: 包含算法名称、设备类型等信息
+            dict: Algorithm name, device type, etc.
         """
         import torch
         if self.use_gpu:
@@ -814,12 +859,12 @@ class MultiFocusFusion:
         }
     
     def __repr__(self) -> str:
-        """字符串表示"""
+        """String representation."""
         return (f"MultiFocusFusion(algorithm='{self.algorithm}', "
                 f"use_gpu={self.use_gpu})")
 
 
-# 便捷函数
+# Convenience function
 def fuse_images(input_source: Union[str, List[np.ndarray]],
                 algorithm: str = 'guided_filter',
                 use_gpu: bool = False,
@@ -831,27 +876,27 @@ def fuse_images(input_source: Union[str, List[np.ndarray]],
                 stackmffv4_batch_size: Optional[int] = None,
                 **kwargs) -> np.ndarray:
     """
-    便捷函数:一次性完成图像融合
-    
+    Convenience function: run image fusion in one call.
+
     Args:
-        input_source: 图像源(目录路径或图像列表)
-            algorithm: 融合算法 ('guided_filter', 'dct', 'dtcwt', 'stackmffv4')
-        use_gpu: 是否使用GPU（当前版本将自动切换到CPU）
-        img_resize: 目标尺寸
-        stackmffv4_batch_size: StackMFF V4 批量处理大小（默认2）
-        **kwargs: 算法特定参数
-    
+        input_source: Image source (directory path or list of images)
+        algorithm: Fusion algorithm ('guided_filter', 'dct', 'dtcwt', 'stackmffv4')
+        use_gpu: Whether to use the GPU (CPU-only algorithms switch to CPU automatically)
+        img_resize: Target size
+        stackmffv4_batch_size: StackMFF V4 batch size (default 2)
+        **kwargs: Algorithm-specific parameters
+
     Returns:
-        融合后的图像
-    
-    示例:
-        # 使用DCT算法
+        Fused image
+
+    Examples:
+        # DCT algorithm
         result = fuse_images(image_list, algorithm='dct', block_size=8, kernel_size=7)
-        
-        # 使用DTCWT算法
+
+        # DTCWT algorithm
         result = fuse_images('./images', algorithm='dtcwt', use_gpu=False, N=4)
-        
-        # 使用StackMFF-V4算法
+
+        # StackMFF-V4 algorithm
         result = fuse_images(image_list, algorithm='stackmffv4', use_gpu=False,
                            model_path='./weights/stackmffv4.pth')
     """

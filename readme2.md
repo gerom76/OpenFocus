@@ -43,7 +43,7 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 
 Expected output:
 
-```
+```text
 True NVIDIA GeForce RTX 4080   (your GPU model)
 ```
 
@@ -55,6 +55,7 @@ True NVIDIA GeForce RTX 4080   (your GPU model)
 
 ## Troubleshooting
 
+- **`torch.OutOfMemoryError: CUDA out of memory` during StackMFF-V4 rendering** — the AI model's memory use grows with tile area and with the square of the number of images in the stack, and large renders can exceed the GPU's VRAM. The app automatically retries with smaller batches and falls back to CPU if a single tile still does not fit, but to keep everything on the GPU, lower **Tile Block Size** in Settings (e.g. 512 instead of 1024) — this quarters the memory per tile — and/or reduce the number of images per stack.
 - **Still shows GPU: N/A after reinstalling** — make sure the `pip`/`python` you used is the same interpreter that launches OpenFocus (`(Get-Command python).Source` shows which one is on your PATH).
 - **Status bar shows GPU: Err** — PyTorch imported but GPU probing failed; update your NVIDIA driver.
 - **`nvidia-smi` not found or fails** — the NVIDIA driver is missing or broken; reinstall the driver first.
