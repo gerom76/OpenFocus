@@ -29,6 +29,7 @@ class TranslationManager(QObject):
                 'menu_input_stack': 'Input Stack',
                 'action_save_folder': 'Save as Folder',
                 'action_save_gif': 'Save as GIF',
+                'action_save_settings': 'Save All Settings',
                 'action_clear_stack': 'Clear Stack',
                 'action_exit': 'Exit',
                 
@@ -411,6 +412,11 @@ class TranslationManager(QObject):
                 'msg_config_saved_title': 'Configuration Saved',
                 'msg_config_saved_text': 'Label configuration saved successfully!',
                 'msg_config_saved_info': 'The labels are now visible on the selected stack and will be included when saving.',
+
+                'msg_settings_saved_title': 'Settings Saved',
+                'msg_settings_saved_text': 'All settings saved successfully!',
+                'msg_settings_saved_info': 'Settings saved to:\n{path}',
+                'msg_settings_save_failed_text': 'Failed to save settings.',
                 
                 'msg_no_reg_labels': 'No Labels',
                 'msg_reg_labels_disabled': 'Registered stack labels are not enabled.',
@@ -443,6 +449,7 @@ class TranslationManager(QObject):
                 'menu_input_stack': '输入堆栈',
                 'action_save_folder': '保存为文件夹',
                 'action_save_gif': '保存为 GIF',
+                'action_save_settings': '保存所有设置',
                 'action_clear_stack': '清空堆栈',
                 'action_exit': '退出',
                 
@@ -730,6 +737,11 @@ class TranslationManager(QObject):
                 'msg_config_saved_title': '配置已保存',
                 'msg_config_saved_text': '标签配置保存成功！',
                 'msg_config_saved_info': '标签现在可见于选定的堆栈，并将在保存时包含在内。',
+
+                'msg_settings_saved_title': '设置已保存',
+                'msg_settings_saved_text': '所有设置保存成功！',
+                'msg_settings_saved_info': '设置已保存到:\n{path}',
+                'msg_settings_save_failed_text': '保存设置失败。',
                 
                 'msg_no_reg_labels': '无标签',
                 'msg_reg_labels_disabled': '已配准堆栈标签未启用。',

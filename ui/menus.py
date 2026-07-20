@@ -72,6 +72,13 @@ def setup_menus(window: QMainWindow) -> None:
 
     file_menu.addSeparator()
 
+    save_settings_action = QAction(trans.t('action_save_settings'), window)
+    save_settings_action.triggered.connect(window.save_all_settings)
+    file_menu.addAction(save_settings_action)
+    window.ui_objs['action_save_settings'] = save_settings_action
+
+    file_menu.addSeparator()
+
     clear_action = QAction(trans.t('action_clear_stack'), window)
     clear_action.setShortcut("Ctrl+W")
     clear_action.triggered.connect(window.source_manager.clear_image_stack)

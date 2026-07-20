@@ -5,6 +5,7 @@ from controllers.label_manager import LabelManager
 from controllers.output_manager import OutputManager
 from controllers.transform_manager import TransformManager
 from controllers.batch_manager import BatchManager
+from controllers.settings_manager import SettingsManager
 
 __all__ = [
     'SourceManager',
@@ -14,4 +15,5 @@ __all__ = [
     'OutputManager',
     'TransformManager',
     'BatchManager',
+    'SettingsManager',
 ]

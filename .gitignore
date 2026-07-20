@@ -56,3 +56,4 @@ weights/*.pth  # Keep weights but ignore downloads/temp
 *.spec
 # graphify knowledge graph output
 graphify-out/
+openfocus.cfg.json

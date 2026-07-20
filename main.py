@@ -51,6 +51,7 @@ from controllers.label_manager import LabelManager
 from controllers.export_manager import ExportManager
 from controllers.transform_manager import TransformManager
 from controllers.batch_manager import BatchManager
+from controllers.settings_manager import SettingsManager
 from core import is_stackmffv4_available
 from constants import (
     WINDOW_WIDTH, WINDOW_HEIGHT,
@@ -113,6 +114,7 @@ class OpenFocus(QMainWindow):
         self.export_manager = ExportManager(self)
         self.transform_manager = TransformManager(self)
         self.batch_manager = BatchManager(self)
+        self.settings_manager = SettingsManager(self)
 
         # 初始化图像加载器
         self.image_loader = ImageStackLoader()
@@ -144,6 +146,10 @@ class OpenFocus(QMainWindow):
         # I should probably update image_panels.py too, or just override text here.
         if hasattr(self, 'lbl_source_img'):
              self.lbl_source_img.setText(trans.t('drag_hint'))
+
+        # Restore persisted settings (if openfocus.cfg.json exists). Done last so a
+        # restored language triggers update_ui_text via the languageChanged signal.
+        self.settings_manager.load_all_settings()
 
     def init_ui(self):
         setup_menus(self)
@@ -812,6 +818,10 @@ class OpenFocus(QMainWindow):
         """显示 StackMFF V4 批量大小设置对话框"""
         dialog = StackMFFV4BatchSettingsDialog(self)
         dialog.exec()
+
+    def save_all_settings(self):
+        """Save all settings to openfocus.cfg.json."""
+        self.settings_manager.save_all_settings()
 
     def rotate_stack(self, rotation_code):
         """Delegate stack rotation to the transform manager."""
