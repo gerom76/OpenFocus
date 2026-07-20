@@ -54,3 +54,5 @@ weights/*.pth  # Keep weights but ignore downloads/temp
 
 # build
 *.spec
+# graphify knowledge graph output
+graphify-out/
