@@ -11,6 +11,7 @@ Modules:
 from utils.image_utils import (
     pixmap_to_cv2,
     cv2_to_pixmap,
+    get_imwrite_params,
 )
 
 from utils.ui_utils import (
@@ -51,6 +52,7 @@ __all__ = [
     # image_utils
     'pixmap_to_cv2',
     'cv2_to_pixmap',
+    'get_imwrite_params',
     # ui_utils
     'show_message_box',
     'show_warning_box',

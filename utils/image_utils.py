@@ -5,6 +5,34 @@ from typing import Optional
 from PyQt6.QtGui import QPixmap, QImage
 
 
+def get_imwrite_params(extension: str) -> list:
+    """Get OpenCV imwrite parameters for maximum quality based on file extension.
+
+    Args:
+        extension: File extension, with or without a leading dot (e.g. '.jpg', 'jpg')
+
+    Returns:
+        List of parameter tuples for cv2.imwrite, or empty list if no special params needed
+    """
+    ext = extension.lower()
+    if not ext.startswith("."):
+        ext = "." + ext
+    if ext in (".jpg", ".jpeg", ".jpe", ".jfif"):
+        # JPG: 100 quality (highest, default is ~95)
+        return [cv2.IMWRITE_JPEG_QUALITY, 100]
+    elif ext in (".png",):
+        # PNG: 0 compression (no compression, default is 3)
+        return [cv2.IMWRITE_PNG_COMPRESSION, 0]
+    elif ext in (".tif", ".tiff"):
+        # TIFF: LZW compression disabled (compression flag 1 = no compression)
+        return [cv2.IMWRITE_TIFF_COMPRESSION, 1]
+    elif ext in (".bmp",):
+        # BMP: No quality parameters needed (always lossless)
+        return []
+    else:
+        return []
+
+
 def pixmap_to_cv2(pixmap: QPixmap) -> Optional[np.ndarray]:
     try:
         qimage = pixmap.toImage()

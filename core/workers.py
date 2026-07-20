@@ -6,7 +6,7 @@ import numpy as np
 import imageio.v2 as imageio
 from core.registration import ImageRegistration
 from core.multi_focus_fusion import MultiFocusFusion
-from utils import resource_path, normalize_kernel_size
+from utils import resource_path, normalize_kernel_size, get_imwrite_params
 from constants import (
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
     DEFAULT_THREAD_COUNT
@@ -584,16 +584,18 @@ class BatchWorker(QThread):
             else:
                 result = None
 
+            output_format = self.processing_settings.get('format', 'jpg')
+            imwrite_params = get_imwrite_params(output_format)
+
             if result is not None:
-                output_format = self.processing_settings.get('format', 'jpg')
                 output_path = os.path.join(output_dir, f"{stack_name}.{output_format}")
-                cv2.imwrite(output_path, result)
+                cv2.imwrite(output_path, result, imwrite_params)
 
             if self.processing_settings.get('save_aligned'):
                 for idx, img in enumerate(aligned_images):
                     aligned_filename = f"{stack_name}_aligned_{idx + 1:03d}.{output_format}"
                     aligned_path = os.path.join(output_dir, aligned_filename)
-                    cv2.imwrite(aligned_path, img)
+                    cv2.imwrite(aligned_path, img, imwrite_params)
     
     def process_single_folder(self, folder_path):
         """处理单个文件夹"""
@@ -696,10 +698,9 @@ class BatchWorker(QThread):
         extension = self.processing_settings.get('format', 'png')
         filename = f"{folder_name}.{extension}"
         output_path = os.path.join(output_dir, filename)
-        
+
         # 保存图像
-        import cv2
-        cv2.imwrite(output_path, fusion_result)
+        cv2.imwrite(output_path, fusion_result, get_imwrite_params(extension))
     
     def save_registered_stack(self, folder_path, images, filenames):
         """保存配准后的图像栈"""
@@ -713,9 +714,9 @@ class BatchWorker(QThread):
             output_dir = folder_path
         
         # 保存每个图像
-        import cv2
         extension = self.processing_settings.get('format', 'png')
-        
+        imwrite_params = get_imwrite_params(extension)
+
         for i, image in enumerate(images):
             if i < len(filenames):
                 # 使用原始文件名
@@ -729,7 +730,7 @@ class BatchWorker(QThread):
                 filename = f"registered_{i+1:04d}.{extension}"
             
             output_path = os.path.join(output_dir, filename)
-            cv2.imwrite(output_path, image)
+            cv2.imwrite(output_path, image, imwrite_params)
 
     def _get_output_path_for_single_folder(self, source_folder_path):
         """获取单文件夹模式下的输出路径"""

@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 from dialogs import DurationDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
+    get_imwrite_params,
     show_error_box,
     show_message_box,
     show_success_box,
@@ -33,32 +34,6 @@ EXPORT_EXTENSION_ALIASES = {
 }
 
 DEFAULT_EXPORT_EXTENSION = ".png"
-
-
-def get_imwrite_params(extension: str) -> list:
-    """Get OpenCV imwrite parameters for maximum quality based on file extension.
-
-    Args:
-        extension: File extension (e.g., '.jpg', '.png', '.tif', '.bmp')
-
-    Returns:
-        List of parameter tuples for cv2.imwrite, or empty list if no special params needed
-    """
-    ext = extension.lower()
-    if ext in (".jpg", ".jpeg", ".jpe", ".jfif"):
-        # JPG: 100 quality (highest, default is ~95)
-        return [cv2.IMWRITE_JPEG_QUALITY, 100]
-    elif ext in (".png",):
-        # PNG: 0 compression (no compression, default is 3)
-        return [cv2.IMWRITE_PNG_COMPRESSION, 0]
-    elif ext in (".tif", ".tiff"):
-        # TIFF: LZW compression disabled (compression flag 1 = no compression)
-        return [cv2.IMWRITE_TIFF_COMPRESSION, 1]
-    elif ext in (".bmp",):
-        # BMP: No quality parameters needed (always lossless)
-        return []
-    else:
-        return []
 
 
 class ExportManager:

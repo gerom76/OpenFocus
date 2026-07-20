@@ -6,7 +6,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QImage
 from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox
 
-from controllers.export_manager import get_imwrite_params
+from utils import get_imwrite_params
 from utils import show_error_box, show_message_box, show_success_box, show_warning_box
 from locales import trans
 

@@ -8,7 +8,7 @@ from PyQt6.QtCore import QMimeData, Qt, QUrl
 from PyQt6.QtGui import QDrag
 from PyQt6.QtWidgets import QListWidget
 
-from controllers.export_manager import get_imwrite_params
+from utils import get_imwrite_params
 
 
 class OutputListWidget(QListWidget):
