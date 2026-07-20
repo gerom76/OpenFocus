@@ -1,6 +1,19 @@
 {
   "permissions": {
     "allow": [
+      "PowerShell(rtk git status:*)",
+      "PowerShell(rtk git log:*)",
+      "PowerShell(rtk git diff:*)",
+      "PowerShell(rtk git show:*)",
+      "PowerShell(rtk git branch:*)",
+      "PowerShell(rtk ls:*)",
+      "PowerShell(rtk read:*)",
+      "PowerShell(rtk grep:*)",
+      "PowerShell(rtk find:*)",
+      "PowerShell(rtk pytest:*)",
+      "PowerShell(rtk ruff:*)",
+      "PowerShell(rtk mypy:*)",
+      "PowerShell(rtk gain:*)",
       "PowerShell(python \"f:\\\\Temp\\\\u\\\\claude\\\\f--src-OpenFocus\\\\ac9339b2-cfb7-4107-aa09-4513e0b96206\\\\scratchpad\\\\test_gpu_capacity.py\")",
       "PowerShell(python -c \"import sys; sys.path.insert\\(0, 'f:/src/OpenFocus'\\); from core.image_loader import ImageStackLoader, RAWPY_AVAILABLE; print\\('rawpy:', RAWPY_AVAILABLE\\); print\\(sorted\\(ImageStackLoader.SUPPORTED_FORMATS\\)\\)\")"
     ]
