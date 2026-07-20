@@ -1,5 +1,6 @@
 import concurrent.futures
 import importlib
+import importlib.util
 import os
 import numpy as np
 from typing import Union, List, Tuple, Optional
@@ -179,32 +180,39 @@ class MultiFocusFusion:
 
     def _validate_transform_environment(self) -> None:
         """Validate transform-domain fusion dependencies."""
-        # pytorch_available = False
-        dtcwt_available = False
-
-        # torch_spec = importlib.util.find_spec("torch")
-        # pytorch_wavelets_spec = importlib.util.find_spec("pytorch_wavelets")
-        # if torch_spec and pytorch_wavelets_spec:
-        #     torch = importlib.import_module("torch")
-        #     importlib.import_module("pytorch_wavelets")
-        #     pytorch_available = True
-        #     if self.use_gpu and not torch.cuda.is_available():
-        #         print("Warning: CUDA unavailable, falling back to CPU")
-        #         self.use_gpu = False
-
-        dtcwt_spec = importlib.util.find_spec("dtcwt")
-        if dtcwt_spec:
-            importlib.import_module("dtcwt")
-            dtcwt_available = True
-
-        if not dtcwt_available:
-            raise RuntimeError(
-                "DTCWT fusion is CPU-only. Install the dtcwt package with: pip install dtcwt scipy"
-            )
-
+        gpu_ready = False
         if self.use_gpu:
-            print("Note: DTCWT fusion supports CPU only; switching to CPU mode.")
-            self.use_gpu = False
+            # Check availability without executing the imports (pytorch_wavelets
+            # pulls in pkg_resources, which is shimmed only inside dtcwt_torch).
+            have_wavelets = (
+                importlib.util.find_spec("pytorch_wavelets") is not None
+                and importlib.util.find_spec("pywt") is not None
+            )
+            try:
+                import torch
+                has_device = torch.cuda.is_available() or (
+                    hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+                )
+            except ImportError:
+                has_device = False
+
+            gpu_ready = have_wavelets and has_device
+            if not gpu_ready:
+                if not have_wavelets:
+                    print("Note: GPU DTCWT fusion requires pytorch_wavelets and PyWavelets; falling back to CPU.")
+                else:
+                    print("Note: No GPU acceleration available (CUDA/MPS); DTCWT fusion will run on CPU.")
+                self.use_gpu = False
+
+        if not gpu_ready:
+            # The CPU path requires the dtcwt package
+            dtcwt_spec = importlib.util.find_spec("dtcwt")
+            if dtcwt_spec:
+                importlib.import_module("dtcwt")
+            else:
+                raise RuntimeError(
+                    "DTCWT fusion requires the dtcwt package on CPU. Install it with: pip install dtcwt scipy"
+                )
 
     def _validate_spatial_environment(self) -> None:
         """Validate spatial-domain fusion dependencies."""
@@ -435,11 +443,24 @@ class MultiFocusFusion:
         Returns:
             Fused image
         """
+        if self.use_gpu:
+            try:
+                from fusion_methods.dtcwt_torch import dtcwt_torch_impl
+                return dtcwt_torch_impl(input_source, img_resize, N=N)
+            except Exception as exc:
+                print(f"Warning: GPU DTCWT fusion failed ({exc}); falling back to CPU.")
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
         return _dtcwt_impl(
             input_source,
             img_resize,
             N,
-            self.use_gpu
+            False
         )
     
     def _fuse_stackmffv4(self,
@@ -680,7 +701,7 @@ class MultiFocusFusion:
 
         # GPU fusion paths are already parallel internally; running tiles
         # concurrently would only contend for the device and multiply GPU memory use
-        if self.use_gpu and algorithm in ('guided_filter', 'dct'):
+        if self.use_gpu and algorithm in ('guided_filter', 'dct', 'dtcwt'):
             optimal_threads = 1
 
         print(f"Tiled fusion: {len(tile_coords)} tiles, {optimal_threads} parallel workers (memory-optimized)", flush=True)
