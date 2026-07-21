@@ -107,8 +107,32 @@ class SettingsManager:
         self._apply_settings(data)
         return True
 
+    def _reset_registration_and_fusion(self) -> None:
+        """Clear registration and fusion selections to a clean state.
+
+        Applied before restoring saved values so stale selections (e.g. a fusion
+        method saved as None, or a radio checked in the current session but absent
+        from the config) do not linger after loading.
+        """
+        window = self.window
+
+        # Fusion method radios (mutually exclusive, cancelable) -> all unchecked
+        for attr in ("rb_a", "rb_b", "rb_c", "rb_gfg", "rb_d"):
+            button = getattr(window, attr, None)
+            if button is not None:
+                button.setChecked(False)
+
+        # Registration option checkboxes -> unchecked
+        for attr in ("cb_align_homography", "cb_align_ecc"):
+            checkbox = getattr(window, attr, None)
+            if checkbox is not None:
+                checkbox.setChecked(False)
+
     def _apply_settings(self, data: dict) -> None:
         window = self.window
+
+        # Start from a clean registration/fusion UI so only saved values take effect
+        self._reset_registration_and_fusion()
 
         # Simple scalar settings written straight back onto the window
         for attr in (
