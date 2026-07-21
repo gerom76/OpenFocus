@@ -136,7 +136,9 @@ def _to_bgr(tensor):
     rgb = tensor.squeeze(0).cpu().numpy().transpose(1, 2, 0)
     rgb = rgb * _IMAGENET_STD + _IMAGENET_MEAN
     rgb = np.clip(rgb, 0.0, 1.0) * 255.0
-    return cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
+    # Round, do not truncate: a bare cast drops half a level from every pixel,
+    # which shows up as a systematic darkening of the refined image.
+    return cv2.cvtColor(np.rint(rgb).astype(np.uint8), cv2.COLOR_RGB2BGR)
 
 
 def _refine_block(model, device, block_images):
@@ -197,7 +199,7 @@ def _refine_tiled(model, device, images, block_size, overlap):
             break
 
     weight_sum = np.maximum(weight_sum, 1e-6)
-    return np.clip(accumulator / weight_sum, 0, 255).astype(np.uint8)
+    return np.rint(np.clip(accumulator / weight_sum, 0, 255)).astype(np.uint8)
 
 
 def _ifcnn_refine_impl(fusion_result, source_images, model_path, use_gpu,

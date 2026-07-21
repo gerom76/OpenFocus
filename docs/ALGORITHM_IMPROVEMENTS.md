@@ -21,7 +21,7 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 2 | GFG-FGF | Quality | Whole frames discarded by a global 15% sharpness threshold | High | Low |
 | 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically | High | Low |
 | 4 | DCT | Quality | Result depends on the order frames are passed in | Medium | Low |
-| 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding | Medium | Trivial |
+| 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial |
 | 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip | Medium | Medium |
 | 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent | Medium | Medium |
 | 8 | DTCWT | Performance | CPU cost grows faster than image area | Medium | Medium |
@@ -166,6 +166,25 @@ B -0.43   G -0.81   R -0.21      (average -0.48, matching the -0.5 predicted)
 **Fix.** `np.rint(rgb).astype(np.uint8)`, or `(rgb + 0.5)`. One line. It will not
 fix the whole colour drift (see next item) but it removes a bias that is pure
 loss. The same pattern is worth checking anywhere else a float result is cast.
+
+**Fixed in 1.5.4.** Both truncating casts in `ifcnn.py` now round: `_to_bgr` and
+the tile accumulator in `_refine_tiled`, which had the same bias. A normalize /
+denormalize round trip through `_to_bgr` is now exact (max error 0 levels, was 1).
+Mean shift from the guided-filter input to the refined output, across the six
+characterisation scenarios:
+
+| scenario | before | after | delta |
+|---|---|---|---|
+| fine_texture | -1.043 | -0.584 | +0.459 |
+| sensor_noise | -0.132 | +0.367 | +0.499 |
+| depth_edge | -0.994 | -0.508 | +0.485 |
+| long_stack | -0.090 | +0.398 | +0.489 |
+| low_contrast | -0.036 | +0.457 | +0.493 |
+| saturated_colour | -3.837 | -3.404 | +0.433 |
+| **average** | **-1.022** | **-0.546** | **+0.476** |
+
+The recovered +0.476 matches the predicted +0.5. The residual shift is the
+round-trip colour drift of item 6, which is a separate cause.
 
 ---
 
