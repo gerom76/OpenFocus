@@ -44,7 +44,10 @@ class FusionMethod:
     fuse: Callable            # fuse(stack, **params) -> uint8 BGR image
     check: Callable           # () -> Optional[str]; a string means "unavailable because"
     params: dict = field(default_factory=dict)   # defaults for a normal run
-    sweep: Optional[tuple] = None                # (param_name, [values]) for the tuning sweep
+    # Every tunable parameter, as (name, [values to sweep], what it controls).
+    # A method can expose more than one - DCT has both a block size and a
+    # median-filter kernel - and the report tools render one page per entry.
+    sweeps: tuple = ()
     gpu: bool = False
     supports_resize: bool = True
     supports_folder: bool = True                 # accepts a directory path as input
@@ -56,6 +59,24 @@ class FusionMethod:
     # Reconstruction floor on the shared photographic fixture, in dB. Set well
     # below the measured value so the test guards against regression, not noise.
     min_psnr: float = 30.0
+
+    @property
+    def sweep(self):
+        """The primary sweep as (name, values), or None - kept for callers
+        that only ever varied one parameter."""
+        if not self.sweeps:
+            return None
+        name, values, _ = self.sweeps[0]
+        return name, values
+
+    def sweep_for(self, param):
+        """Look up one declared parameter by name."""
+        for name, values, blurb in self.sweeps:
+            if name == param:
+                return name, values, blurb
+        known = ", ".join(n for n, _, _ in self.sweeps) or "none"
+        raise KeyError(f"{self.label} has no tunable parameter {param!r}. "
+                       f"Declared: {known}")
 
     def available(self):
         reason = self.check()
@@ -172,7 +193,12 @@ METHODS = [
     FusionMethod(
         key="guided_filter", label="Guided Filter", fuse=_gff,
         check=_needs("cv2"), params={"kernel_size": 31},
-        sweep=("kernel_size", [7, 15, 31, 63]),
+        sweeps=(
+            ("kernel_size", [7, 15, 31, 63, 95],
+             "Size of the averaging window that splits each frame into a smooth "
+             "base layer and a detail layer. Larger keeps more of the picture in "
+             "the detail layer, which sharpens edges but can raise haloing."),
+        ),
         # Weights accumulate in thread-completion order, so repeat runs can
         # differ by one level; see test_gff_quality.py
         deterministic=False,
@@ -181,21 +207,40 @@ METHODS = [
     FusionMethod(
         key="gfgfgf", label="GFG-FGF", fuse=_gfgfgf,
         check=_needs("cv2"), params={"kernel_size": 7},
-        sweep=("kernel_size", [3, 7, 15, 31]),
+        sweeps=(
+            ("kernel_size", [3, 7, 15, 31, 63],
+             "Window used to measure local contrast before the guided filter "
+             "refines the decision map. Small reacts to fine texture; large "
+             "smooths the decision and can miss narrow in-focus regions."),
+        ),
         deterministic=False,
         min_psnr=32.0,      # measured 38.2
     ),
     FusionMethod(
         key="dct", label="DCT", fuse=_dct,
         check=_needs("cv2"), params={"block_size": 8, "kernel_size": 7},
-        sweep=("block_size", [4, 8, 16, 32]),
+        sweeps=(
+            ("block_size", [4, 8, 16, 32, 64],
+             "Side of the square block the sharpness decision is made over. "
+             "Small follows detail closely but is noise-sensitive; large is "
+             "steadier but makes boundaries between near and far look stepped."),
+            ("kernel_size", [3, 5, 7, 11, 15],
+             "Median filter applied to the block decision map to remove isolated "
+             "wrong picks. Larger cleans up more speckle but rounds off genuinely "
+             "small in-focus regions."),
+        ),
         supports_resize=False,
         min_psnr=27.0,      # measured 32.3; block-variance is the weakest focus measure here
     ),
     FusionMethod(
         key="dtcwt", label="DTCWT", fuse=_dtcwt,
         check=_needs("dtcwt", "scipy"), params={"N": 4},
-        sweep=("N", [2, 3, 4, 5]),
+        sweeps=(
+            ("N", [1, 2, 3, 4, 5, 6],
+             "How many times the frame is halved into coarser scales before "
+             "fusing. More levels let the method reason about large soft "
+             "structures, at the cost of time and of blurring fine decisions."),
+        ),
         min_psnr=34.0,      # measured 40.8
     ),
     FusionMethod(
@@ -208,6 +253,11 @@ METHODS = [
     FusionMethod(
         key="gff_ifcnn", label="Guided Filter + IFCNN Refine", fuse=_gff_then_ifcnn,
         check=_needs_weights("ifcnn.pth", "torch"), params={"kernel_size": 31},
+        sweeps=(
+            ("kernel_size", [7, 31, 63],
+             "Passed through to the guided filter that produces the image IFCNN "
+             "then refines; the refinement stage itself has no dial."),
+        ),
         deterministic=False,
         # IFCNN re-encodes an already near-perfect fusion, so on synthetic
         # stacks it scores below the plain guided filter it refines (30.2 vs
@@ -218,22 +268,29 @@ METHODS = [
     FusionMethod(
         key="guided_filter_gpu", label="Guided Filter (GPU)", fuse=_gff_torch,
         check=_needs_gpu("torch"), params={"kernel_size": 31}, gpu=True,
+        sweeps=(("kernel_size", [7, 15, 31, 63, 95],
+                 "Same dial as the CPU guided filter."),),
         min_psnr=33.0,      # measured 39.5
     ),
     FusionMethod(
         key="gfgfgf_gpu", label="GFG-FGF (GPU)", fuse=_gfgfgf_torch,
         check=_needs_gpu("torch"), params={"kernel_size": 7}, gpu=True,
+        sweeps=(("kernel_size", [3, 7, 15, 31, 63],
+                 "Same dial as the CPU GFG-FGF."),),
         min_psnr=32.0,      # measured 41.0
     ),
     FusionMethod(
         key="dct_gpu", label="DCT (GPU)", fuse=_dct_torch,
         check=_needs_gpu("torch"), params={"block_size": 8, "kernel_size": 7},
+        sweeps=(("block_size", [4, 8, 16, 32, 64], "Same dial as the CPU DCT."),
+                ("kernel_size", [3, 5, 7, 11, 15], "Same dial as the CPU DCT.")),
         gpu=True, supports_resize=False,
         min_psnr=27.0,      # measured 32.8
     ),
     FusionMethod(
         key="dtcwt_gpu", label="DTCWT (GPU)", fuse=_dtcwt_torch,
         check=_needs_gpu("torch", "pytorch_wavelets", "pywt"), params={"N": 4},
+        sweeps=(("N", [1, 2, 3, 4, 5, 6], "Same dial as the CPU DTCWT."),),
         gpu=True,
         min_psnr=34.0,
     ),

@@ -130,6 +130,48 @@ def qabf(fused, sources):
     return num / den
 
 
+def boundary_band(masks, width=6):
+    """
+    Pixels within `width` of a focus-region border.
+
+    Where two depths meet is where fusion has to make its hardest choice, so
+    scoring that strip separately from the interior isolates halos and bleeding
+    from overall reconstruction quality.
+    """
+    edge = np.zeros(masks[0].shape[:2], dtype=bool)
+    kernel = np.ones((width * 2 + 1, width * 2 + 1), np.uint8)
+    for mask in masks:
+        binary = (mask > 0.5).astype(np.uint8)
+        grown = cv2.dilate(binary, kernel)
+        shrunk = cv2.erode(binary, kernel)
+        edge |= (grown != shrunk)
+    return edge
+
+
+def region_psnr(fused, reference, region):
+    """PSNR restricted to a boolean mask; inf when the region matches exactly."""
+    if not np.any(region):
+        return float("inf")
+    a = fused[region].astype(np.float64)
+    b = reference[region].astype(np.float64)
+    mse = np.mean((a - b) ** 2)
+    if mse == 0:
+        return float("inf")
+    return float(10.0 * np.log10(255.0 ** 2 / mse))
+
+
+def colour_error(fused, reference):
+    """
+    Mean absolute per-channel deviation in levels (0-255).
+
+    Luminance metrics like PSNR can look healthy while hues drift, so this reads
+    the channels directly - it is what "the colours came out wrong" measures as.
+    """
+    a = fused.astype(np.float32)
+    b = reference.astype(np.float32)
+    return float(np.mean(np.abs(a - b)))
+
+
 def align_to_common_size(fused, sources, reference=None):
     """
     Crop everything to the largest geometry they share.

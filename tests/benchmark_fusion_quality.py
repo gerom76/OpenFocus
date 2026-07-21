@@ -60,7 +60,7 @@ def load_stack(path):
     return stack
 
 
-def plan_runs(method_key, run_all, values_override):
+def plan_runs(method_key, run_all, values_override, param=None):
     """Return (runs, axis_label) where each run is (label, slug, fuse_callable)."""
     if run_all:
         methods = reg.available_methods()
@@ -73,10 +73,13 @@ def plan_runs(method_key, run_all, values_override):
     if not ok:
         raise SystemExit(f"{method.label} is unavailable: {why}")
 
-    if method.sweep is None:
+    if not method.sweeps:
         return [(method.label, method.key, method.run)], "Method"
 
-    param, values = method.sweep
+    try:
+        param, values, _ = method.sweep_for(param or method.sweeps[0][0])
+    except KeyError as exc:
+        raise SystemExit(str(exc)) from exc
     if values_override:
         values = values_override
 
@@ -85,6 +88,21 @@ def plan_runs(method_key, run_all, values_override):
 
     # Keeping the parameter in the slug means saved files say what produced them
     return ([(str(v), f"{method.key}_{param}{v}", make(v)) for v in values], param)
+
+
+def _warm_up(fuse, stack):
+    """
+    Run once and throw the result away before timing anything.
+
+    The first call into a method pays for imports, OpenCV's lazy initialisation
+    and, for the neural methods, loading weights onto the device. Left in, that
+    one-off cost lands entirely on whichever configuration happens to run first
+    and makes it look dramatically slower than the rest.
+    """
+    try:
+        fuse(stack)
+    except Exception:
+        pass  # a configuration that fails is reported by the timed run below
 
 
 def print_table(rows, axis_label, has_reference):
@@ -141,17 +159,25 @@ def main():
     ap.add_argument("--size", type=int, default=512, help="Edge length for --synthetic")
     ap.add_argument("--style", default="photographic", choices=("photographic", "texture"),
                     help="Synthetic reference style (default: photographic)")
+    ap.add_argument("--param", default=None,
+                    help="Which parameter to sweep; defaults to the method's first. See --list")
     ap.add_argument("--values", default=None,
                     help="Comma-separated override for the swept parameter")
     ap.add_argument("--save-dir", help="Write each fused result here as <slug>.png")
     args = ap.parse_args()
 
     if args.list_methods:
-        print(f"{'key':<20}{'status':<9}{'sweep':<28}reason")
+        print(f"{'key':<20}{'status':<9}{'parameter':<14}values")
         for m in reg.METHODS:
             ok, why = m.available()
-            sweep = f"{m.sweep[0]}={m.sweep[1]}" if m.sweep else "-"
-            print(f"{m.key:<20}{'ready' if ok else 'skip':<9}{sweep:<28}{'' if ok else why}")
+            status = 'ready' if ok else 'skip'
+            if not m.sweeps:
+                print(f"{m.key:<20}{status:<9}{'-':<14}{'' if ok else why}")
+                continue
+            for i, (name, values, _) in enumerate(m.sweeps):
+                print(f"{(m.key if i == 0 else ''):<20}{(status if i == 0 else ''):<9}"
+                      f"{name:<14}{','.join(map(str, values))}"
+                      f"{'' if ok or i else '  ' + why}")
         return
 
     if not args.synthetic and not args.stack:
@@ -169,11 +195,14 @@ def main():
         source = (f"{args.stack} ({len(stack)} slices, "
                   f"{stack[0].shape[1]}x{stack[0].shape[0]})")
 
-    runs, axis_label = plan_runs(args.method, args.run_all, values)
+    runs, axis_label = plan_runs(args.method, args.run_all, values, args.param)
     print(f"Fusion quality benchmark\nStack: {source}\n")
 
     if args.save_dir:
         os.makedirs(args.save_dir, exist_ok=True)
+
+    if runs:
+        _warm_up(runs[0][2], stack)
 
     rows = []
     for label, slug, fuse in runs:

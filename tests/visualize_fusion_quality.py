@@ -41,6 +41,7 @@ from tests import fusion_metrics as fm
 from tests import fusion_registry as reg
 from tests.synthetic_stack import make_stack
 
+REPORTS_DIR = "reports"  # Everything generated lands here unless --out says otherwise
 DISPLAY_MAX = 512      # Longest edge of the embedded preview images
 CROP_SCALE = 2         # Magnification of the detail insets
 ERROR_FULL_SCALE = 48  # Abs error mapped to the top of the heatmap ramp
@@ -106,7 +107,7 @@ def load_stack(path):
 # Data collection
 # ---------------------------------------------------------------------------
 
-def _plan(method_key, compare, values_override):
+def _plan(method_key, compare, values_override, param=None):
     """
     Work out what the report varies along its axis.
 
@@ -125,26 +126,52 @@ def _plan(method_key, compare, values_override):
     if not ok:
         raise SystemExit(f"{method.label} is unavailable: {why}")
 
-    if method.sweep is None:
+    if not method.sweeps:
         return ([(method.key, method.label, method.run)], "Setting",
                 f"{method.label}, which exposes no tuning parameter")
 
-    param, values = method.sweep
+    try:
+        param, values, blurb = method.sweep_for(param or method.sweeps[0][0])
+    except KeyError as exc:
+        raise SystemExit(str(exc)) from exc
+
     if values_override:
         values = values_override
     label = PARAM_LABELS.get(param, param)
+
+    # Hold the method's other parameters at their defaults, so the page shows
+    # the influence of this one dial rather than a mixture
+    fixed = {k: v for k, v in method.params.items() if k != param}
 
     def make(value):
         return lambda stack, **kw: method.run(stack, **{param: value}, **kw)
 
     runs = [(str(v), str(v), make(v)) for v in values]
-    return runs, label, f"{method.label}, swept across {label.lower()}"
+    held = (" with " + ", ".join(f"{k}={v}" for k, v in fixed.items())
+            + " held fixed") if fixed else ""
+    return runs, label, f"{method.label}, swept across {label.lower()}{held}. {blurb}"
 
 
-def build_payload(stack, reference, method_key, compare, values_override, crop_window=None):
+def _warm_up(fuse, stack):
+    """
+    Run once and throw the result away before timing anything.
+
+    The first call into a method pays for imports, OpenCV's lazy initialisation
+    and, for the neural methods, loading weights onto the device. Left in, that
+    one-off cost lands entirely on whichever configuration happens to run first
+    and makes it look dramatically slower than the rest.
+    """
+    try:
+        fuse(stack)
+    except Exception:
+        pass  # a configuration that fails is reported by the timed run below
+
+
+def build_payload(stack, reference, method_key, compare, values_override,
+                  crop_window=None, param=None):
     """Fuse every planned run and collect the images and metrics the report shows."""
     height, width = stack[0].shape[:2]
-    runs_plan, param_label, subtitle = _plan(method_key, compare, values_override)
+    runs_plan, param_label, subtitle = _plan(method_key, compare, values_override, param)
 
     if crop_window is None:
         side = max(64, min(height, width) // 3)
@@ -190,6 +217,9 @@ def build_payload(stack, reference, method_key, compare, values_override, crop_w
                                  float(edges[i + 1] / height * 100)]
             entry["psnr"] = fm.psnr(src, reference)
         payload["slices"].append(entry)
+
+    if runs_plan:
+        _warm_up(runs_plan[0][2], stack)
 
     for run_id, run_label, fuse in runs_plan:
         start = time.perf_counter()
@@ -751,11 +781,17 @@ render();
 # ---------------------------------------------------------------------------
 
 def _list_methods():
-    print(f"{'key':<20}{'status':<9}{'sweep':<28}reason")
+    print(f"{'key':<20}{'status':<9}{'parameter':<14}values")
     for m in reg.METHODS:
         ok, why = m.available()
-        sweep = f"{m.sweep[0]}={m.sweep[1]}" if m.sweep else "-"
-        print(f"{m.key:<20}{'ready' if ok else 'skip':<9}{sweep:<28}{'' if ok else why}")
+        status = 'ready' if ok else 'skip'
+        if not m.sweeps:
+            print(f"{m.key:<20}{status:<9}{'-':<14}{'' if ok else why}")
+            continue
+        for i, (name, values, _) in enumerate(m.sweeps):
+            print(f"{(m.key if i == 0 else ''):<20}{(status if i == 0 else ''):<9}"
+                  f"{name:<14}{','.join(map(str, values))}"
+                  f"{'' if ok or i else '  ' + why}")
 
 
 def main():
@@ -775,9 +811,15 @@ def main():
     ap.add_argument("--size", type=int, default=384, help="Edge length for --synthetic")
     ap.add_argument("--style", default="photographic", choices=("photographic", "texture"),
                     help="Synthetic reference style (default: photographic)")
+    ap.add_argument("--param", default=None,
+                    help="Which parameter to sweep; defaults to the method's first. See --list")
+    ap.add_argument("--all-params", action="store_true", dest="all_params",
+                    help="Write one report per tunable parameter of --method")
     ap.add_argument("--values", default=None,
                     help="Comma-separated override for the swept parameter")
     ap.add_argument("--out", default=None, help="Output HTML path")
+    ap.add_argument("--out-dir", default=REPORTS_DIR, dest="out_dir",
+                    help=f"Directory for the generated reports (default: {REPORTS_DIR}/)")
     ap.add_argument("--open", action="store_true", dest="open_browser",
                     help="Open the report in the default browser when done")
     args = ap.parse_args()
@@ -804,18 +846,41 @@ def main():
              else f"{reg.get(args.method).label} fusion quality")
 
     print(f"Fusing {len(stack)} slices at {stack[0].shape[1]}x{stack[0].shape[0]}...")
-    payload = build_payload(stack, reference, args.method, args.compare, values)
+    # One report per tunable parameter, or a single one for the chosen parameter
+    if args.all_params and not args.compare:
+        params = [name for name, _, _ in reg.get(args.method).sweeps] or [None]
+    else:
+        params = [args.param]
 
-    out = args.out or ("fusion_comparison_report.html" if args.compare
-                       else f"{args.method}_quality_report.html")
-    out = os.path.abspath(out)
+    written = []
+    for param in params:
+        if param:
+            print(f"[{param}]")
+        payload = build_payload(stack, reference, args.method, args.compare,
+                                values, param=param)
 
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(render_html(payload, source_label, title))
+        if args.out and len(params) == 1:
+            out = args.out  # an explicit path is honoured exactly as given
+        else:
+            if args.compare:
+                name = "fusion_comparison_report.html"
+            elif param:
+                # The filename says which dial the page is about, so a set stays legible
+                name = f"{args.method}_{param}_report.html"
+            else:
+                name = f"{args.method}_quality_report.html"
+            os.makedirs(args.out_dir, exist_ok=True)
+            out = os.path.join(args.out_dir, name)
+        out = os.path.abspath(out)
 
-    print(f"\nWrote {out} ({os.path.getsize(out) / 1024:.0f} KB)")
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(render_html(payload, source_label, title))
+        written.append(out)
+        print(f"  wrote {out} ({os.path.getsize(out) / 1024:.0f} KB)")
+
     if args.open_browser:
-        webbrowser.open(f"file:///{out.replace(os.sep, '/')}")
+        for path in written:
+            webbrowser.open(f"file:///{path.replace(os.sep, '/')}")
 
 
 if __name__ == "__main__":
