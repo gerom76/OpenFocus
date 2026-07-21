@@ -7,8 +7,11 @@
 # Pick the wheel matching your CUDA runtime, e.g. cupy-cuda13x.
 cupy-cuda13x
 
-# GPU DTCWT fusion; falls back to CPU in fusion_methods/dtcwt_torch.py
+# GPU DTCWT fusion; falls back to CPU in fusion_methods/dtcwt_torch.py.
+# Both are required: _validate_transform_environment in core/multi_focus_fusion.py
+# only enables the GPU path when pytorch_wavelets and pywt are both importable.
 pytorch_wavelets
+PyWavelets
 
 # FLOP counting, used only by the __main__ block of core/models/stackmffv4_network.py
 fvcore

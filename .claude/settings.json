@@ -21,7 +21,14 @@
       "PowerShell(python:*)",
       "PowerShell(py:*)",
       "Bash(python:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(python -m pytest tests/ -q -p no:warnings)",
+      "Bash(python -m pytest tests/ -q -p no:warnings -rs)",
+      "Bash(python tests/visualize_fusion_quality.py --list)",
+      "Bash(python tests/benchmark_fusion_quality.py --synthetic --slices 3 --size 256 --all)",
+      "Bash(python -c ' *)",
+      "Bash(python tests/visualize_fusion_quality.py --synthetic --slices 3 --size 256 --compare --out __TRACKED_VAR__/rep_compare.html)",
+      "Bash(python tests/visualize_fusion_quality.py __TRACKED_VAR__/realstack --method dct --out __TRACKED_VAR__/rep_real2.html)"
     ]
   },
   "hooks": {
