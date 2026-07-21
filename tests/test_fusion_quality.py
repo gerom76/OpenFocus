@@ -127,15 +127,11 @@ def test_resize_at_the_documented_minimum(method, fixture):
     assert out.shape[:2] == (edge, edge)
 
 
-@pytest.mark.xfail(reason="StackMFF-V4 raises an opaque torch max_pool2d error "
-                          "below 112 px instead of rejecting the size clearly",
-                   raises=RuntimeError, strict=False)
 def test_undersized_resize_is_rejected_clearly(fixture):
     """
-    Asking StackMFF-V4 for a preview smaller than its pooling depth allows
-    should fail with an explanation, not a RuntimeError about a 480x0x1 tensor.
-    Marked xfail because it currently does the latter - the app can hit this by
-    setting a small preview size.
+    A preview smaller than StackMFF-V4's pooling depth allows must fail with an
+    explanation, not a RuntimeError about a 480x0x1 tensor. The app can reach
+    this by setting a small output size, so the message has to be actionable.
     """
     method = reg.get("stackmffv4")
     ok, reason = method.available()
@@ -143,7 +139,7 @@ def test_undersized_resize_is_rejected_clearly(fixture):
         pytest.skip(reason)
 
     stack, _ = fixture
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="at least 112 px"):
         method.run(stack, img_resize=(96, 96))
 
 

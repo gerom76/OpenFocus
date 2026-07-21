@@ -20,6 +20,22 @@ _GLOBAL_DEVICE = None
 _MPS_AVAILABLE = None
 _CUDA_AVAILABLE = None
 
+# The encoder pools its input repeatedly, so a small enough image collapses to a
+# zero-sized feature map partway down and torch raises from max_pool2d with a
+# tensor shape rather than anything actionable. 112 px is the smallest edge that
+# survives; below it we say so ourselves.
+MIN_INPUT_EDGE = 112
+
+
+def _check_input_size(height, width):
+    """Reject inputs the network cannot pool down, with an explanation."""
+    if min(height, width) < MIN_INPUT_EDGE:
+        raise ValueError(
+            f"StackMFF-V4 needs at least {MIN_INPUT_EDGE} px on each side, "
+            f"got {width}x{height}. Increase the output size, raise the tile "
+            f"block size, or pick another fusion method for images this small."
+        )
+
 
 def _detect_accelerators():
     """Detect the available accelerator type on the system, run once at module load"""
@@ -150,7 +166,10 @@ def _stackmffv4_batch_impl(tiles_list, model_path, use_gpu):
     # Find the maximum size and pad all tiles to the same size
     max_h = max(s[0] for s in all_original_sizes)
     max_w = max(s[1] for s in all_original_sizes)
-    
+
+    # Every tile is padded up to this, so the batch stands or falls together
+    _check_input_size(int(max_h), int(max_w))
+
     # Pad to a multiple of 32
     padded_h = ((max_h - 1) // 32 + 1) * 32
     padded_w = ((max_w - 1) // 32 + 1) * 32
@@ -258,6 +277,7 @@ def _stackmffv4_impl(input_source, img_resize, model_path, use_gpu):
 
     image_stack = torch.stack(gray_tensors)
     original_size = image_stack.shape[-2:]
+    _check_input_size(int(original_size[0]), int(original_size[1]))
 
     with torch.no_grad():
         input_tensor = image_stack.unsqueeze(0).to(device)
