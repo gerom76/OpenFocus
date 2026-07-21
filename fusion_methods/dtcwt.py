@@ -162,7 +162,7 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
     fused_img = np.stack(fused_channels, axis=-1)
     
     # Clip and Convert
-    fused_img = np.clip(fused_img * 255.0, 0, 255).astype(np.uint8)
+    fused_img = np.rint(np.clip(fused_img * 255.0, 0, 255)).astype(np.uint8)
     fused_img = cv2.cvtColor(fused_img, cv2.COLOR_RGB2BGR)
 
     # dtcwt duplicates the bottom row and rightmost column of an odd-sized image

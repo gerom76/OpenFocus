@@ -247,7 +247,7 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
         fused_img = fused_base + fused_detail
         
         # Clip and convert back to uint8
-        fused_img = np.clip(fused_img * 255, 0, 255).astype(np.uint8)
+        fused_img = np.rint(np.clip(fused_img * 255, 0, 255)).astype(np.uint8)
         
         return fused_img
 

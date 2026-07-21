@@ -186,6 +186,36 @@ characterisation scenarios:
 The recovered +0.476 matches the predicted +0.5. The residual shift is the
 round-trip colour drift of item 6, which is a separate cause.
 
+### The same pattern elsewhere
+
+The closing note above was followed up: every float-to-`uint8` cast in
+`fusion_methods/` and `core/` was audited. Nine candidates, six genuine:
+
+| site | verdict |
+|---|---|
+| `dtcwt.py:165` | truncated a reconstructed float image - fixed |
+| `gff.py:250` | truncated a reconstructed float image - fixed |
+| `gfg_fgf.py:313` | truncated each float channel - fixed |
+| `multi_focus_fusion.py:787` | truncated the tiled weighted accumulator - fixed |
+| `multi_focus_fusion.py:872` | truncated the tiled weighted accumulator - fixed |
+| `workers.py:863` | truncated non-`uint8` frames on GIF export - fixed |
+| `stackmffv4.py:203`, `:302` | no-op: `fused_color` is a fancy-index gather from a `uint8` stack, so nothing is truncated |
+| `registration.py:702` | no-op: `map_coordinates` with a `uint8` input returns `uint8` and rounds internally, matching the `warpPerspective` CPU path |
+| `dct.py:153` | not a pixel cast - an index map, where rounding would be wrong |
+
+Effect on the classical methods, measured against `HEAD` on the same six
+scenarios (mean shift in levels, PSNR in dB against the sharp reference):
+
+| method | mean shift | avg dPSNR | best case |
+|---|---|---|---|
+| DTCWT | +0.476 | +2.41 | low_contrast +13.50 |
+| Guided Filter | +0.418 | +2.15 | low_contrast +12.49 |
+| GFG-FGF | +0.100 | +0.51 | low_contrast +3.02 |
+
+The low-contrast scenario dominates because when the whole frame sits in a narrow
+band of levels, a systematic half-level bias *is* most of the error. GFG-FGF
+gains least because its division already lands many pixels on exact integers.
+
 ---
 
 ## 6. IFCNN's colour drifts through the round trip

@@ -310,7 +310,7 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
         np.divide(ch_data, sum_fdms, out=ch_data, where=nonzero_mask)
         # Clip and convert to uint8
         np.clip(ch_data * 255.0, 0, 255, out=ch_data)
-        out[:, :, c] = ch_data.astype(np.uint8)
+        out[:, :, c] = np.rint(ch_data).astype(np.uint8)
 
     return out
 

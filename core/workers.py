@@ -860,7 +860,7 @@ class GifSaverWorker(QThread):
                 
                 # Ensure the image is in uint8 format
                 if img_copy.dtype != np.uint8:
-                    img_copy = np.clip(img_copy, 0, 255).astype(np.uint8)
+                    img_copy = np.rint(np.clip(img_copy, 0, 255)).astype(np.uint8)
                 
                 normalized_images.append(img_copy)
             

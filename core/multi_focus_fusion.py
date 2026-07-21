@@ -784,7 +784,7 @@ class MultiFocusFusion:
 
         weight[weight == 0] = 1.0
         fused = acc / weight
-        fused = np.clip(fused, 0, 255).astype(np.uint8)
+        fused = np.rint(np.clip(fused, 0, 255)).astype(np.uint8)
 
         if channels == 1:
             return fused[:, :, 0]
@@ -869,7 +869,7 @@ class MultiFocusFusion:
         
         weight[weight == 0] = 1.0
         fused = acc / weight
-        fused = np.clip(fused, 0, 255).astype(np.uint8)
+        fused = np.rint(np.clip(fused, 0, 255)).astype(np.uint8)
         
         if channels == 1:
             return fused[:, :, 0]
