@@ -6,8 +6,8 @@ from typing import Iterable, Optional
 from PyQt6.QtCore import QThread, Qt
 from PyQt6.QtWidgets import QMessageBox, QProgressDialog
 
-from ui.styles import MESSAGE_BOX_STYLE, PROGRESS_DIALOG_STYLE
-from utils import exec_message_box
+from ui.styles import PROGRESS_DIALOG_STYLE
+from utils import show_message_box
 from core.workers import BatchWorker
 
 
@@ -231,13 +231,7 @@ class BatchManager:
         info: str,
         icon: QMessageBox.Icon,
     ) -> None:
-        msg_box = QMessageBox(self.window)
-        msg_box.setWindowTitle(title)        
-        msg_box.setText(text)
-        msg_box.setInformativeText(info)
-        msg_box.setIcon(icon)
-        msg_box.setStyleSheet(MESSAGE_BOX_STYLE)
-        exec_message_box(msg_box)
+        show_message_box(self.window, title, text, info, icon)
 
     def _cancel_running_batch(self) -> None:
         if self._worker:

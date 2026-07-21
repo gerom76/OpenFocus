@@ -139,14 +139,11 @@ def show_message_box(
     icon: QMessageBox.Icon = QMessageBox.Icon.Information,
 ) -> None:
     log_message_box(title, text, informative_text, icon)
-    msg_box = QMessageBox(parent)
-    msg_box.setWindowTitle(title)
-    msg_box.setText(text)
-    if informative_text:
-        msg_box.setInformativeText(informative_text)
-    msg_box.setIcon(icon)
-    msg_box.setStyleSheet(MESSAGE_BOX_STYLE)
-    msg_box.exec()
+    # Notifications are non-blocking: a toast appears in the corner of the
+    # window and disappears on its own after a few seconds.
+    from widgets.toast import show_toast
+
+    show_toast(parent, title, text, informative_text, icon)
 
 
 def show_warning_box(
@@ -184,12 +181,8 @@ def show_custom_message_box(
     icon: QMessageBox.Icon = QMessageBox.Icon.Information,
     style_sheet: str = MESSAGE_BOX_STYLE,
 ) -> None:
+    # style_sheet is kept for call-site compatibility; toasts carry their own look.
     log_message_box(title, text, informative_text, icon)
-    msg_box = QMessageBox(parent)
-    msg_box.setWindowTitle(title)
-    msg_box.setText(text)
-    if informative_text:
-        msg_box.setInformativeText(informative_text)
-    msg_box.setIcon(icon)
-    msg_box.setStyleSheet(style_sheet)
-    msg_box.exec()
+    from widgets.toast import show_toast
+
+    show_toast(parent, title, text, informative_text, icon)
