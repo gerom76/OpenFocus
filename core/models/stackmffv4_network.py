@@ -191,7 +191,9 @@ class LV_UNet(nn.Module):
                  drop_rate=0, act_num=1, strides=[2,2,2], deploy=False):
         super().__init__()
         self.deploy = deploy
-        mobile = models.mobilenet_v3_large(pretrained=True)
+        mobile = models.mobilenet_v3_large(
+            weights=models.MobileNet_V3_Large_Weights.IMAGENET1K_V1
+        )
         # Modify the first conv layer to accept single-channel input
         self.firstconv = nn.Conv2d(input_channel, 16, kernel_size=3, stride=2, padding=1, bias=False)
         # Initialize the weights
