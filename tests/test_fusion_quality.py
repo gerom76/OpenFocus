@@ -148,6 +148,33 @@ def test_undersized_resize_is_rejected_clearly(fixture):
 
 
 @pytest.mark.parametrize("method", ALL_METHODS)
+def test_output_size_for_awkward_dimensions(method, fixture):
+    """
+    A stack whose dimensions are neither even nor block-aligned.
+
+    Most methods return the input geometry untouched. DCT crops down to a
+    multiple of its block size and DTCWT pads an odd edge up to even, so those
+    declare preserves_size=False and are held to a bounded deviation instead -
+    a caller that assumes the output matches the input will misalign on them.
+    """
+    stack, _, _ = make_stack(num_slices=3, height=250, width=170, seed=7,
+                             style="photographic")
+    height, width = stack[0].shape[:2]
+    out = method.run(stack)
+
+    if method.preserves_size:
+        assert out.shape == stack[0].shape, (
+            f"{method.label} changed {height}x{width} to "
+            f"{out.shape[0]}x{out.shape[1]} but claims to preserve size")
+        return
+
+    # Bounded: at most one block lost, or one row/column of padding gained
+    assert abs(out.shape[0] - height) <= 8
+    assert abs(out.shape[1] - width) <= 8
+    assert out.shape[2] == stack[0].shape[2]
+
+
+@pytest.mark.parametrize("method", ALL_METHODS)
 def test_repeat_run_is_stable(method, fixture, fused_cache):
     """
     Fusing the same stack twice must give the same answer.

@@ -48,6 +48,10 @@ class FusionMethod:
     gpu: bool = False
     supports_resize: bool = True
     supports_folder: bool = True                 # accepts a directory path as input
+    # False when the output geometry can differ from the input for sizes that
+    # do not divide evenly: DCT crops to a multiple of its block size, and
+    # DTCWT pads an odd edge up to even before decomposing.
+    preserves_size: bool = True
     # Smallest edge the method can process. The neural models pool the input
     # several times over, so a small enough image collapses to a zero-sized
     # feature map deep in the network.
@@ -190,12 +194,14 @@ METHODS = [
         check=_needs("cv2"), params={"block_size": 8, "kernel_size": 7},
         sweep=("block_size", [4, 8, 16, 32]),
         supports_resize=False,
+        preserves_size=False,   # crops to a multiple of block_size: 300 -> 296
         min_psnr=27.0,      # measured 32.3; block-variance is the weakest focus measure here
     ),
     FusionMethod(
         key="dtcwt", label="DTCWT", fuse=_dtcwt,
         check=_needs("dtcwt", "scipy"), params={"N": 4},
         sweep=("N", [2, 3, 4, 5]),
+        preserves_size=False,   # pads an odd edge up to even: 255 -> 256
         min_psnr=34.0,      # measured 40.8
     ),
     FusionMethod(
@@ -228,13 +234,13 @@ METHODS = [
     FusionMethod(
         key="dct_gpu", label="DCT (GPU)", fuse=_dct_torch,
         check=_needs_gpu("torch"), params={"block_size": 8, "kernel_size": 7},
-        gpu=True, supports_resize=False,
+        gpu=True, supports_resize=False, preserves_size=False,
         min_psnr=27.0,      # measured 32.8
     ),
     FusionMethod(
         key="dtcwt_gpu", label="DTCWT (GPU)", fuse=_dtcwt_torch,
         check=_needs_gpu("torch", "pytorch_wavelets", "pywt"), params={"N": 4},
-        gpu=True,
+        gpu=True, preserves_size=False,
         min_psnr=34.0,
     ),
 ]

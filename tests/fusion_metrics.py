@@ -130,6 +130,29 @@ def qabf(fused, sources):
     return num / den
 
 
+def align_to_common_size(fused, sources, reference=None):
+    """
+    Crop everything to the largest geometry they share.
+
+    Not every method returns the input size: DCT crops to a multiple of its
+    block size and DTCWT pads an odd edge up to even. Comparing arrays of
+    different shapes would raise, so callers measuring arbitrary methods should
+    pass their images through here first. Returns (fused, sources, reference).
+    """
+    shapes = [fused.shape[:2]] + [s.shape[:2] for s in sources]
+    if reference is not None:
+        shapes.append(reference.shape[:2])
+
+    if len(set(shapes)) == 1:
+        return fused, sources, reference
+
+    height = min(s[0] for s in shapes)
+    width = min(s[1] for s in shapes)
+    return (fused[:height, :width],
+            [s[:height, :width] for s in sources],
+            None if reference is None else reference[:height, :width])
+
+
 def evaluate(fused, sources, reference=None):
     """Collect every applicable metric into one dict."""
     scores = {

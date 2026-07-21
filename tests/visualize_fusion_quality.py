@@ -1,21 +1,25 @@
 """
-Render the Guided Filter quality results as a standalone HTML report.
+Render fusion quality results as a standalone HTML report.
 
-Fuses a focus stack across a range of kernel sizes and writes a single
-self-contained HTML file - every image is embedded as a data URI, so the report
-needs no server, no network and no assets folder. Open it in any browser.
+Covers every fusion method in the project through the uniform interface in
+tests/fusion_registry.py. Two modes:
 
-Requires only what OpenFocus already needs: numpy and opencv-python.
+* sweep (default) - one method, swept across its tuning parameter (kernel size
+  for the guided filter and GFG-FGF, block size for DCT, levels for DTCWT)
+* --compare       - every available method side by side at its default setting
+
+The output is a single self-contained HTML file: images are embedded as data
+URIs, so it needs no server, no network and no assets folder.
+
+Requires only what OpenFocus already needs: numpy and opencv-python. Methods
+with unmet dependencies are skipped with a printed reason.
 
 Examples:
-    # Synthetic stack with a known ground truth (PSNR/SSIM/error maps available)
-    python tests/visualize_gff_quality.py --synthetic --open
-
-    # A real focus stack (no ground truth, so Q_ABF carries the report)
-    python tests/visualize_gff_quality.py path/to/stack --open
-
-    # Pick the kernels and where the file lands
-    python tests/visualize_gff_quality.py --synthetic --kernels 7,15,31 --out report.html
+    python tests/visualize_fusion_quality.py --synthetic --open
+    python tests/visualize_fusion_quality.py --synthetic --method dtcwt --open
+    python tests/visualize_fusion_quality.py --synthetic --compare --open
+    python tests/visualize_fusion_quality.py path/to/stack --method dct --open
+    python tests/visualize_fusion_quality.py --list
 """
 
 import argparse
@@ -33,14 +37,20 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fusion_methods.gff import gff_impl
 from tests import fusion_metrics as fm
+from tests import fusion_registry as reg
 from tests.synthetic_stack import make_stack
 
-DEFAULT_KERNELS = [7, 15, 31, 63]
 DISPLAY_MAX = 512      # Longest edge of the embedded preview images
 CROP_SCALE = 2         # Magnification of the detail insets
 ERROR_FULL_SCALE = 48  # Abs error mapped to the top of the heatmap ramp
+
+# How each sweepable parameter is presented in the report
+PARAM_LABELS = {
+    "kernel_size": "Kernel size",
+    "block_size": "Block size",
+    "N": "Levels",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +106,45 @@ def load_stack(path):
 # Data collection
 # ---------------------------------------------------------------------------
 
-def build_payload(stack, reference, kernels, threads=None, crop_window=None):
-    """Fuse across kernels and collect every image and metric the report shows."""
+def _plan(method_key, compare, values_override):
+    """
+    Work out what the report varies along its axis.
+
+    Returns (runs, param_label, subtitle), each run being
+    (id, label, fuse_callable).
+    """
+    if compare:
+        methods = reg.available_methods()
+        if not methods:
+            raise SystemExit("No fusion method is available in this environment")
+        runs = [(m.key, m.label, m.run) for m in methods]
+        return runs, "Method", "every available method at its default setting"
+
+    method = reg.get(method_key)
+    ok, why = method.available()
+    if not ok:
+        raise SystemExit(f"{method.label} is unavailable: {why}")
+
+    if method.sweep is None:
+        return ([(method.key, method.label, method.run)], "Setting",
+                f"{method.label}, which exposes no tuning parameter")
+
+    param, values = method.sweep
+    if values_override:
+        values = values_override
+    label = PARAM_LABELS.get(param, param)
+
+    def make(value):
+        return lambda stack, **kw: method.run(stack, **{param: value}, **kw)
+
+    runs = [(str(v), str(v), make(v)) for v in values]
+    return runs, label, f"{method.label}, swept across {label.lower()}"
+
+
+def build_payload(stack, reference, method_key, compare, values_override, crop_window=None):
+    """Fuse every planned run and collect the images and metrics the report shows."""
     height, width = stack[0].shape[:2]
+    runs_plan, param_label, subtitle = _plan(method_key, compare, values_override)
 
     if crop_window is None:
         side = max(64, min(height, width) // 3)
@@ -115,8 +161,11 @@ def build_payload(stack, reference, kernels, threads=None, crop_window=None):
         "height": height,
         "crop": list(crop_window),
         "has_reference": reference is not None,
+        "param_label": param_label,
+        "subtitle": subtitle,
+        "compare": bool(compare),
         "slices": [],
-        "kernels": [],
+        "runs": [],
         "reference": None,
     }
 
@@ -142,23 +191,33 @@ def build_payload(stack, reference, kernels, threads=None, crop_window=None):
             entry["psnr"] = fm.psnr(src, reference)
         payload["slices"].append(entry)
 
-    for kernel in kernels:
+    for run_id, run_label, fuse in runs_plan:
         start = time.perf_counter()
-        fused = gff_impl(stack, img_resize=None, kernel_size=kernel,
-                         thread_count=threads)
+        try:
+            fused = fuse(stack)
+        except Exception as exc:  # one broken method must not sink the whole report
+            print(f"  {run_label:<30} FAILED: {type(exc).__name__}: {exc}", flush=True)
+            continue
         elapsed = time.perf_counter() - start
-        print(f"  kernel {kernel:>3}: {elapsed:5.2f}s", flush=True)
+        print(f"  {run_label:<30} {elapsed:6.2f}s", flush=True)
 
         entry = {
-            "kernel": kernel,
+            "id": run_id,
+            "label": run_label,
             "img": _b64(fused),
             "crop": _b64(_crop(fused, crop_window)),
             "seconds": elapsed,
         }
-        entry.update(fm.evaluate(fused, stack, reference))
-        if reference is not None:
-            entry["diff"] = _b64(_error_map(fused, reference))
-        payload["kernels"].append(entry)
+        # DCT and DTCWT can return a slightly different geometry than they were
+        # given, so measure on the region every image actually shares
+        m_fused, m_stack, m_ref = fm.align_to_common_size(fused, stack, reference)
+        entry.update(fm.evaluate(m_fused, m_stack, m_ref))
+        if m_ref is not None:
+            entry["diff"] = _b64(_error_map(m_fused, m_ref))
+        payload["runs"].append(entry)
+
+    if not payload["runs"]:
+        raise SystemExit("Every fusion run failed; nothing to report")
 
     return payload
 
@@ -172,7 +231,7 @@ CSS = r"""
     --ground:#eceff0; --surface:#fff; --surface-2:#f4f6f7; --line:#d3dadc;
     --line-strong:#b6c2c5; --ink:#0f1a1d; --ink-2:#46595e; --ink-3:#6f8388;
     --accent:#0b6f7a; --accent-soft:rgba(11,111,122,.12); --accent-ink:#fff;
-    --good:#2f7d52; --bar-track:#dfe5e6; --bar-muted:#93a6ab;
+    --bar-track:#dfe5e6; --bar-muted:#93a6ab;
     --font-display:"Bahnschrift","DIN Alternate","Arial Narrow",system-ui,sans-serif;
     --font-body:"Charter","Bitstream Charter","Iowan Old Style",Georgia,serif;
     --font-mono:"Cascadia Mono","JetBrains Mono","SF Mono",Consolas,monospace;
@@ -182,20 +241,20 @@ CSS = r"""
       --ground:#0b1012; --surface:#131b1e; --surface-2:#182226; --line:#26343a;
       --line-strong:#35474e; --ink:#e7eef0; --ink-2:#a8bcc1; --ink-3:#7b9098;
       --accent:#3fb6c4; --accent-soft:rgba(63,182,196,.16); --accent-ink:#06272c;
-      --good:#57b37f; --bar-track:#223034; --bar-muted:#566f76;
+      --bar-track:#223034; --bar-muted:#566f76;
     }
   }
   :root[data-theme="dark"] {
     --ground:#0b1012; --surface:#131b1e; --surface-2:#182226; --line:#26343a;
     --line-strong:#35474e; --ink:#e7eef0; --ink-2:#a8bcc1; --ink-3:#7b9098;
     --accent:#3fb6c4; --accent-soft:rgba(63,182,196,.16); --accent-ink:#06272c;
-    --good:#57b37f; --bar-track:#223034; --bar-muted:#566f76;
+    --bar-track:#223034; --bar-muted:#566f76;
   }
   :root[data-theme="light"] {
     --ground:#eceff0; --surface:#fff; --surface-2:#f4f6f7; --line:#d3dadc;
     --line-strong:#b6c2c5; --ink:#0f1a1d; --ink-2:#46595e; --ink-3:#6f8388;
     --accent:#0b6f7a; --accent-soft:rgba(11,111,122,.12); --accent-ink:#fff;
-    --good:#2f7d52; --bar-track:#dfe5e6; --bar-muted:#93a6ab;
+    --bar-track:#dfe5e6; --bar-muted:#93a6ab;
   }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--ground); color:var(--ink);
@@ -243,8 +302,8 @@ CSS = r"""
   .ctl { display:flex; flex-direction:column; gap:7px; }
   .ctl > span { font-family:var(--font-mono); font-size:11px; letter-spacing:.08em;
                 text-transform:uppercase; color:var(--ink-3); }
-  .seg { display:flex; border:1px solid var(--line-strong); border-radius:3px;
-         overflow:hidden; }
+  .seg { display:flex; flex-wrap:wrap; border:1px solid var(--line-strong);
+         border-radius:3px; overflow:hidden; }
   .seg button { font-family:var(--font-mono); font-size:13px; color:var(--ink-2);
                 background:var(--surface); border:0; border-right:1px solid var(--line);
                 padding:8px 15px; cursor:pointer; font-variant-numeric:tabular-nums; }
@@ -278,10 +337,11 @@ CSS = r"""
   .panel { background:var(--surface); border:1px solid var(--line);
            border-radius:3px; padding:22px 24px 24px; }
   .chart { display:flex; flex-direction:column; gap:12px; margin-top:4px; }
-  .row, .axis { display:grid; grid-template-columns:130px minmax(0,1fr) 74px;
+  .row, .axis { display:grid; grid-template-columns:190px minmax(0,1fr) 74px;
                 gap:14px; align-items:center; }
   .row .lbl { font-family:var(--font-mono); font-size:12px; color:var(--ink-2);
-              text-align:right; }
+              text-align:right; overflow:hidden; text-overflow:ellipsis;
+              white-space:nowrap; }
   .track { background:var(--bar-track); border-radius:2px; height:20px; overflow:hidden; }
   .fill { height:100%; background:var(--bar-muted); border-radius:0 4px 4px 0;
           transition:width .5s cubic-bezier(.22,.7,.3,1); }
@@ -305,10 +365,14 @@ CSS = r"""
            font-family:var(--font-mono); font-size:12px; color:var(--ink-3); }
   @media (max-width:860px) {
     .inspect { grid-template-columns:1fr; }
-    .row, .axis { grid-template-columns:92px minmax(0,1fr) 66px; gap:10px; }
+    .row, .axis { grid-template-columns:110px minmax(0,1fr) 66px; gap:10px; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
 """
+
+
+def _esc(text):
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _slice_cards(payload):
@@ -339,7 +403,7 @@ def _slice_cards(payload):
     return "".join(cards)
 
 
-def _crop_cells(payload, default_k):
+def _crop_cells(payload, default_run):
     cells = [f"""
       <figure class="card">
         <div class="frame"><img src="{s['crop']}" alt="Detail crop, slice {s['index'] + 1}"></div>
@@ -348,9 +412,9 @@ def _crop_cells(payload, default_k):
 
     cells.append(f"""
       <figure class="card truth">
-        <div class="frame"><img src="{default_k['crop']}" alt="Detail crop, fused"></div>
+        <div class="frame"><img src="{default_run['crop']}" alt="Detail crop, fused"></div>
         <figcaption class="cap"><span class="name">Fused</span>
-        <span class="val">k = {default_k['kernel']}</span></figcaption>
+        <span class="val">{_esc(default_run['label'])}</span></figcaption>
       </figure>""")
 
     if payload["reference"]:
@@ -362,46 +426,56 @@ def _crop_cells(payload, default_k):
     return "".join(cells)
 
 
-def _chart(payload, default_k):
+def _axis_max(payload):
+    if not payload["has_reference"]:
+        return 1.0
+    return max(42.0, max(r["psnr"] for r in payload["runs"]) * 1.05)
+
+
+def _chart(payload, default_run):
     """
     With a ground truth, chart reconstruction accuracy per slice against the
-    fused result. Without one, chart Q_ABF across the kernel sweep instead.
+    fused result. Without one, chart Q_ABF across the runs instead.
     """
     if payload["has_reference"]:
-        axis_max = 42.0
+        top = _axis_max(payload)
         rows = [f"""
         <div class="row">
           <span class="lbl">Slice {s['index'] + 1}</span>
-          <div class="track"><div class="fill" style="width:{s['psnr'] / axis_max * 100:.1f}%"></div></div>
+          <div class="track"><div class="fill" style="width:{s['psnr'] / top * 100:.1f}%"></div></div>
           <span class="num">{s['psnr']:.2f}</span>
         </div>""" for s in payload["slices"]]
         rows.append(f"""
         <div class="row hero">
-          <span class="lbl">Fused (k={default_k['kernel']})</span>
-          <div class="track"><div class="fill" style="width:{default_k['psnr'] / axis_max * 100:.1f}%"></div></div>
-          <span class="num">{default_k['psnr']:.2f}</span>
+          <span class="lbl">{_esc(default_run['label'])}</span>
+          <div class="track"><div class="fill" style="width:{default_run['psnr'] / top * 100:.1f}%"></div></div>
+          <span class="num">{default_run['psnr']:.2f}</span>
         </div>""")
-        ticks = "".join(f"<span>{v}</span>" for v in [0, 10, 20, 30, "40 dB"])
-        title = ("Reconstruction accuracy against the ground truth, in decibels. The test "
-                 "requires only that fusion beat every slice by 1&nbsp;dB.")
+        ticks = "".join(f"<span>{v}</span>" for v in
+                        [0, round(top / 4), round(top / 2), round(top * 3 / 4),
+                         f"{round(top)} dB"])
+        heading = "Fused against the individual slices"
+        title = ("Reconstruction accuracy versus the ground truth, in decibels. The test "
+                 "requires only that fusion beat every slice by 3&nbsp;dB.")
     else:
-        best = max(k["qabf"] for k in payload["kernels"])
+        best = max(r["qabf"] for r in payload["runs"])
         rows = []
-        for k in payload["kernels"]:
-            hero = " hero" if k["qabf"] == best else ""
+        for r in payload["runs"]:
+            hero = " hero" if r["qabf"] == best else ""
             rows.append(f"""
         <div class="row{hero}">
-          <span class="lbl">Kernel {k['kernel']}</span>
-          <div class="track"><div class="fill" style="width:{k['qabf'] * 100:.1f}%"></div></div>
-          <span class="num">{k['qabf']:.4f}</span>
+          <span class="lbl">{_esc(r['label'])}</span>
+          <div class="track"><div class="fill" style="width:{r['qabf'] * 100:.1f}%"></div></div>
+          <span class="num">{r['qabf']:.4f}</span>
         </div>""")
         ticks = "".join(f"<span>{v}</span>" for v in ["0", "0.25", "0.50", "0.75", "1.0"])
-        title = ("Edge information retained from the source stack, per kernel. No ground "
-                 "truth exists for a real stack, so Q<sup>AB/F</sup> is the deciding metric.")
+        heading = "Which run retains the most detail"
+        title = ("Edge information retained from the source stack. No ground truth exists "
+                 "for a real stack, so Q<sup>AB/F</sup> is the deciding metric.")
 
     return f"""
     <div class="head">
-      <h2>{'Why the assertions pass by such a margin' if payload['has_reference'] else 'Which kernel retains the most detail'}</h2>
+      <h2>{heading}</h2>
       <p class="lede">{title}</p>
     </div>
     <div class="panel">
@@ -419,38 +493,45 @@ def _table(payload):
     keys += [("spatial_frequency", "Spatial freq.", "{:.2f}"),
              ("entropy", "Entropy", "{:.3f}")]
 
-    bests = {key: max(k[key] for k in payload["kernels"]) for key, _, _ in keys}
+    bests = {key: max(r[key] for r in payload["runs"]) for key, _, _ in keys}
 
     rows = []
-    for k in payload["kernels"]:
+    for r in payload["runs"]:
         cells = "".join(
-            "<td{}>{}</td>".format(' class="best"' if k[key] == bests[key] else "",
-                                   fmt.format(k[key]))
+            "<td{}>{}</td>".format(' class="best"' if r[key] == bests[key] else "",
+                                   fmt.format(r[key]))
             for key, _, fmt in keys)
-        rows.append(f"<tr><td>{k['kernel']}</td>{cells}<td>{k['seconds']:.2f}s</td></tr>")
+        rows.append(f"<tr><td>{_esc(r['label'])}</td>{cells}<td>{r['seconds']:.2f}s</td></tr>")
 
     headers = "".join(f"<th>{label}</th>" for _, label, _ in keys)
-    caveat = ("Quality climbs monotonically with kernel size on the synthetic stack, because "
-              "its focus regions are large horizontal bands that a wide kernel never straddles. "
-              "On a real stack the curve turns over - point this script at one to tune the slider."
-              if payload["has_reference"] else
-              "The best kernel here is the one to set on the slider in OpenFocus.")
+
+    if payload["compare"]:
+        caveat = ("Times are not comparable across rows: the neural methods include model "
+                  "load on first use, and the GPU variants pay a transfer cost a small "
+                  "test image never amortises.")
+    elif payload["has_reference"]:
+        caveat = ("On a synthetic stack the focus regions are large horizontal bands, "
+                  "which flatters wide kernels. Point this script at a real stack to tune "
+                  "the setting for your own images.")
+    else:
+        caveat = "The best-scoring run here is the setting to use in OpenFocus."
 
     return f"""
     <div class="panel">
       <div class="scroller">
         <table>
           <caption class="note">{caveat}</caption>
-          <thead><tr><th>Kernel</th>{headers}<th>Time</th></tr></thead>
+          <thead><tr><th>{_esc(payload['param_label'])}</th>{headers}<th>Time</th></tr></thead>
           <tbody>{''.join(rows)}</tbody>
         </table>
       </div>
     </div>"""
 
 
-def render_html(payload, source_label):
-    default_k = next((k for k in payload["kernels"] if k["kernel"] == 31),
-                     payload["kernels"][0])
+def render_html(payload, source_label, title):
+    runs = payload["runs"]
+    # Mid-sweep is the representative setting; in compare mode lead with the first method
+    default_run = runs[0] if payload["compare"] else runs[len(runs) // 2]
     has_ref = payload["has_reference"]
 
     view_buttons = '<button type="button" data-view="fused" aria-pressed="true">Fused</button>'
@@ -464,7 +545,8 @@ def render_html(payload, source_label):
         truth_layer = (
             f'<img id="layer-truth" data-hidden="true" alt="Ground truth" '
             f'src="{payload["reference"]["img"]}">'
-            f'<img id="layer-diff" data-hidden="true" alt="Error against ground truth" src="">')
+            f'<img id="layer-diff" data-hidden="true" alt="Error against ground truth" '
+            f'src="{default_run.get("diff", "")}">')
 
     ref_metrics = ""
     if has_ref:
@@ -472,17 +554,18 @@ def render_html(payload, source_label):
           <div class="metric"><span class="k">PSNR</span><span class="v" id="m-psnr">&mdash;</span></div>
           <div class="metric"><span class="k">SSIM</span><span class="v" id="m-ssim">&mdash;</span></div>"""
 
-    kernel_buttons = "".join(
-        f'<button type="button" data-kernel="{k["kernel"]}" '
-        f'aria-pressed="{"true" if k is default_k else "false"}">{k["kernel"]}</button>'
-        for k in payload["kernels"])
+    run_buttons = "".join(
+        f'<button type="button" data-run="{_esc(r["id"])}" '
+        f'aria-pressed="{"true" if r is default_run else "false"}">{_esc(r["label"])}</button>'
+        for r in runs)
 
     # The script only drives the inspector; other images are inline in the markup
     script_data = json.dumps({
-        "kernels": [{key: k[key] for key in
-                     ("kernel", "img", "diff", "seconds", "qabf", "psnr", "ssim",
-                      "spatial_frequency") if key in k}
-                    for k in payload["kernels"]],
+        "runs": [{key: r[key] for key in
+                  ("id", "label", "img", "diff", "seconds", "qabf", "psnr",
+                   "ssim", "spatial_frequency") if key in r}
+                 for r in runs],
+        "defaultId": default_run["id"],
         "hasReference": has_ref,
     })
 
@@ -494,25 +577,26 @@ def render_html(payload, source_label):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Guided Filter Quality Report</title>
+<title>{_esc(title)}</title>
 <style>{CSS}</style>
 </head>
 <body>
 <div class="wrap">
 
   <header>
-    <div class="eyebrow">OpenFocus &middot; fusion_methods/gff.py</div>
-    <h1>Guided Filter fusion quality</h1>
+    <div class="eyebrow">OpenFocus &middot; fusion quality</div>
+    <h1>{_esc(title)}</h1>
     <p class="deck">
-      Every image below is a real fusion result, not an illustration. The stack was fused once
-      per kernel size and measured against {'its known all-in-focus ground truth'
+      Every image below is a real fusion result, not an illustration. This report covers
+      {_esc(payload['subtitle'])}, measured against {'its known all-in-focus ground truth'
       if has_ref else 'the source slices themselves'}.
     </p>
     <div class="chips">
-      <span class="chip">{source_label}</span>
+      <span class="chip">{_esc(source_label)}</span>
       <span class="chip"><b>{len(payload['slices'])}</b> slices</span>
       <span class="chip"><b>{payload['width']}&times;{payload['height']}</b> px</span>
-      <span class="chip">kernels <b>{', '.join(str(k['kernel']) for k in payload['kernels'])}</b></span>
+      <span class="chip">{_esc(payload['param_label'])}
+        <b>{_esc(', '.join(r['label'] for r in runs))}</b></span>
     </div>
   </header>
 
@@ -526,17 +610,16 @@ def render_html(payload, source_label):
 
   <section>
     <div class="head">
-      <h2>The fused result, kernel by kernel</h2>
+      <h2>The fused result</h2>
       <p class="lede">
-        The kernel slider sets the mean-filter size that splits each slice into base and detail
-        layers.{' Switch views to compare against the ground truth, or read the error map - brighter means further from truth.' if has_ref else ''}
+        Switch between runs to compare them at full size.{' Use the view toggle to check against the ground truth, or read the error map - brighter means further from truth.' if has_ref else ''}
       </p>
     </div>
 
     <div class="controls">
       <div class="ctl">
-        <span id="kernel-label">Kernel size</span>
-        <div class="seg" role="group" aria-labelledby="kernel-label" id="kernel-seg">{kernel_buttons}</div>
+        <span id="run-label">{_esc(payload['param_label'])}</span>
+        <div class="seg" role="group" aria-labelledby="run-label" id="run-seg">{run_buttons}</div>
       </div>
       <div class="ctl">
         <span id="view-label">View</span>
@@ -547,7 +630,7 @@ def render_html(payload, source_label):
     <div class="inspect">
       <div class="stage">
         <div class="layers">
-          <img id="layer-fused" alt="Fused output" src="">{truth_layer}
+          <img id="layer-fused" alt="Fused output" src="{default_run['img']}">{truth_layer}
         </div>
         <div class="stamp" id="stamp">Fused</div>
       </div>
@@ -572,21 +655,22 @@ def render_html(payload, source_label):
         taken at the same coordinates in every frame.
       </p>
     </div>
-    <div class="grid strip" style="grid-template-columns:repeat({crop_cols},1fr)">{_crop_cells(payload, default_k)}</div>
+    <div class="grid strip" style="grid-template-columns:repeat({crop_cols},1fr)">{_crop_cells(payload, default_run)}</div>
   </section>
 
-  <section>{_chart(payload, default_k)}{_table(payload)}</section>
+  <section>{_chart(payload, default_run)}{_table(payload)}</section>
 
   <footer>
-    Generated by tests/visualize_gff_quality.py &middot; OpenCV {cv2.__version__} &middot; Python {sys.version.split()[0]}
+    Generated by tests/visualize_fusion_quality.py &middot; OpenCV {cv2.__version__} &middot; Python {sys.version.split()[0]}
   </footer>
 
 </div>
 
 <script>
 const DATA = {script_data};
-const byKernel = Object.fromEntries(DATA.kernels.map(k => [k.kernel, k]));
-let current = byKernel[31] ? 31 : DATA.kernels[0].kernel;
+const AXIS_MAX = {_axis_max(payload):.2f};
+const byId = Object.fromEntries(DATA.runs.map(r => [r.id, r]));
+let current = DATA.defaultId;
 let view = "fused";
 
 const layers = {{}};
@@ -603,41 +687,41 @@ function set(id, text) {{
 }}
 
 function render() {{
-  const k = byKernel[current];
-  layers.fused.src = k.img;
-  if (layers.diff) layers.diff.src = k.diff;
+  const r = byId[current];
+  layers.fused.src = r.img;
+  if (layers.diff && r.diff) layers.diff.src = r.diff;
 
   for (const [name, el] of Object.entries(layers)) {{
     el.dataset.hidden = name === view ? "false" : "true";
   }}
   stamp.textContent = view === "truth"
     ? "Ground truth"
-    : viewNames[view] + " \\u00b7 kernel " + current;
+    : viewNames[view] + " \\u00b7 " + r.label;
 
-  set("m-qabf", k.qabf.toFixed(4));
-  set("m-sf", k.spatial_frequency.toFixed(2));
-  set("m-time", k.seconds.toFixed(2) + "<small>s</small>");
+  set("m-qabf", r.qabf.toFixed(4));
+  set("m-sf", r.spatial_frequency.toFixed(2));
+  set("m-time", r.seconds.toFixed(2) + "<small>s</small>");
   if (DATA.hasReference) {{
-    set("m-psnr", k.psnr.toFixed(2) + "<small>dB</small>");
-    set("m-ssim", k.ssim.toFixed(4));
+    set("m-psnr", r.psnr.toFixed(2) + "<small>dB</small>");
+    set("m-ssim", r.ssim.toFixed(4));
   }}
 
-  document.querySelectorAll("#kernel-seg button").forEach(b =>
-    b.setAttribute("aria-pressed", String(Number(b.dataset.kernel) === current)));
+  document.querySelectorAll("#run-seg button").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.run === current)));
   document.querySelectorAll("#view-seg button").forEach(b =>
     b.setAttribute("aria-pressed", String(b.dataset.view === view)));
 
   const hero = document.querySelector(".row.hero");
   if (hero && DATA.hasReference) {{
-    hero.querySelector(".fill").style.width = (k.psnr / 42 * 100).toFixed(1) + "%";
-    hero.querySelector(".num").textContent = k.psnr.toFixed(2);
-    hero.querySelector(".lbl").textContent = "Fused (k=" + current + ")";
+    hero.querySelector(".fill").style.width = (r.psnr / AXIS_MAX * 100).toFixed(1) + "%";
+    hero.querySelector(".num").textContent = r.psnr.toFixed(2);
+    hero.querySelector(".lbl").textContent = r.label;
   }}
 }}
 
-document.getElementById("kernel-seg").addEventListener("click", e => {{
+document.getElementById("run-seg").addEventListener("click", e => {{
   const btn = e.target.closest("button");
-  if (btn) {{ current = Number(btn.dataset.kernel); render(); }}
+  if (btn) {{ current = btn.dataset.run; render(); }}
 }});
 document.getElementById("view-seg").addEventListener("click", e => {{
   const btn = e.target.closest("button");
@@ -654,6 +738,14 @@ render();
 # CLI
 # ---------------------------------------------------------------------------
 
+def _list_methods():
+    print(f"{'key':<20}{'status':<9}{'sweep':<28}reason")
+    for m in reg.METHODS:
+        ok, why = m.available()
+        sweep = f"{m.sweep[0]}={m.sweep[1]}" if m.sweep else "-"
+        print(f"{m.key:<20}{'ready' if ok else 'skip':<9}{sweep:<28}{'' if ok else why}")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -661,38 +753,53 @@ def main():
                     help="Directory of focus-stack images (omit with --synthetic)")
     ap.add_argument("--synthetic", action="store_true",
                     help="Generate a stack with a known all-in-focus reference")
+    ap.add_argument("--method", default="guided_filter",
+                    help="Fusion method key; see --list")
+    ap.add_argument("--compare", action="store_true",
+                    help="Compare every available method instead of sweeping one")
+    ap.add_argument("--list", action="store_true", dest="list_methods",
+                    help="List registered methods and their availability, then exit")
     ap.add_argument("--slices", type=int, default=3, help="Slices for --synthetic")
     ap.add_argument("--size", type=int, default=384, help="Edge length for --synthetic")
-    ap.add_argument("--kernels", default=",".join(map(str, DEFAULT_KERNELS)),
-                    help="Comma-separated kernel sizes to sweep")
-    ap.add_argument("--threads", type=int, default=None, help="Threads for gff_impl")
-    ap.add_argument("--out", default="gff_quality_report.html", help="Output HTML path")
+    ap.add_argument("--style", default="photographic", choices=("photographic", "texture"),
+                    help="Synthetic reference style (default: photographic)")
+    ap.add_argument("--values", default=None,
+                    help="Comma-separated override for the swept parameter")
+    ap.add_argument("--out", default=None, help="Output HTML path")
     ap.add_argument("--open", action="store_true", dest="open_browser",
                     help="Open the report in the default browser when done")
     args = ap.parse_args()
 
+    if args.list_methods:
+        _list_methods()
+        return
+
     if not args.synthetic and not args.stack:
         ap.error("provide a stack directory or pass --synthetic")
 
-    kernels = [int(k) for k in args.kernels.split(",") if k.strip()]
+    values = [int(v) for v in args.values.split(",") if v.strip()] if args.values else None
 
     if args.synthetic:
-        stack, reference, _ = make_stack(num_slices=args.slices,
-                                         height=args.size, width=args.size, seed=7)
-        label = "synthetic stack"
+        stack, reference, _ = make_stack(num_slices=args.slices, height=args.size,
+                                         width=args.size, seed=7, style=args.style)
+        source_label = f"synthetic stack ({args.style})"
     else:
         stack = load_stack(args.stack)
         reference = None
-        label = os.path.basename(os.path.abspath(args.stack))
+        source_label = os.path.basename(os.path.abspath(args.stack))
 
-    print(f"Fusing {len(stack)} slices at {stack[0].shape[1]}x{stack[0].shape[0]} "
-          f"across {len(kernels)} kernels...")
-    payload = build_payload(stack, reference, kernels, threads=args.threads)
+    title = ("Fusion methods compared" if args.compare
+             else f"{reg.get(args.method).label} fusion quality")
 
-    html = render_html(payload, label)
-    out = os.path.abspath(args.out)
+    print(f"Fusing {len(stack)} slices at {stack[0].shape[1]}x{stack[0].shape[0]}...")
+    payload = build_payload(stack, reference, args.method, args.compare, values)
+
+    out = args.out or ("fusion_comparison_report.html" if args.compare
+                       else f"{args.method}_quality_report.html")
+    out = os.path.abspath(out)
+
     with open(out, "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(render_html(payload, source_label, title))
 
     print(f"\nWrote {out} ({os.path.getsize(out) / 1024:.0f} KB)")
     if args.open_browser:
