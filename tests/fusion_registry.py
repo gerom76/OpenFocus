@@ -1,0 +1,264 @@
+"""
+One calling convention for every fusion method in the project.
+
+Each implementation has its own signature - some take a kernel size, some a
+decomposition level, some a model path, and DCT refuses img_resize entirely.
+This module wraps them all behind ``fuse(stack, **params)`` so the shared test
+contract and the report tools can iterate over methods without special-casing
+each one.
+
+Availability is resolved lazily: a method whose optional dependency or weights
+file is missing reports ``available() -> (False, reason)`` and its tests skip
+with that reason rather than failing.
+"""
+
+import importlib.util
+import os
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+WEIGHTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "weights")
+
+
+def _have(module):
+    return importlib.util.find_spec(module) is not None
+
+
+def _have_torch_device():
+    """True when torch is installed and exposes a CUDA or MPS device."""
+    if not _have("torch"):
+        return False
+    import torch
+    if torch.cuda.is_available():
+        return True
+    backend = getattr(torch.backends, "mps", None)
+    return bool(backend and backend.is_available())
+
+
+@dataclass
+class FusionMethod:
+    """A fusion implementation reduced to a uniform interface."""
+
+    key: str
+    label: str
+    fuse: Callable            # fuse(stack, **params) -> uint8 BGR image
+    check: Callable           # () -> Optional[str]; a string means "unavailable because"
+    params: dict = field(default_factory=dict)   # defaults for a normal run
+    sweep: Optional[tuple] = None                # (param_name, [values]) for the tuning sweep
+    gpu: bool = False
+    supports_resize: bool = True
+    supports_folder: bool = True                 # accepts a directory path as input
+    # Smallest edge the method can process. The neural models pool the input
+    # several times over, so a small enough image collapses to a zero-sized
+    # feature map deep in the network.
+    min_dimension: Optional[int] = None
+    deterministic: bool = True                   # bitwise-stable across repeat runs
+    # Reconstruction floor on the shared photographic fixture, in dB. Set well
+    # below the measured value so the test guards against regression, not noise.
+    min_psnr: float = 30.0
+
+    def available(self):
+        reason = self.check()
+        return (reason is None), reason
+
+    def run(self, stack, **overrides):
+        params = dict(self.params)
+        params.update(overrides)
+        return self.fuse(stack, **params)
+
+
+# ---------------------------------------------------------------------------
+# Adapters - each normalises one implementation's signature
+# ---------------------------------------------------------------------------
+
+def _gff(stack, kernel_size=31, img_resize=None, thread_count=None):
+    from fusion_methods.gff import gff_impl
+    return gff_impl(stack, img_resize, kernel_size=kernel_size, thread_count=thread_count)
+
+
+def _gff_torch(stack, kernel_size=31, img_resize=None, device=None):
+    from fusion_methods.gff_torch import gff_torch_impl
+    return gff_torch_impl(stack, img_resize, kernel_size=kernel_size, device=device)
+
+
+def _gfgfgf(stack, kernel_size=7, img_resize=None, thread_count=None):
+    from fusion_methods.gfg_fgf import gfgfgf_impl
+    return gfgfgf_impl(stack, img_resize, kernel_size=kernel_size, thread_count=thread_count)
+
+
+def _gfgfgf_torch(stack, kernel_size=7, img_resize=None, device=None):
+    from fusion_methods.gfg_fgf_torch import gfgfgf_torch_impl
+    return gfgfgf_torch_impl(stack, img_resize, kernel_size=kernel_size, device=device)
+
+
+def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
+    from fusion_methods.dct import dct_focus_stack_fusion
+    if img_resize is not None:
+        raise ValueError("DCT fusion does not support dynamic resizing")
+    return dct_focus_stack_fusion(stack, output_path=None,
+                                  block_size=block_size, kernel_size=kernel_size)
+
+
+def _dct_torch(stack, block_size=8, kernel_size=7, img_resize=None):
+    from fusion_methods.dct_torch import dct_torch_impl
+    if img_resize is not None:
+        raise ValueError("DCT fusion does not support dynamic resizing")
+    return dct_torch_impl(stack, block_size=block_size, kernel_size=kernel_size)
+
+
+def _dtcwt(stack, N=4, img_resize=None):
+    from fusion_methods.dtcwt import _dtcwt_impl
+    return _dtcwt_impl(stack, img_resize, N, False)
+
+
+def _dtcwt_torch(stack, N=4, img_resize=None, device=None):
+    from fusion_methods.dtcwt_torch import dtcwt_torch_impl
+    return dtcwt_torch_impl(stack, img_resize, N=N, device=device)
+
+
+def _stackmffv4(stack, img_resize=None, use_gpu=None):
+    from fusion_methods.stackmffv4 import _stackmffv4_impl
+    if use_gpu is None:
+        use_gpu = _have_torch_device()
+    return _stackmffv4_impl(stack, img_resize, os.path.join(WEIGHTS_DIR, "stackmffv4.pth"), use_gpu)
+
+
+def _gff_then_ifcnn(stack, kernel_size=31, img_resize=None, use_gpu=None):
+    """IFCNN is a refinement stage, so it needs a fusion result to refine."""
+    from fusion_methods.ifcnn import _ifcnn_refine_impl
+    if use_gpu is None:
+        use_gpu = _have_torch_device()
+    fused = _gff(stack, kernel_size=kernel_size, img_resize=img_resize)
+    return _ifcnn_refine_impl(fused, stack, os.path.join(WEIGHTS_DIR, "ifcnn.pth"), use_gpu)
+
+
+# ---------------------------------------------------------------------------
+# Availability checks
+# ---------------------------------------------------------------------------
+
+def _needs(*modules):
+    def check():
+        missing = [m for m in modules if not _have(m)]
+        return f"requires {', '.join(missing)}" if missing else None
+    return check
+
+
+def _needs_gpu(*modules):
+    def check():
+        missing = [m for m in modules if not _have(m)]
+        if missing:
+            return f"requires {', '.join(missing)}"
+        if not _have_torch_device():
+            return "requires a CUDA or MPS device"
+        return None
+    return check
+
+
+def _needs_weights(filename, *modules):
+    def check():
+        missing = [m for m in modules if not _have(m)]
+        if missing:
+            return f"requires {', '.join(missing)}"
+        path = os.path.join(WEIGHTS_DIR, filename)
+        return None if os.path.isfile(path) else f"requires weights/{filename}"
+    return check
+
+
+# ---------------------------------------------------------------------------
+# The registry
+# ---------------------------------------------------------------------------
+
+METHODS = [
+    FusionMethod(
+        key="guided_filter", label="Guided Filter", fuse=_gff,
+        check=_needs("cv2"), params={"kernel_size": 31},
+        sweep=("kernel_size", [7, 15, 31, 63]),
+        # Weights accumulate in thread-completion order, so repeat runs can
+        # differ by one level; see test_gff_quality.py
+        deterministic=False,
+        min_psnr=33.0,      # measured 39.5
+    ),
+    FusionMethod(
+        key="gfgfgf", label="GFG-FGF", fuse=_gfgfgf,
+        check=_needs("cv2"), params={"kernel_size": 7},
+        sweep=("kernel_size", [3, 7, 15, 31]),
+        deterministic=False,
+        min_psnr=32.0,      # measured 38.2
+    ),
+    FusionMethod(
+        key="dct", label="DCT", fuse=_dct,
+        check=_needs("cv2"), params={"block_size": 8, "kernel_size": 7},
+        sweep=("block_size", [4, 8, 16, 32]),
+        supports_resize=False,
+        min_psnr=27.0,      # measured 32.3; block-variance is the weakest focus measure here
+    ),
+    FusionMethod(
+        key="dtcwt", label="DTCWT", fuse=_dtcwt,
+        check=_needs("dtcwt", "scipy"), params={"N": 4},
+        sweep=("N", [2, 3, 4, 5]),
+        min_psnr=34.0,      # measured 40.8
+    ),
+    FusionMethod(
+        key="stackmffv4", label="StackMFF-V4", fuse=_stackmffv4,
+        check=_needs_weights("stackmffv4.pth", "torch"),
+        min_psnr=36.0,      # measured 43.2
+        # Measured: 112 px works, 96 px raises from torch.max_pool2d
+        min_dimension=112,
+    ),
+    FusionMethod(
+        key="gff_ifcnn", label="Guided Filter + IFCNN Refine", fuse=_gff_then_ifcnn,
+        check=_needs_weights("ifcnn.pth", "torch"), params={"kernel_size": 31},
+        deterministic=False,
+        # IFCNN re-encodes an already near-perfect fusion, so on synthetic
+        # stacks it scores below the plain guided filter it refines (30.2 vs
+        # 39.5). It targets detail the fusion stage missed on real stacks.
+        supports_folder=False,
+        min_psnr=25.0,      # measured 30.2
+    ),
+    FusionMethod(
+        key="guided_filter_gpu", label="Guided Filter (GPU)", fuse=_gff_torch,
+        check=_needs_gpu("torch"), params={"kernel_size": 31}, gpu=True,
+        min_psnr=33.0,      # measured 39.5
+    ),
+    FusionMethod(
+        key="gfgfgf_gpu", label="GFG-FGF (GPU)", fuse=_gfgfgf_torch,
+        check=_needs_gpu("torch"), params={"kernel_size": 7}, gpu=True,
+        min_psnr=32.0,      # measured 41.0
+    ),
+    FusionMethod(
+        key="dct_gpu", label="DCT (GPU)", fuse=_dct_torch,
+        check=_needs_gpu("torch"), params={"block_size": 8, "kernel_size": 7},
+        gpu=True, supports_resize=False,
+        min_psnr=27.0,      # measured 32.8
+    ),
+    FusionMethod(
+        key="dtcwt_gpu", label="DTCWT (GPU)", fuse=_dtcwt_torch,
+        check=_needs_gpu("torch", "pytorch_wavelets", "pywt"), params={"N": 4},
+        gpu=True,
+        min_psnr=34.0,
+    ),
+]
+
+BY_KEY = {m.key: m for m in METHODS}
+
+
+def get(key):
+    if key not in BY_KEY:
+        raise KeyError(f"Unknown fusion method {key!r}. "
+                       f"Known: {', '.join(BY_KEY)}")
+    return BY_KEY[key]
+
+
+def available_methods(include_gpu=True):
+    """Every method whose dependencies are satisfied on this machine."""
+    return [m for m in METHODS
+            if (include_gpu or not m.gpu) and m.available()[0]]
+
+
+# CPU/GPU pairs that implement the same algorithm and must agree
+PARITY_PAIRS = [
+    ("guided_filter", "guided_filter_gpu"),
+    ("gfgfgf", "gfgfgf_gpu"),
+    ("dct", "dct_gpu"),
+    ("dtcwt", "dtcwt_gpu"),
+]
