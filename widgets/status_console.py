@@ -3,6 +3,7 @@ Status console: a bottom docked area that mirrors the terminal output
 (stdout / stderr) produced by the loading, registration and fusion pipelines.
 """
 
+import re
 import sys
 
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
@@ -12,6 +13,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QPlainTextEdit,
 )
@@ -21,6 +23,11 @@ from utils import get_monospace_font_family
 
 # Keep the console bounded so long batch runs cannot grow memory without limit.
 MAX_CONSOLE_LINES = 2000
+
+# Pipeline stages print counters such as "[12/90] Loaded ..." or
+# "Tiled fusion progress: 5/20 tiles". The lookarounds keep decimals
+# (e.g. "14.7/16.0 GB free") from being read as progress.
+PROGRESS_PATTERN = re.compile(r"(?<![\d.])(\d+)\s*/\s*(\d+)(?![\d.])")
 
 
 class StreamRedirector(QObject):
@@ -82,6 +89,17 @@ class StatusConsole(QWidget):
         self.title_label = QLabel(trans.t('console_title'))
         self.title_label.setStyleSheet("color: #aaa;")
         header_layout.addWidget(self.title_label)
+
+        # Progress bar sits right next to the title; hidden while idle.
+        self.progress = QProgressBar()
+        self.progress.setObjectName("consoleProgress")
+        self.progress.setFixedWidth(180)
+        self.progress.setFixedHeight(12)
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 0)  # indeterminate until a counter is seen
+        self.progress.hide()
+        header_layout.addWidget(self.progress)
+
         header_layout.addStretch()
 
         self.btn_clear = QPushButton(trans.t('console_clear'))
@@ -116,6 +134,7 @@ class StatusConsole(QWidget):
 
         self._collapsed = False
         self._pending = ""  # Incomplete line waiting for its newline
+        self._progress_active = False
 
         # --- Redirect stdout / stderr ---
         self._stdout_redirector = StreamRedirector(sys.stdout, is_error=False)
@@ -133,6 +152,9 @@ class StatusConsole(QWidget):
     # ------------------------------------------------------------------
     def append_text(self, text: str, is_error: bool = False):
         """Append raw stream text, honouring carriage returns and colouring errors."""
+        if self._progress_active and not is_error:
+            self._track_progress(text)
+
         self._pending += text
         if "\n" not in self._pending:
             return
@@ -164,6 +186,49 @@ class StatusConsole(QWidget):
     def clear(self):
         self._pending = ""
         self.output.clear()
+
+    # ------------------------------------------------------------------
+    # Progress bar
+    # ------------------------------------------------------------------
+    def start_progress(self):
+        """Show a busy bar; it becomes determinate as soon as the pipeline
+        prints an "i/N" counter."""
+        self._progress_active = True
+        self.progress.setRange(0, 0)
+        self.progress.show()
+
+    def stop_progress(self):
+        self._progress_active = False
+        self.progress.hide()
+        self.progress.setRange(0, 0)
+        self.progress.reset()
+
+    def set_progress(self, current: int, total: int):
+        """Drive the bar explicitly (used by callers that know their totals)."""
+        if total <= 0:
+            self.start_progress()
+            return
+        self._progress_active = True
+        if self.progress.maximum() != total:
+            self.progress.setRange(0, total)
+        self.progress.setValue(max(0, min(current, total)))
+        self.progress.show()
+
+    def _track_progress(self, text: str):
+        """Pick up "i/N" counters printed by the pipeline stages."""
+        match = None
+        for match in PROGRESS_PATTERN.finditer(text):
+            pass  # keep the last match in the chunk
+        if match is None:
+            return
+
+        current, total = int(match.group(1)), int(match.group(2))
+        if total <= 0 or current > total:
+            return
+
+        if self.progress.maximum() != total:
+            self.progress.setRange(0, total)
+        self.progress.setValue(current)
 
     # ------------------------------------------------------------------
     # Collapsing

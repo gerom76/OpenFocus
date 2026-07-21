@@ -635,6 +635,7 @@ class OpenFocus(QMainWindow):
             # Re-alignment needed: disable the button and show a processing state
             self.btn_preview_roi.setEnabled(False)
             self.btn_preview_roi.setText(trans.t("roi_aligning"))
+            self.status_console.start_progress()
             QApplication.processEvents()
             
             # Start the ECC registration thread
@@ -672,7 +673,8 @@ class OpenFocus(QMainWindow):
         # Restore the button state
         self.btn_preview_roi.setEnabled(True)
         self.btn_preview_roi.setText(trans.t("btn_roi"))
-        
+        self.status_console.stop_progress()
+
         # Show the first aligned image in the right-side result panel
         if aligned_images and len(aligned_images) > 0:
             self._display_roi_aligned_image(0)
@@ -705,7 +707,8 @@ class OpenFocus(QMainWindow):
         self.btn_preview_roi.blockSignals(True)
         self.btn_preview_roi.setChecked(False)
         self.btn_preview_roi.blockSignals(False)
-        
+        self.status_console.stop_progress()
+
         show_error_box(
             self,
             trans.t("msg_error"),

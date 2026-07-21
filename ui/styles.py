@@ -144,6 +144,37 @@ QLabel:disabled {{
 QWidget:disabled {{
     opacity: 0.5;
 }}
+
+/* Bottom status console */
+QWidget#consoleHeader {{
+    background-color: #2b2b2b;
+    border-top: 1px solid #444;
+}}
+QPushButton#consoleButton {{
+    background-color: transparent;
+    color: #aaa;
+    border: none;
+    padding: 2px 8px;
+}}
+QPushButton#consoleButton:hover {{
+    background-color: #3a3a3a;
+    color: #fff;
+}}
+QPlainTextEdit#consoleOutput {{
+    background-color: #141414;
+    color: #d0d0d0;
+    border: none;
+    selection-background-color: {PRIMARY_BLUE};
+}}
+QProgressBar#consoleProgress {{
+    background-color: #1e1e1e;
+    border: 1px solid #444;
+    border-radius: 3px;
+}}
+QProgressBar#consoleProgress::chunk {{
+    background-color: {PRIMARY_BLUE};
+    border-radius: 2px;
+}}
 """
 
 
@@ -402,28 +433,6 @@ QComboBox::down-arrow {{
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
     border-top: 5px solid #000;
-}}
-
-/* Bottom status console */
-QWidget#consoleHeader {{
-    background-color: #2b2b2b;
-    border-top: 1px solid #444;
-}}
-QPushButton#consoleButton {{
-    background-color: transparent;
-    color: #aaa;
-    border: none;
-    padding: 2px 8px;
-}}
-QPushButton#consoleButton:hover {{
-    background-color: #3a3a3a;
-    color: #fff;
-}}
-QPlainTextEdit#consoleOutput {{
-    background-color: #141414;
-    color: #d0d0d0;
-    border: none;
-    selection-background-color: {PRIMARY_BLUE};
 }}
 """
 

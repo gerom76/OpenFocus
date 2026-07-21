@@ -17,6 +17,16 @@ class RenderManager:
         self.window = window
         self.worker: Optional[RenderWorker] = None
 
+    def _set_console_progress(self, running: bool) -> None:
+        """Show/hide the progress bar in the bottom status console."""
+        console = getattr(self.window, "status_console", None)
+        if console is None:
+            return
+        if running:
+            console.start_progress()
+        else:
+            console.stop_progress()
+
     def start_render(self) -> None:
         window = self.window
 
@@ -26,6 +36,7 @@ class RenderManager:
 
         window.btn_render.setEnabled(False)
         window.btn_render.setText(trans.t('btn_render_processing'))
+        self._set_console_progress(True)
         QApplication.processEvents()
 
         # Disable UI controls that should not be modified during processing
@@ -77,6 +88,7 @@ class RenderManager:
             window.rb_d.setChecked(False)
             window.btn_render.setEnabled(True)
             window.btn_render.setText(trans.t('btn_render'))
+            self._set_console_progress(False)
             return
 
         # Handle ROI options - check if ROI mode is active and we have aligned images
@@ -99,6 +111,7 @@ class RenderManager:
                     # User cancelled the ROI dialog -> cancel render
                     window.btn_render.setEnabled(True)
                     window.btn_render.setText(trans.t('btn_render'))
+                    self._set_console_progress(False)
                     return
         
         # Determine the image source to use
@@ -307,6 +320,7 @@ class RenderManager:
 
             window.btn_render.setEnabled(True)
             window.btn_render.setText(trans.t('btn_render'))
+            self._set_console_progress(False)
             self.worker = None
 
     def on_render_error(self, error_message: str) -> None:
@@ -314,6 +328,7 @@ class RenderManager:
 
         window.btn_render.setEnabled(True)
         window.btn_render.setText(trans.t('btn_render'))
+        self._set_console_progress(False)
 
         show_message_box(
             window,
