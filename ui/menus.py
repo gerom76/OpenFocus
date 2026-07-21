@@ -27,6 +27,19 @@ def setup_menus(window: QMainWindow) -> None:
     file_menu.addAction(open_video_action)
     window.ui_objs['action_open_video'] = open_video_action
 
+    # Recently opened paths; contents are rebuilt by window.refresh_recent_menus()
+    recent_folders_menu = QMenu(trans.t('menu_recent_folders'), window)
+    file_menu.addMenu(recent_folders_menu)
+    window.ui_objs['menu_recent_folders'] = recent_folders_menu
+    window.menu_recent_folders = recent_folders_menu
+
+    recent_videos_menu = QMenu(trans.t('menu_recent_videos'), window)
+    file_menu.addMenu(recent_videos_menu)
+    window.ui_objs['menu_recent_videos'] = recent_videos_menu
+    window.menu_recent_videos = recent_videos_menu
+
+    window.refresh_recent_menus()
+
     save_action = QAction(trans.t('action_save'), window)
     save_action.setShortcut("Ctrl+S")
     save_action.triggered.connect(window.export_manager.save_result)

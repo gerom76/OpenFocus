@@ -8,6 +8,9 @@ from locales import trans
 
 CONFIG_FILENAME = "openfocus.cfg.json"
 
+# How many entries the File > Recent submenus keep.
+MAX_RECENT_PATHS = 10
+
 
 def _config_path() -> str:
     """Return the absolute path to the settings file next to the app/executable."""
@@ -24,6 +27,85 @@ class SettingsManager:
 
     def __init__(self, window: Any) -> None:
         self.window = window
+        self.recent_folders: list[str] = []
+        self.recent_videos: list[str] = []
+
+    # --- Recently opened paths ---
+
+    def add_recent_folder(self, path: str) -> None:
+        """Remember an image-stack folder that was opened successfully."""
+        self._add_recent(self.recent_folders, path)
+
+    def add_recent_video(self, path: str) -> None:
+        """Remember a video file that was opened successfully."""
+        self._add_recent(self.recent_videos, path)
+
+    def clear_recent_folders(self) -> None:
+        self.recent_folders.clear()
+        self._persist_recent()
+
+    def clear_recent_videos(self) -> None:
+        self.recent_videos.clear()
+        self._persist_recent()
+
+    def last_folder_dir(self) -> str:
+        """Directory the Open Folder dialog should start in."""
+        for path in self.recent_folders:
+            if os.path.isdir(path):
+                return path
+        return ""
+
+    def last_video_dir(self) -> str:
+        """Directory the Open Video dialog should start in."""
+        for path in self.recent_videos:
+            parent = os.path.dirname(path)
+            if os.path.isdir(parent):
+                return parent
+        return ""
+
+    def _add_recent(self, entries: list[str], path: str) -> None:
+        if not path:
+            return
+        path = os.path.normpath(path)
+
+        # Case-insensitive de-duplication so Windows paths do not pile up.
+        key = os.path.normcase(path)
+        entries[:] = [p for p in entries if os.path.normcase(p) != key]
+        entries.insert(0, path)
+        del entries[MAX_RECENT_PATHS:]
+
+        self._persist_recent()
+
+    def _persist_recent(self) -> None:
+        """Write only the recent lists back, leaving other saved settings alone.
+
+        Recent paths are recorded as soon as a stack loads, which must not
+        silently overwrite settings the user has not chosen to save.
+        """
+        path = _config_path()
+        data = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, dict):
+                    data = loaded
+            except Exception:
+                data = {}
+
+        data["recent_folders"] = list(self.recent_folders)
+        data["recent_videos"] = list(self.recent_videos)
+
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2, ensure_ascii=False)
+        except Exception:
+            # Failing to record history must never interrupt loading a stack.
+            pass
+
+        refresh = getattr(self.window, "refresh_recent_menus", None)
+        if callable(refresh):
+            refresh()
 
     # --- Serialization ---
 
@@ -60,6 +142,8 @@ class SettingsManager:
             "smooth_kernel": window.slider_smooth.value(),
             "show_status_console": getattr(window, "status_console", None) is not None
                                    and window.status_console.isVisible(),
+            "recent_folders": list(self.recent_folders),
+            "recent_videos": list(self.recent_videos),
         }
 
     # --- Save ---
@@ -130,6 +214,14 @@ class SettingsManager:
             if checkbox is not None:
                 checkbox.setChecked(False)
 
+    @staticmethod
+    def _sanitize_recent(value: Any) -> list[str]:
+        """Accept only a list of non-empty strings from the config file."""
+        if not isinstance(value, list):
+            return []
+        return [os.path.normpath(item) for item in value
+                if isinstance(item, str) and item][:MAX_RECENT_PATHS]
+
     def _apply_settings(self, data: dict) -> None:
         window = self.window
 
@@ -149,6 +241,13 @@ class SettingsManager:
         ):
             if attr in data:
                 setattr(window, attr, data[attr])
+
+        # Recently opened paths
+        self.recent_folders = self._sanitize_recent(data.get("recent_folders"))
+        self.recent_videos = self._sanitize_recent(data.get("recent_videos"))
+        refresh = getattr(window, "refresh_recent_menus", None)
+        if callable(refresh):
+            refresh()
 
         # Language
         lang = data.get("language")

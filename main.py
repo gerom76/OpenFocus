@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog,
 )
 from PyQt6.QtCore import Qt, QUrl, QEvent
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtGui import QFont, QIcon, QDragEnterEvent, QDropEvent, QImage, QPixmap
 from core import ImageStackLoader
 from core.app import OpenFocusApplication, process_command_line_args
@@ -562,6 +562,45 @@ class OpenFocus(QMainWindow):
     def open_video_dialog(self):
         """Open the video-file selection dialog"""
         self.source_manager.prompt_and_load_video()
+
+    def refresh_recent_menus(self) -> None:
+        """Rebuild the File > Recent Folders / Recent Videos submenus."""
+        menus = (
+            (getattr(self, 'menu_recent_folders', None),
+             self.settings_manager.recent_folders,
+             self.source_manager.load_image_stack,
+             self.settings_manager.clear_recent_folders),
+            (getattr(self, 'menu_recent_videos', None),
+             self.settings_manager.recent_videos,
+             self.source_manager.load_video_stack,
+             self.settings_manager.clear_recent_videos),
+        )
+
+        for menu, paths, loader, clear in menus:
+            if menu is None:
+                continue
+            menu.clear()
+
+            if not paths:
+                empty_action = QAction(trans.t('action_recent_empty'), self)
+                empty_action.setEnabled(False)
+                menu.addAction(empty_action)
+                continue
+
+            for path in paths:
+                action = QAction(path, self)
+                action.setToolTip(path)
+                # Entries that have since been moved or deleted stay visible but inert.
+                if os.path.exists(path):
+                    action.triggered.connect(lambda _checked=False, p=path, fn=loader: fn(p))
+                else:
+                    action.setEnabled(False)
+                menu.addAction(action)
+
+            menu.addSeparator()
+            clear_action = QAction(trans.t('action_recent_clear'), self)
+            clear_action.triggered.connect(lambda _checked=False, fn=clear: fn())
+            menu.addAction(clear_action)
     
     def show_environment_info(self):
         """Show the environment-info dialog"""
@@ -944,6 +983,9 @@ class OpenFocus(QMainWindow):
                 elif isinstance(obj, QAction):
                     obj.setText(text)
         
+        # Recent submenus carry translated placeholder / clear entries
+        self.refresh_recent_menus()
+
         # Update Right Panel
         c = self.right_panel_components
         c.method_group.setTitle(trans.t('group_fusion'))

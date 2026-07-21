@@ -58,6 +58,7 @@ class SourceManager:
                 return
             load_options = self._build_load_options(full_res_images, filenames, scale_factor)
             self._apply_load_options(load_options, append=append)
+            window.settings_manager.add_recent_folder(folder_path)
         except Exception as exc:  # pylint: disable=broad-except
             show_message_box(
                 window,
@@ -93,6 +94,7 @@ class SourceManager:
                 return
             load_options = self._build_load_options(full_res_images, filenames, scale_factor)
             self._apply_load_options(load_options, append=append)
+            window.settings_manager.add_recent_video(video_path)
         except Exception as exc:  # pylint: disable=broad-except
             show_message_box(
                 window,
@@ -108,7 +110,7 @@ class SourceManager:
         folder_path = QFileDialog.getExistingDirectory(
             window,
             "Select Image Stack Folder",
-            "",
+            window.settings_manager.last_folder_dir(),
             QFileDialog.Option.ShowDirsOnly,
         )
 
@@ -126,7 +128,7 @@ class SourceManager:
         video_path, _ = QFileDialog.getOpenFileName(
             window,
             "Select Video File",
-            "",
+            window.settings_manager.last_video_dir(),
             f"Video Files ({video_exts});;All Files (*)",
         )
 
