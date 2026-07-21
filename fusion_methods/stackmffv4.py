@@ -1,4 +1,4 @@
-# 条件导入，避免在不需要时产生错误
+# Conditional import, to avoid errors when it is not needed
 try:
     import torch
     import torch.nn.functional as F
@@ -12,17 +12,17 @@ import glob
 import numpy as np
 import cv2
 
-# ================= 全局缓存变量 =================
+# ================= Global cache variables =================
 _GLOBAL_MODEL = None
 _GLOBAL_DEVICE = None
 
-# 缓存可用的加速器类型（模块加载时检测一次）
+# Cache the available accelerator type (detected once at module load)
 _MPS_AVAILABLE = None
 _CUDA_AVAILABLE = None
 
 
 def _detect_accelerators():
-    """检测系统可用的加速器类型，模块加载时执行一次"""
+    """Detect the available accelerator type on the system, run once at module load"""
     global _MPS_AVAILABLE, _CUDA_AVAILABLE
     try:
         import torch
@@ -38,14 +38,14 @@ _detect_accelerators()
 
 def _get_model_and_device(model_path, use_gpu):
     """
-    获取或初始化全局模型和设备
+    Get or initialize the global model and device
     
     Args:
-        model_path: 模型权重文件路径
-        use_gpu: 是否使用GPU
+        model_path: path to the model weights file
+        use_gpu: whether to use the GPU
     
     Returns:
-        (model, device) 元组
+        (model, device) tuple
     """
     if torch is None or F is None:
         raise ImportError("PyTorch not installed")
@@ -84,7 +84,7 @@ def _get_model_and_device(model_path, use_gpu):
 
 
 def _resize_to_multiple_of_32(image):
-    """将图像大小调整为32的倍数"""
+    """Resize the image to a multiple of 32"""
     h, w = image.shape[-2:]
     new_h = ((h - 1) // 32 + 1) * 32
     new_w = ((w - 1) // 32 + 1) * 32
@@ -96,16 +96,16 @@ def _resize_to_multiple_of_32(image):
 
 def _stackmffv4_batch_impl(tiles_list, model_path, use_gpu):
     """
-    批量处理多个 tile 的 StackMFF-V4 融合
+    Batch StackMFF-V4 fusion over multiple tiles
     
     Args:
-        tiles_list: 列表，每个元素是一个 tile 的图像列表 [(img1, img2, ...), (img1, img2, ...), ...]
-                    每个图像是 BGR 格式的 numpy 数组
-        model_path: 模型权重文件路径
-        use_gpu: 是否使用GPU
+        tiles_list: list where each element is the image list of one tile [(img1, img2, ...), (img1, img2, ...), ...]
+                    each image is a BGR-format numpy array
+        model_path: path to the model weights file
+        use_gpu: whether to use the GPU
     
     Returns:
-        融合后的图像列表，每个元素是 BGR 格式的 uint8 numpy 数组
+        list of fused images, each a BGR-format uint8 numpy array
     """
     if torch is None or F is None:
         raise ImportError("PyTorch not installed")
@@ -117,9 +117,9 @@ def _stackmffv4_batch_impl(tiles_list, model_path, use_gpu):
     
     batch_size = len(tiles_list)
     
-    # 准备所有 tile 的数据
-    all_color_images = []  # [batch][num_images] 的 RGB 图像
-    all_gray_stacks = []   # [batch] 的 torch tensor stacks
+    # Prepare the data for all tiles
+    all_color_images = []  # RGB images of shape [batch][num_images]
+    all_gray_stacks = []   # torch tensor stacks of shape [batch]
     all_original_sizes = []
     num_images_per_tile = None
     
@@ -147,34 +147,34 @@ def _stackmffv4_batch_impl(tiles_list, model_path, use_gpu):
         all_original_sizes.append(image_stack.shape[-2:])
         all_gray_stacks.append(image_stack)
     
-    # 找出最大尺寸，并将所有 tile pad 到相同大小
+    # Find the maximum size and pad all tiles to the same size
     max_h = max(s[0] for s in all_original_sizes)
     max_w = max(s[1] for s in all_original_sizes)
     
-    # Pad 到32的倍数
+    # Pad to a multiple of 32
     padded_h = ((max_h - 1) // 32 + 1) * 32
     padded_w = ((max_w - 1) // 32 + 1) * 32
     
-    # 创建批量输入张量 [batch, num_images, padded_h, padded_w]
+    # Create the batched input tensor [batch, num_images, padded_h, padded_w]
     batch_input = torch.zeros(batch_size, num_images_per_tile, padded_h, padded_w)
     
     for i, (stack, (orig_h, orig_w)) in enumerate(zip(all_gray_stacks, all_original_sizes)):
         batch_input[i, :, :orig_h, :orig_w] = stack
     
-    # 执行批量推理
+    # Run batched inference
     with torch.no_grad():
         batch_input = batch_input.to(device)
         _, focus_indices_batch = model(batch_input)
         focus_indices_batch = focus_indices_batch.cpu().numpy()  # [batch, padded_h, padded_w]
         del batch_input
     
-    # 处理每个 tile 的输出
+    # Process the output of each tile
     results = []
     for tile_idx in range(batch_size):
         focus_indices = focus_indices_batch[tile_idx]
         orig_h, orig_w = all_original_sizes[tile_idx]
         
-        # 裁剪回原始大小
+        # Crop back to the original size
         focus_map = focus_indices[:orig_h, :orig_w]
         focus_map = np.clip(focus_map.astype(int), 0, num_images_per_tile - 1)
         
@@ -189,16 +189,16 @@ def _stackmffv4_batch_impl(tiles_list, model_path, use_gpu):
 
 def _stackmffv4_impl(input_source, img_resize, model_path, use_gpu):
     """
-    基于 StackMFF-V4 神经网络的图像融合算法
+    Image-fusion algorithm based on the StackMFF-V4 neural network
     
     Args:
-        input_source: 图像源(目录路径或图像列表)
-        img_resize: 目标尺寸 (width, height)
-        model_path: 模型权重文件路径
-        use_gpu: 是否使用GPU
+        input_source: image source (directory path or list of images)
+        img_resize: target size (width, height)
+        model_path: path to the model weights file
+        use_gpu: whether to use the GPU
     
     Returns:
-        融合后的图像 (BGR格式, uint8)
+        the fused image (BGR format, uint8)
     """
     if torch is None or F is None:
         raise ImportError("PyTorch not installed")

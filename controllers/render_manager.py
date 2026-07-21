@@ -28,7 +28,7 @@ class RenderManager:
         window.btn_render.setText(trans.t('btn_render_processing'))
         QApplication.processEvents()
 
-        # 禁用在处理过程中不应被修改的 UI 控件
+        # Disable UI controls that should not be modified during processing
         try:
             window.slider_smooth.setEnabled(False)
         except Exception:
@@ -85,9 +85,9 @@ class RenderManager:
         roi_base_index = 0
         use_roi_aligned_images = False
         
-        # 检查ROI模式是否激活，并从右侧面板获取ROI区域
+        # Check whether ROI mode is active and get the ROI region from the right panel
         if getattr(window, 'roi_mode_active', False) and window.roi_aligned_images:
-            # 从右侧结果面板获取ROI区域（因为ROI是在对齐后的图像上选择的）
+            # Get the ROI region from the right-side result panel (because the ROI is selected on the aligned image)
             roi_rect = window.lbl_result_img.get_roi_rect() if hasattr(window.lbl_result_img, 'get_roi_rect') else None
             if roi_rect is not None:
                 use_roi_aligned_images = True
@@ -101,17 +101,17 @@ class RenderManager:
                     window.btn_render.setText(trans.t('btn_render'))
                     return
         
-        # 确定要使用的图像源
+        # Determine the image source to use
         if use_roi_aligned_images:
-            # ROI模式下使用已经对齐的图像栈，跳过额外的配准
+            # In ROI mode, use the already-aligned image stack and skip the extra registration
             source_images = window.roi_aligned_images
-            # 在ROI模式下，图像已经对齐，不需要再次配准
+            # In ROI mode, the images are already aligned and do not need to be registered again
             effective_need_align_homography = False
             effective_need_align_ecc = False
-            # 告诉Worker图像已经对齐
+            # Tell the Worker that the images are already aligned
             effective_aligned_images = window.roi_aligned_images
             effective_is_aligned = True
-            effective_last_alignment_options = (False, True)  # 表示ECC已完成
+            effective_last_alignment_options = (False, True)  # indicates ECC is done
         else:
             source_images = window.raw_images
             effective_need_align_homography = need_align_homography
@@ -167,14 +167,14 @@ class RenderManager:
                 window.fusion_result = fusion_result
                 window.registration_results = processed_images
 
-                # 如果是ROI模式下的融合，退出ROI模式（但保留对齐图像供复用）
+                # If this is fusion in ROI mode, exit ROI mode (but keep the aligned images for reuse)
                 if getattr(window, 'roi_mode_active', False):
                     window.roi_mode_active = False
-                    # 不清空 roi_aligned_images，保留供下次复用
+                    # Do not clear roi_aligned_images, keep it for the next reuse
                     if hasattr(window, 'lbl_result_img'):
                         window.lbl_result_img.roi_mode = False
                         window.lbl_result_img.set_roi_rect(None)
-                    # 取消ROI按钮的选中状态
+                    # Deselect the ROI button
                     if hasattr(window, 'btn_preview_roi'):
                         window.btn_preview_roi.blockSignals(True)
                         window.btn_preview_roi.setChecked(False)
@@ -282,7 +282,7 @@ class RenderManager:
             traceback.print_exc()
 
         finally:
-            # 恢复 UI 控件
+            # Restore the UI controls
             try:
                 window.slider_smooth.setEnabled(True)
             except Exception:

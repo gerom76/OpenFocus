@@ -14,7 +14,7 @@ from constants import (
 
 
 class ROIAlignmentWorker(QThread):
-    """后台执行ROI模式下的ECC配准线程，用于在ROI选择前对齐图像栈"""
+    """Background thread that runs ECC registration in ROI mode, used to align the image stack before ROI selection"""
 
     finished_signal = pyqtSignal(object, float)  # aligned_images, alignment_time
     error_signal = pyqtSignal(str)
@@ -31,11 +31,11 @@ class ROIAlignmentWorker(QThread):
             self.thread_count = 4
 
     def run(self):
-        """在线程中执行ECC配准"""
+        """Run ECC registration in the thread"""
         try:
             alignment_start_time = time.time()
 
-            # 使用ECC方法进行配准
+            # Register using the ECC method
             if self.reg_downscale_width is not None:
                 registration = ImageRegistration(method="ecc", downscale_width=self.reg_downscale_width,
                                                  ecc_parallel=self.ecc_parallel)
@@ -53,7 +53,7 @@ class ROIAlignmentWorker(QThread):
 
 
 class RenderWorker(QThread):
-    """后台执行图像配准和融合的线程（从 main.py 抽离）"""
+    """Background thread that performs image registration and fusion (extracted from main.py)"""
 
     finished_signal = pyqtSignal(object, object, bool, float, float, str)
     error_signal = pyqtSignal(str)
@@ -94,11 +94,11 @@ class RenderWorker(QThread):
         self.roi_mode = roi_mode
         self.roi_base_index = roi_base_index
 
-        # 配准选项
+        # Registration options
         self.need_align_homography = need_align_homography
         self.need_align_ecc = need_align_ecc
 
-        # 融合选项
+        # Fusion options
         self.need_fusion = need_fusion
         self.rb_a_checked = rb_a_checked
         self.rb_b_checked = rb_b_checked
@@ -111,20 +111,20 @@ class RenderWorker(QThread):
         self.tile_block_size = tile_block_size
         self.tile_overlap = tile_overlap
         self.tile_threshold = tile_threshold
-        # StackMFF V4 批量处理大小
+        # StackMFF V4 batch size
         self.stackmffv4_batch_size = max(1, int(stackmffv4_batch_size)) if stackmffv4_batch_size else 2
         # Registration downscale width passed from UI (optional)
         self.reg_downscale_width = reg_downscale_width
         # Compute ECC pair matrices concurrently (identical results, faster)
         self.ecc_parallel = bool(ecc_parallel)
-        # 用户配置的线程数（用于控制内部 ThreadPool 大小）
+        # User-configured thread count (controls the internal ThreadPool size)
         try:
             self.thread_count = max(1, int(thread_count))
         except Exception:
             self.thread_count = 4
 
     def run(self):
-        """在线程中执行图像处理流程"""
+        """Run the image-processing pipeline in the thread"""
         try:
             alignment_time = 0
             fusion_time = 0
@@ -148,7 +148,7 @@ class RenderWorker(QThread):
                 and self.last_alignment_options == current_alignment_options
             )
 
-            # 1. 配准阶段
+            # 1. Registration stage
             if need_registration and can_reuse_aligned_images:
                 processed_images = self.aligned_images
                 registration_performed = True
@@ -163,21 +163,21 @@ class RenderWorker(QThread):
                     registration_performed = True
                     print(f"Registration completed in {alignment_time:.2f}s", flush=True)
 
-            # 2. ROI裁剪阶段
+            # 2. ROI cropping stage
             cropped_images, base_full_image, roi_rect_int = self._apply_roi_cropping(processed_images)
             if roi_rect_int is not None:
                 rx, ry, rw, rh = roi_rect_int
                 print(f"ROI crop: {rw}x{rh} at ({rx}, {ry}), mode={self.roi_mode}", flush=True)
 
-            # 3. 融合阶段
+            # 3. Fusion stage
             fusion_result = None
             if self.need_fusion:
                 fusion_start_time = time.time()
-                # 使用裁剪后的图像进行融合（如果ROI已启用）
+                # Fuse using the cropped images (if ROI is enabled)
                 fusion_images = cropped_images if cropped_images is not None else processed_images
                 fusion_result, device_name = self._run_fusion(fusion_images)
 
-                # ROI粘贴阶段
+                # ROI paste stage
                 if self.roi_mode == "paste" and base_full_image is not None and fusion_result is not None and roi_rect_int is not None:
                     fusion_result = self._apply_roi_pasting(fusion_result, base_full_image, roi_rect_int)
 
@@ -200,7 +200,7 @@ class RenderWorker(QThread):
             traceback.print_exc()
 
     def _run_registration(self, images):
-        """执行图像配准"""
+        """Perform image registration"""
         alignment_start_time = time.time()
 
         if self.need_align_homography and self.need_align_ecc:
@@ -226,7 +226,7 @@ class RenderWorker(QThread):
         return processed, alignment_time
 
     def _apply_roi_cropping(self, images):
-        """应用ROI裁剪，返回(裁剪后图像栈, 基准图像, ROI矩形)"""
+        """Apply ROI cropping, returns (cropped image stack, base image, ROI rectangle)"""
         base_full_image = None
         roi_rect_int = None
 
@@ -252,7 +252,7 @@ class RenderWorker(QThread):
         return None, None, None
 
     def _normalize_roi_rect(self, image_shape):
-        """规范化ROI矩形边界"""
+        """Normalize the ROI rectangle bounds"""
         rx = int(self.roi_rect.x())
         ry = int(self.roi_rect.y())
         rw = int(self.roi_rect.width())
@@ -267,7 +267,7 @@ class RenderWorker(QThread):
         return rx, ry, rw, rh
 
     def _run_fusion(self, images):
-        """执行图像融合，返回(融合结果, 设备名称)"""
+        """Perform image fusion, returns (fusion result, device name)"""
         algorithm = self._get_fusion_algorithm()
 
         fusion = MultiFocusFusion(
@@ -334,7 +334,7 @@ class RenderWorker(QThread):
         return result, device_name
 
     def _get_fusion_algorithm(self):
-        """根据UI选择获取融合算法名称"""
+        """Get the fusion-algorithm name based on the UI selection"""
         if self.rb_a_checked:
             return "guided_filter"
         elif self.rb_b_checked:
@@ -349,10 +349,10 @@ class RenderWorker(QThread):
             return "guided_filter"
 
     def _apply_roi_pasting(self, fusion_result, base_image, roi_rect_int):
-        """将融合结果粘贴回基准图像"""
+        """Paste the fusion result back onto the base image"""
         rx, ry, rw, rh = roi_rect_int
 
-        # 确保融合结果尺寸匹配（分块融合时可能尺寸不完全一致）
+        # Ensure the fusion-result size matches (sizes may not be exactly equal in tiled fusion)
         fr_h, fr_w = fusion_result.shape[:2]
         copy_h = min(fr_h, rh)
         copy_w = min(fr_w, rw)
@@ -369,11 +369,11 @@ class RenderWorker(QThread):
 
 
 class BatchWorker(QThread):
-    """批处理工作线程"""
+    """Batch-processing worker thread"""
 
-    progress_updated = pyqtSignal(int, int, str)  # 当前进度, 总数, 消息
-    finished = pyqtSignal(dict)  # 处理结果
-    error = pyqtSignal(str)  # 错误信息
+    progress_updated = pyqtSignal(int, int, str)  # current progress, total, message
+    finished = pyqtSignal(dict)  # processing result
+    error = pyqtSignal(str)  # error message
 
     def __init__(self, folder_paths, output_type, output_path, processing_settings, reg_downscale_width=None,
                  tile_enabled=None, tile_block_size=None, tile_overlap=None, tile_threshold=None, thread_count: int = 4,
@@ -407,7 +407,7 @@ class BatchWorker(QThread):
             self.thread_count = 4
     
     def run(self):
-        """执行批处理"""
+        """Run batch processing"""
         try:
             if self.import_mode == "single_folder" and self.single_folder_images_with_times:
                 stacks = self._split_images_for_processing()
@@ -474,7 +474,7 @@ class BatchWorker(QThread):
             self.error.emit(f"Batch processing failed: {str(e)}")
 
     def _split_images_for_processing(self):
-        """分割单文件夹中的图像"""
+        """Split the images in a single folder"""
         if not self.single_folder_images_with_times:
             return []
 
@@ -492,7 +492,7 @@ class BatchWorker(QThread):
             return [self.single_folder_images_with_times]
 
     def _process_single_stack(self, stack_images_with_times, output_dir, stack_name, stack_index):
-        """处理单个图像栈（来自单文件夹分割）"""
+        """Process a single image stack (from single-folder splitting)"""
         images = [item[1] for item in stack_images_with_times]
         original_paths = [item[0] for item in stack_images_with_times]
 
@@ -598,25 +598,25 @@ class BatchWorker(QThread):
                     cv2.imwrite(aligned_path, img, imwrite_params)
     
     def process_single_folder(self, folder_path):
-        """处理单个文件夹"""
-        # 1. 加载图像
+        """Process a single folder"""
+        # 1. Load images
         success, message, images, filenames = self.image_loader.load_from_folder(folder_path)
         if not success or not images:
             raise Exception(f"Failed to load images: {message}")
         
-        # 2. 图像配准（如果需要）
+        # 2. Image registration (if needed)
         aligned_images = images.copy()
         reg_methods = self.processing_settings.get('reg_methods', [])
         
         if reg_methods:
-            # 配准选项
+            # Registration options
             align_homography = "homography" in reg_methods
             align_ecc = "ecc" in reg_methods
             
-            # 执行配准
+            # Perform registration
             aligned_images = []
             
-            # 确定配准模式
+            # Determine the registration mode
             if align_homography and align_ecc:
                 mode = "both"
             elif align_homography:
@@ -634,10 +634,10 @@ class BatchWorker(QThread):
                     registration = ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
                 aligned_images = registration.process(images, output_path=None, thread_count=self.thread_count)
             else:
-                # 如果没有选择任何配准方法，直接使用原始图像
+                # If no registration method is selected, use the original images directly
                 aligned_images = images.copy()
         
-        # 3. 图像融合
+        # 3. Image fusion
         fusion_method = self.processing_settings.get('fusion_method')
         if fusion_method:
             fusion_params = self.processing_settings.get('fusion_params', {})
@@ -645,8 +645,8 @@ class BatchWorker(QThread):
                 fusion_params = dict(fusion_params)
                 fusion_params["model_path"] = resource_path("weights", "stackmffv4.pth")
             
-            # 创建相应算法的融合器实例
-            # 优先使用 processing_settings 中的 fusion_params 中可能包含的 tile 覆盖值
+            # Create a fuser instance for the corresponding algorithm
+            # Prefer the tile override value that may be included in fusion_params within processing_settings
             tile_kwargs = {}
             if isinstance(fusion_params, dict):
                 # allow explicit per-batch overrides
@@ -667,23 +667,23 @@ class BatchWorker(QThread):
 
             fusion = MultiFocusFusion(algorithm=fusion_method, use_gpu=True, **tile_kwargs)
             
-            # 调用fuse方法执行融合
+            # Call the fuse method to perform fusion
             fusion_result = fusion.fuse(aligned_images, thread_count=self.thread_count, **fusion_params)
         else:
             fusion_result = None
         
-        # 4. 保存结果
+        # 4. Save the result
         if fusion_result is not None:
             self.save_fusion_result(folder_path, fusion_result)
         
-        # 5. 如果需要，保存配准后的图像栈
+        # 5. If needed, save the registered image stack
         save_aligned = self.processing_settings.get('save_aligned', False)
         if save_aligned:
             self.save_registered_stack(folder_path, aligned_images, filenames)
     
     def save_fusion_result(self, folder_path, fusion_result):
-        """保存融合结果"""
-        # 确定输出路径
+        """Save the fusion result"""
+        # Determine the output path
         if self.output_type == "subfolder":
             output_dir = os.path.join(folder_path, self.output_path)
             os.makedirs(output_dir, exist_ok=True)
@@ -693,18 +693,18 @@ class BatchWorker(QThread):
             output_dir = self.output_path
             os.makedirs(output_dir, exist_ok=True)
         
-        # 生成文件名
+        # Generate the file name
         folder_name = os.path.basename(folder_path)
         extension = self.processing_settings.get('format', 'png')
         filename = f"{folder_name}.{extension}"
         output_path = os.path.join(output_dir, filename)
 
-        # 保存图像
+        # Save the image
         cv2.imwrite(output_path, fusion_result, get_imwrite_params(extension))
     
     def save_registered_stack(self, folder_path, images, filenames):
-        """保存配准后的图像栈"""
-        # 确定输出路径
+        """Save the registered image stack"""
+        # Determine the output path
         if self.output_type == "custom":
             output_dir = self.output_path
             folder_name = os.path.basename(folder_path)
@@ -713,27 +713,27 @@ class BatchWorker(QThread):
         else:  # same as source
             output_dir = folder_path
         
-        # 保存每个图像
+        # Save each image
         extension = self.processing_settings.get('format', 'png')
         imwrite_params = get_imwrite_params(extension)
 
         for i, image in enumerate(images):
             if i < len(filenames):
-                # 使用原始文件名
+                # Use the original file name
                 filename = filenames[i]
                 if not filename.lower().endswith(f".{extension}"):
-                    # 更改扩展名
+                    # Change the extension
                     base_name = os.path.splitext(filename)[0]
                     filename = f"{base_name}.{extension}"
             else:
-                # 生成默认文件名
+                # Generate the default file name
                 filename = f"registered_{i+1:04d}.{extension}"
             
             output_path = os.path.join(output_dir, filename)
             cv2.imwrite(output_path, image, imwrite_params)
 
     def _get_output_path_for_single_folder(self, source_folder_path):
-        """获取单文件夹模式下的输出路径"""
+        """Get the output path in single-folder mode"""
         if self.output_type == "subfolder":
             output_dir = os.path.join(source_folder_path, self.output_path)
         elif self.output_type == "same":
@@ -744,7 +744,7 @@ class BatchWorker(QThread):
         return output_dir
 
     def _get_output_path(self, folder_path, stack_name=None):
-        """获取输出路径"""
+        """Get the output path"""
         if self.output_type == "subfolder":
             output_dir = os.path.join(folder_path, self.output_path)
         elif self.output_type == "same":
@@ -757,12 +757,12 @@ class BatchWorker(QThread):
         return output_dir
 
     def cancel(self):
-        """取消批处理"""
+        """Cancel batch processing"""
         self.is_cancelled = True
 
 
 class GifSaverWorker(QThread):
-    """后台保存GIF的线程"""
+    """Background thread that saves a GIF"""
     finished_signal = pyqtSignal(bool, str)  # success, message
 
     def __init__(self, images, file_path, duration_sec, label_manager, target_type):
@@ -777,28 +777,28 @@ class GifSaverWorker(QThread):
         try:
             normalized_images = []
             for i, img in enumerate(self.images):
-                # 创建图像副本，并在需要时叠加标签
+                # Create a copy of the image and overlay a label when needed
                 img_copy = self.label_manager.prepare_bgr_image(self.target_type, img, i)
                 
-                # 如果图像是灰度图，转换为RGB
+                # If the image is grayscale, convert it to RGB
                 if len(img_copy.shape) == 2:
                     img_copy = cv2.cvtColor(img_copy, cv2.COLOR_GRAY2RGB)
-                # 如果是BGR格式（OpenCV格式），转换为RGB
+                # If it is in BGR format (OpenCV format), convert it to RGB
                 elif len(img_copy.shape) == 3 and img_copy.shape[2] == 3:
                     img_copy = cv2.cvtColor(img_copy, cv2.COLOR_BGR2RGB)
                 
-                # 确保图像是uint8格式
+                # Ensure the image is in uint8 format
                 if img_copy.dtype != np.uint8:
                     img_copy = np.clip(img_copy, 0, 255).astype(np.uint8)
                 
                 normalized_images.append(img_copy)
             
-            # 使用imageio保存GIF
+            # Save the GIF using imageio
             imageio.mimsave(
                 self.file_path,
                 normalized_images,
                 duration=self.duration_sec,
-                loop=0  # 循环播放，0表示无限循环
+                loop=0  # loop playback, 0 means infinite loop
             )
             self.finished_signal.emit(True, f"GIF animation saved to:\n{self.file_path}")
         except Exception as e:

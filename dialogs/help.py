@@ -16,14 +16,14 @@ from utils import resource_path
 
 
 class HelpDialog(QDialog):
-    """帮助信息对话框（从 main.py 抽离）"""
+    """Help-info dialog (extracted from main.py)"""
 
     def __init__(self, title, content, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(500, 400)
 
-        # 应用深色主题
+        # Apply the dark theme
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #1e1e1e;
@@ -54,19 +54,19 @@ class HelpDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # 创建可滚动的文本浏览器
+        # Create a scrollable text browser
         self.text_browser = QTextBrowser()
         self.text_browser.setHtml(content)
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         layout.addWidget(self.text_browser)
 
-        # 关闭按钮
+        # Close button
         close_btn = QPushButton(trans.t('btn_close'))
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
-        # 居中显示
+        # Center on screen
         if parent:
             self.move(
                 parent.x() + parent.width() // 2 - self.width() // 2,
@@ -75,7 +75,7 @@ class HelpDialog(QDialog):
 
 
 class RenderMethodHelpDialog(HelpDialog):
-    """渲染方法帮助对话框"""
+    """Render-method help dialog"""
 
     def __init__(self, parent=None):
         help_text = """<h3>Render Methods</h3>
@@ -99,7 +99,7 @@ class RenderMethodHelpDialog(HelpDialog):
 
 
 class RegistrationHelpDialog(HelpDialog):
-    """配准方法帮助对话框"""
+    """Registration-method help dialog"""
 
     def __init__(self, parent=None):
         help_text = """<h3>Registration Methods</h3>
@@ -116,7 +116,7 @@ class RegistrationHelpDialog(HelpDialog):
 
 
 class TileHelpDialog(HelpDialog):
-    """Tile 参数帮助对话框"""
+    """Tile-parameter help dialog"""
 
     def __init__(self, parent=None):
         help_text = """<h3>Tile Settings Help</h3>

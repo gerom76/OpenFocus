@@ -12,8 +12,8 @@ import concurrent.futures
 
 def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None):
     """
-    基于引导滤波的多焦点图像栈融合算法实现 (CPU版本)
-    不依赖 opencv-contrib (ximgproc)，内置引导滤波实现。
+    Guided-filter-based multi-focus image-stack fusion algorithm implementation (CPU version)
+    Does not depend on opencv-contrib (ximgproc); includes a built-in guided-filter implementation.
     """
     # Determine thread pool size: if thread_count is provided use it, else use default
     if thread_count is None:
@@ -24,40 +24,40 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
         except Exception:
             max_workers = None
     
-    # ========== 参数设置 ==========
-    # 默认参数 (参考原脚本)
+    # ========== Parameter settings ==========
+    # Default parameters (referencing the original script)
     DEFAULT_R1 = 45
     DEFAULT_R2 = 7
     DEFAULT_EPS1 = 0.3
     DEFAULT_EPS2 = 10e-6
     DEFAULT_SIGMA_R = 5
     
-    # 如果传入了 kernel_size 且有效，则使用它作为均值滤波尺寸
+    # If a valid kernel_size is passed in, use it as the mean-filter size
     average_filter_size = kernel_size if kernel_size is not None and kernel_size > 0 else 31
     
-    # 确保滤波器大小为奇数
+    # Ensure the filter size is odd
     if average_filter_size % 2 == 0:
         average_filter_size += 1
 
-    # ========== 内置引导滤波实现 ==========
+    # ========== Built-in guided-filter implementation ==========
     def guided_filter(I, p, r, eps):
         """
-        快速引导滤波实现 (基于 Box Filter)
-        I: 引导图像 (Guide Image), 单通道或三通道
-        p: 输入图像 (Input Image), 单通道
-        r: 滤波半径 (radius)
-        eps: 正则化参数
+        Fast guided-filter implementation (based on Box Filter)
+        I: guide image (Guide Image), single- or three-channel
+        p: input image (Input Image), single-channel
+        r: filter radius
+        eps: regularization parameter
         """
-        # 确保 I 和 p 类型一致
+        # Ensure I and p have the same type
         if I.dtype != np.float32:
             I = I.astype(np.float32)
         if p.dtype != np.float32:
             p = p.astype(np.float32)
             
-        # 滤波器直径
+        # Filter diameter
         ksize = (2 * r + 1, 2 * r + 1)
         
-        # 均值计算
+        # Mean computation
         mean_I = cv2.boxFilter(I, cv2.CV_32F, ksize)
         mean_p = cv2.boxFilter(p, cv2.CV_32F, ksize)
         mean_Ip = cv2.boxFilter(I * p, cv2.CV_32F, ksize)
@@ -76,7 +76,7 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
         q = mean_a * I + mean_b
         return q
 
-    # ========== 数据加载 ==========
+    # ========== Data loading ==========
     if isinstance(input_source, str):
         def get_image_suffix(input_stack_path):
             filenames = os.listdir(input_stack_path)
@@ -91,11 +91,11 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
             
         glob_format = '*' + img_ext
         img_stack_path_list = glob.glob(os.path.join(input_source, glob_format))
-        # 尝试按数字排序
+        # Try to sort numerically
         try:
             img_stack_path_list.sort(key=lambda x: int(str(re.findall(r"\d+", x.split(os.sep)[-1])[-1])))
         except IndexError:
-            img_stack_path_list.sort() # 回退到字典序
+            img_stack_path_list.sort() # fall back to lexicographic order
             
         stack_ori = [cv2.imread(img_path) for img_path in img_stack_path_list]
     else:
@@ -107,14 +107,14 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
     if img_resize:
         stack_ori = [cv2.resize(img, img_resize) for img in stack_ori]
 
-    # 转换为 float32 并归一化到 [0, 1]
+    # Convert to float32 and normalize to [0, 1]
     stack_flt = [img.astype(np.float32) / 255.0 for img in stack_ori]
     
-    # ========== 核心算法实现 ==========
+    # ========== Core algorithm implementation ==========
     
     def guided_filter_fusion_stack(images):
         """
-        对图像堆栈执行基于引导滤波的融合
+        Perform guided-filter-based fusion on the image stack
         """
         num_images = len(images)
         if num_images == 0:
@@ -122,67 +122,67 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
         
         rows, cols, channels = images[0].shape
         
-        # 1. 图像分解 (Base Layer & Detail Layer)
-        # 使用 uniform_filter 提取 Base 层
+        # 1. Image decomposition (Base Layer & Detail Layer)
+        # Use uniform_filter to extract the Base layer
         
         def process_decompose(img):
-            # 使用 cv2.blur 替代 uniform_filter，速度更快
+            # Use cv2.blur instead of uniform_filter for better speed
             base = cv2.blur(img, (average_filter_size, average_filter_size), borderType=cv2.BORDER_REFLECT)
             detail = img - base
             return base, detail
 
-        # 并行处理图像分解
+        # Process image decomposition in parallel
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             decompose_results = list(executor.map(process_decompose, images))
         
         base_layers = [res[0] for res in decompose_results]
         detail_layers = [res[1] for res in decompose_results]
             
-        # 2. 计算显著性图 (Saliency Map)
+        # 2. Compute the saliency map (Saliency Map)
         # Saliency = Gaussian(abs(Laplacian(Sum_Channels)))
         
         def process_saliency(img):
-            # 将三通道相加用于计算拉普拉斯
+            # Sum the three channels for the Laplacian computation
             img_sum = np.sum(img, axis=2)
-            # 使用 cv2.Laplacian 替代 scipy.ndimage.laplace
+            # Use cv2.Laplacian instead of scipy.ndimage.laplace
             lap = np.abs(cv2.Laplacian(img_sum, cv2.CV_32F, ksize=1, borderType=cv2.BORDER_REFLECT))
-            # 使用 cv2.GaussianBlur 替代 scipy.ndimage.gaussian_filter
+            # Use cv2.GaussianBlur instead of scipy.ndimage.gaussian_filter
             sal = cv2.GaussianBlur(lap, (0, 0), sigmaX=DEFAULT_SIGMA_R, sigmaY=DEFAULT_SIGMA_R, borderType=cv2.BORDER_REFLECT)
             return sal
 
-        # 并行处理显著性图计算
+        # Compute the saliency map in parallel
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             saliency_maps = list(executor.map(process_saliency, images))
             
-        # 3. 生成初始决策图 (Decision Map)
-        # 在每个像素位置选择显著性最大的图像索引
+        # 3. Generate the initial decision map (Decision Map)
+        # At each pixel, select the index of the image with the highest saliency
         saliency_stack = np.stack(saliency_maps, axis=0) # (N, H, W)
         max_indices = np.argmax(saliency_stack, axis=0)  # (H, W)
         
-        # 4. 权重图细化与融合 (Weight Refinement & Fusion)
-        # 初始化累加器
+        # 4. Weight-map refinement and fusion (Weight Refinement & Fusion)
+        # Initialize the accumulators
         fused_base_numerator = np.zeros((rows, cols, channels), dtype=np.float32)
-        fused_base_denominator = np.zeros((rows, cols), dtype=np.float32) # 优化为单通道
+        fused_base_denominator = np.zeros((rows, cols), dtype=np.float32) # optimized to single channel
         
         fused_detail_numerator = np.zeros((rows, cols, channels), dtype=np.float32)
-        fused_detail_denominator = np.zeros((rows, cols), dtype=np.float32) # 优化为单通道
+        fused_detail_denominator = np.zeros((rows, cols), dtype=np.float32) # optimized to single channel
         
         def process_weight_fusion(k):
-            # 生成第 k 张图的二值掩膜
+            # Generate the binary mask for the k-th image
             mask_k = (max_indices == k).astype(np.float32) # (H, W)
             
             img_k = images[k] # Guide image (H, W, 3)
             
-            # 使用内置的引导滤波细化掩膜
+            # Refine the mask using the built-in guided filter
             img_k_gray = cv2.cvtColor(img_k, cv2.COLOR_BGR2GRAY)
             
-            # 预计算 I*p 和 I*I，避免在两次 guided_filter 调用中重复计算
+            # Precompute I*p and I*I to avoid recomputing them across the two guided_filter calls
             I = img_k_gray
             p = mask_k
             Ip = I * p
             I2 = I * I
             
-            # 内部优化版 guided_filter，复用预计算结果
+            # Internal optimized guided_filter that reuses the precomputed results
             def run_gf(r, eps):
                 ksize = (2 * r + 1, 2 * r + 1)
                 mean_I = cv2.boxFilter(I, cv2.CV_32F, ksize)
@@ -202,24 +202,24 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
                 q = mean_a * I + mean_b
                 return q
 
-            # 针对 Base 层
+            # For the Base layer
             weight_base_k = run_gf(DEFAULT_R1, DEFAULT_EPS1)
             
-            # 针对 Detail 层
+            # For the Detail layer
             weight_detail_k = run_gf(DEFAULT_R2, DEFAULT_EPS2)
 
-            # 优化：不再使用 np.repeat 扩展为 3 通道，而是利用广播机制
-            # weight_base_k 和 weight_detail_k 都是 (H, W)
+            # Optimization: no longer use np.repeat to expand to 3 channels, use broadcasting instead
+            # weight_base_k and weight_detail_k are both (H, W)
             
-            # 计算分子项 (H, W, 3) * (H, W, 1) -> (H, W, 3)
+            # Compute the numerator term (H, W, 3) * (H, W, 1) -> (H, W, 3)
             base_num = base_layers[k] * weight_base_k[:, :, np.newaxis]
             detail_num = detail_layers[k] * weight_detail_k[:, :, np.newaxis]
             
-            # 分母项直接返回单通道权重即可
+            # The denominator term can just return the single-channel weight
             return base_num, weight_base_k, detail_num, weight_detail_k
 
-        # 并行处理权重计算与融合
-        # 使用 as_completed 模式，处理完一个就累加一个，避免一次性持有所有结果导致内存爆炸
+        # Process weight computation and fusion in parallel
+        # Use the as_completed pattern, accumulating each result as it finishes, to avoid holding all results at once and blowing up memory
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(process_weight_fusion, k): k for k in range(num_images)}
             for future in concurrent.futures.as_completed(futures):
@@ -229,24 +229,24 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
                     fused_base_denominator += bd
                     fused_detail_numerator += dn
                     fused_detail_denominator += dd
-                    # 显式删除引用，帮助垃圾回收
+                    # Explicitly delete references to help garbage collection
                     del bn, bd, dn, dd
                 except Exception as exc:
                     print(f'Image {futures[future]} generated an exception: {exc}')
 
             
-        # 5. 重建图像
-        # 避免除以零
+        # 5. Reconstruct the image
+        # Avoid division by zero
         fused_base_denominator[fused_base_denominator < 1e-6] = 1e-6
         fused_detail_denominator[fused_detail_denominator < 1e-6] = 1e-6
         
-        # 广播除法 (H, W, 3) / (H, W, 1)
+        # Broadcast division (H, W, 3) / (H, W, 1)
         fused_base = fused_base_numerator / fused_base_denominator[:, :, np.newaxis]
         fused_detail = fused_detail_numerator / fused_detail_denominator[:, :, np.newaxis]
         
         fused_img = fused_base + fused_detail
         
-        # 裁剪并转换回 uint8
+        # Clip and convert back to uint8
         fused_img = np.clip(fused_img * 255, 0, 255).astype(np.uint8)
         
         return fused_img

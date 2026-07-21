@@ -49,7 +49,7 @@ class activation(nn.ReLU):
     def switch_to_deploy(self):
         kernel, bias = self._fuse_bn_tensor(self.weight, self.bn)
         self.weight.data = kernel
-        self.bias = torch.nn.Parameter(bias)  # 直接使用返回的bias
+        self.bias = torch.nn.Parameter(bias)  # Use the returned bias directly
         self.__delattr__('bn')
         self.deploy = True
 
@@ -101,7 +101,7 @@ class Block(nn.Module):
         beta = bn.bias
         eps = bn.eps
         
-        # 处理conv可能没有bias的情况
+        # Handle the case where the conv may have no bias
         bias = conv.bias if conv.bias is not None else torch.zeros_like(running_mean)
         
         std = (running_var + eps).sqrt()
@@ -164,7 +164,7 @@ class UpBlock(nn.Module):
         beta = bn.bias
         eps = bn.eps
         
-        # 处理conv可能没有bias的情况
+        # Handle the case where the conv may have no bias
         bias = conv.bias if conv.bias is not None else torch.zeros_like(running_mean)
         
         std = (running_var + eps).sqrt()
@@ -192,9 +192,9 @@ class LV_UNet(nn.Module):
         super().__init__()
         self.deploy = deploy
         mobile = models.mobilenet_v3_large(pretrained=True)
-        # 修改第一层卷积以适应单通道输入
+        # Modify the first conv layer to accept single-channel input
         self.firstconv = nn.Conv2d(input_channel, 16, kernel_size=3, stride=2, padding=1, bias=False)
-        # 初始化权重
+        # Initialize the weights
         nn.init.kaiming_normal_(self.firstconv.weight, mode='fan_out', nonlinearity='relu')
         self.encoder1 = nn.Sequential(
                 mobile.features[1],
@@ -251,14 +251,14 @@ class LV_UNet(nn.Module):
             e4 = self.stages[i](e4)
         for i in range(self.depth):
             e4 = self.up_stages1[i](e4)
-            # 确保特征图尺寸匹配后再进行加法操作
+            # Ensure the feature-map sizes match before performing the addition
             if e4.shape[2:] != encoder[2-i].shape[2:]:
-                # 如果尺寸不匹配，对encoder特征图进行插值调整
+                # If the sizes do not match, interpolate the encoder feature map to adjust
                 encoder_resized = F.interpolate(encoder[2-i], size=e4.shape[2:], mode='bilinear', align_corners=False)
                 e4 = e4 + encoder_resized
             else:
                 e4 = e4 + encoder[2-i]
-        # 确保后续加法操作的尺寸匹配
+        # Ensure the sizes match for the subsequent addition
         up_stage_0_out = self.up_stages2[0](e4)
         if up_stage_0_out.shape[2:] != e2.shape[2:]:
             e2_resized = F.interpolate(e2, size=up_stage_0_out.shape[2:], mode='bilinear', align_corners=False)
@@ -291,7 +291,7 @@ class LV_UNet(nn.Module):
         return kernel * t, beta + (bias - running_mean) * gamma / std
     
     def switch_to_deploy(self):
-        # 使用更明确的类型检查来避免类型检查工具的误报
+        # Use a more explicit type check to avoid false positives from type checkers
         for i in range(self.depth):
             stage = self.stages[i]
             if hasattr(stage, 'switch_to_deploy') and callable(getattr(stage, 'switch_to_deploy', None)):
@@ -321,7 +321,7 @@ def lv_unet(num_classes, input_channel=1):
 # =====================
 class DepthTransformerLayer(nn.Module):
     """
-    单层 Depth Transformer Layer
+    Single Depth Transformer Layer
     """
     def __init__(self, embed_dim, num_heads, ff_dim=None, dropout=0.0):
         super().__init__()
@@ -330,7 +330,7 @@ class DepthTransformerLayer(nn.Module):
         # Multi-head attention
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         self.ff_dim = ff_dim or embed_dim * 4
-        # Feed-forward 网络
+        # Feed-forward network
         self.ffn = nn.Sequential(
             nn.Linear(embed_dim, self.ff_dim),
             nn.GELU(),
@@ -347,20 +347,20 @@ class DepthTransformerLayer(nn.Module):
         # We apply LayerNorm *before* attention, which is a common and stable practice (Pre-LN)
         x_norm = self.norm1(x) 
 
-        # Self-attention 沿 depth 方向
+        # Self-attention along the depth dimension
         # x_norm is used as query, key, and value
         x_attn = self.attn(x_norm, x_norm, x_norm)[0]  # [B*H*W, N, C]
         x_attn = self.dropout(x_attn)
 
-        # 残差连接
+        # Residual connection
         x = x + x_attn  # [B*H*W, N, C]
 
-        # Feed-forward 网络
+        # Feed-forward network
         x_norm2 = self.norm2(x) # Pre-LN for the FFN
         x_ffn = self.ffn(x_norm2)  # [B*H*W, N, C]
         x_ffn = self.dropout(x_ffn)
         
-        # 残差连接
+        # Residual connection
         x = x + x_ffn  # [B*H*W, N, C]
 
         return x
@@ -368,21 +368,21 @@ class DepthTransformerLayer(nn.Module):
 
 class DepthTransformer(nn.Module):
     """
-    沿 depth 方向 (num_images) 建立 Transformer，用于捕捉图层间关系
-    输入输出都为 [B, N, C, H, W]
-    支持自定义层数
+    Build a Transformer along the depth dimension (num_images) to capture inter-layer relationships
+    Both input and output are [B, N, C, H, W]
+    Supports a customizable number of layers
     """
     def __init__(self, embed_dim, num_heads, num_layers=1, ff_dim=None, dropout=0.0, spatial_pool_ratio=0.25):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.num_layers = num_layers
-        self.spatial_pool_ratio = spatial_pool_ratio  # 空间下采样比例
+        self.spatial_pool_ratio = spatial_pool_ratio  # Spatial downsampling ratio
         # Peak-memory budget for one attention weight buffer; locations are
         # processed in chunks so [chunk, heads, N, N] stays within this budget.
         self.attn_mem_budget_bytes = 1 << 30
 
-        # 创建多层 transformer layers
+        # Create multiple transformer layers
         self.layers = nn.ModuleList([
             DepthTransformerLayer(embed_dim, num_heads, ff_dim, dropout)
             for _ in range(num_layers)
@@ -394,15 +394,15 @@ class DepthTransformer(nn.Module):
         """
         B, N, C, H, W = x.shape
         
-        # 动态计算下采样尺寸
+        # Dynamically compute the downsampled size
         target_h, target_w = max(1, int(H * self.spatial_pool_ratio)), max(1, int(W * self.spatial_pool_ratio))
         
-        # 空间下采样以减少计算量
+        # Spatial downsampling to reduce computation
         x_reshaped = x.reshape(B * N, C, H, W)
         x_pooled = F.adaptive_avg_pool2d(x_reshaped, (target_h, target_w))
         x_pooled = x_pooled.reshape(B, N, C, target_h, target_w)
             
-        # 在下采样后的特征图上执行注意力计算
+        # Perform attention on the downsampled feature map
         x_flat = x_pooled.permute(0, 3, 4, 1, 2).contiguous().reshape(B * target_h * target_w, N, C)
 
         # Each spatial location attends only along the depth axis, so locations
@@ -425,12 +425,12 @@ class DepthTransformer(nn.Module):
 
         x_processed = x_flat.reshape(B, target_h, target_w, N, C).permute(0, 3, 4, 1, 2)
         
-        # 上采样恢复到原始尺寸
+        # Upsample back to the original size
         x_processed_reshaped = x_processed.reshape(B * N, C, target_h, target_w)
         x_upsampled_reshaped = F.interpolate(x_processed_reshaped, size=(H, W), mode='bilinear', align_corners=True)
         x_upsampled = x_upsampled_reshaped.reshape(B, N, C, H, W)
             
-        # 使用残差连接保留高频细节信息
+        # Use a residual connection to preserve high-frequency detail
         x_output = x + x_upsampled
         
         return x_output
@@ -442,18 +442,18 @@ class LayerInteraction(nn.Module):
     def __init__(self, embed_dim, num_transformer_layers=1):
         super(LayerInteraction, self).__init__()
         self.layer_interaction_depth = DepthTransformer(embed_dim=embed_dim, num_heads=4, num_layers=num_transformer_layers)
-        # 移除proj_pool_depth，不在这里降维
+        # Remove proj_pool_depth, do not reduce dimensionality here
 
     def forward(self, focus_maps):
-        # 只进行层间交互，不降维
+        # Only perform inter-layer interaction, no dimensionality reduction
         att_out = self.layer_interaction_depth(focus_maps)#[B,N,C,H,W]
         return att_out
 
 
 class IntraLayerRefiner(nn.Module):
     """
-    对包含了层间上下文信息的特征图进行逐层的细化。
-    输入和输出的维度均为 [B, N, C, H, W]。
+    Refine, layer by layer, the feature map that contains inter-layer context information.
+    Both input and output dimensions are [B, N, C, H, W].
     """
     def __init__(self, embed_dim, num_refine_blocks=1):
         super().__init__()
@@ -474,16 +474,16 @@ class IntraLayerRefiner(nn.Module):
         """
         B, N, C, H, W = x.shape
         
-        # 将 B 和 N 维度合并，以共享权重的方式处理每一层的特征
+        # Merge the B and N dimensions to process each layer's features with shared weights
         x_reshaped = x.view(B * N, C, H, W)
         
-        # 应用细化卷积层
+        # Apply the refinement conv layers
         refined_x = self.refiner(x_reshaped)
         
-        # [核心] 使用残差连接，让模块只学习修正量，训练更稳定
+        # [Core] Use a residual connection so the module only learns the correction, making training more stable
         output_reshaped = x_reshaped + refined_x
         
-        # 恢复原始维度
+        # Restore the original dimensions
         output = output_reshaped.view(B, N, C, H, W)
         return output
 
@@ -495,23 +495,23 @@ class FocusMapCreation(nn.Module):
         super(FocusMapCreation, self).__init__()
 
     def forward(self, focus_maps_depth, num_images):
-        # Step 1: 计算焦点概率
+        # Step 1: compute focus probabilities
         focus_probs = F.softmax(focus_maps_depth, dim=1)
         
-        # Step 2: 找到概率最大的图层索引（0到N-1）
+        # Step 2: find the layer index with the highest probability (0 to N-1)
         focus_map = torch.argmax(focus_probs, dim=1, keepdim=True).float()  # [B, 1, H, W]
         
         return focus_map
         
 class StackMFF_V4(nn.Module):
-    def __init__(self, num_transformer_layers=2, num_cycles=1): # 新增 num_cycles 参数
+    def __init__(self, num_transformer_layers=2, num_cycles=1): # added num_cycles parameter
         super(StackMFF_V4, self).__init__()
 
         embed_dim = 8
         
         self.feature_extraction = lv_unet(num_classes=embed_dim, input_channel=1)
         
-        # 将"层间-层内"打包成一个修正循环
+        # Pack the "inter-layer / intra-layer" steps into a single correction cycle
         self.refinement_cycles = nn.ModuleList()
         for _ in range(num_cycles):
             self.refinement_cycles.append(nn.ModuleDict({
@@ -524,37 +524,37 @@ class StackMFF_V4(nn.Module):
         
     def forward(self, x):
         """
-        前向传播 - 包含了循环修正机制
+        Forward pass - includes the iterative correction mechanism
         """
         batch_size, num_images, height, width = x.shape
-        assert num_images >= 2, f"图像数量必须至少为2，当前为{num_images}"
+        assert num_images >= 2, f"Number of images must be at least 2, currently {num_images}"
         
-        # 1. 初始层内建模
-        # 将输入数据从 [B, N, H, W] 转换为 [B*N, 1, H, W] 以适配 feature_extraction 网络
+        # 1. Initial intra-layer modeling
+        # Convert the input from [B, N, H, W] to [B*N, 1, H, W] to fit the feature_extraction network
         x_reshaped = x.view(batch_size * num_images, 1, height, width)
         features_single = self.feature_extraction(x_reshaped)  # Shape: [B*N, C, H, W]
         
-        # 将特征重新 reshape 为 [B, N, C, H, W]
+        # Reshape the features back to [B, N, C, H, W]
         _, channels, feat_height, feat_width = features_single.shape
         features = features_single.view(batch_size, num_images, channels, feat_height, feat_width)
 
-        # 2. 开始循环修正
+        # 2. Begin the iterative correction
         for cycle in self.refinement_cycles:
-            # 2.1 层间建模：获取上下文
+            # 2.1 Inter-layer modeling: obtain context
             inter_context_features = getattr(cycle, 'inter_model')(features)
-            # 添加残差连接
+            # Add a residual connection
             features_with_context = features + inter_context_features
             
-            # 2.2 细化层内建模：利用上下文修正自身特征
+            # 2.2 Refined intra-layer modeling: use the context to correct its own features
             refined_features = getattr(cycle, 'intra_refiner')(features_with_context)
             
-            # 更新特征，为下一轮循环或最终输出做准备
+            # Update the features, preparing for the next cycle or the final output
             features = refined_features
             
-        # 3. 应用层间交互模块（不降维）
+        # 3. Apply the inter-layer interaction module (no dimensionality reduction)
         layer_interaction_features = self.layer_interaction(features)
         
-        # 4. 最后才进行降维操作
+        # 4. Only reduce dimensionality at the end
         layer_interaction_features = self.proj_pool_depth(layer_interaction_features).squeeze(2)
 
         if self.training:
@@ -566,23 +566,23 @@ class StackMFF_V4(nn.Module):
 
     def generate_fused_image(self, x, focus_map):
         """
-        使用焦点索引图生成融合图像 - 支持可变类别数
+        Generate the fused image using the focus-index map - supports a variable number of classes
         
         Args:
-            x: 输入图像栈 [batch_size, num_images, height, width]
-            focus_map: 焦点索引图 [batch_size, 1, height, width] 值范围 [0, num_images-1]
+            x: input image stack [batch_size, num_images, height, width]
+            focus_map: focus-index map [batch_size, 1, height, width], value range [0, num_images-1]
             
         Returns:
-            fused_image: 最终融合图像 [batch_size, 1, height, width]
-            focus_indices: 焦点索引 [batch_size, height, width] 值范围 [0, num_images-1]
+            fused_image: final fused image [batch_size, 1, height, width]
+            focus_indices: focus indices [batch_size, height, width], value range [0, num_images-1]
         """
         batch_size, num_images, height, width = x.shape
         focus_indices = focus_map.squeeze(1).long()  # [batch_size, height, width]
         
-        # 确保索引在有效范围内
+        # Ensure the indices are within the valid range
         focus_indices = torch.clamp(focus_indices, 0, num_images - 1)
         
-        # 使用torch.gather按索引选择像素值
+        # Use torch.gather to select pixel values by index
         fused_image = torch.gather(x, dim=1, index=focus_indices.unsqueeze(1))
         
         return fused_image, focus_indices
@@ -608,12 +608,12 @@ class StackMFF_V4(nn.Module):
 if __name__ == "__main__":
     from fvcore.nn import FlopCountAnalysis, flop_count_table
     
-    # 创建模型并移动到GPU
+    # Create the model and move it to the GPU
     model = StackMFF_V4().to("cuda:1")
-    # 创建输入数据
+    # Create the input data
     x = torch.randn(1, 2, 256, 256).to("cuda:1")
     
-    # 测试推理模式
+    # Test inference mode
     model.eval()
     with torch.no_grad():
         fused_image, focus_indices = model(x)
@@ -623,14 +623,14 @@ if __name__ == "__main__":
     print(f"Focus indices shape: {focus_indices.shape}")
     print(f"Focus index range: [{focus_indices.min().item():.0f}, {focus_indices.max().item():.0f}]")
     
-    # 内存使用情况
+    # Memory usage
     print('{:>16s} : {:<.3f} [M]'.format('Max Memory', torch.cuda.max_memory_allocated(torch.cuda.current_device())/1024**2))
     
-    # 计算FLOPs和参数量
+    # Compute FLOPs and parameter count
     flops = FlopCountAnalysis(model, (x,))
     print(flop_count_table(flops))
     
-    # 额外测试不同图像数量
+    # Additionally test different numbers of images
     print("\n=== Testing with different stack sizes ===")
     test_cases = [3, 5, 12]
     for num_images in test_cases:

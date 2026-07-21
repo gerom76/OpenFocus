@@ -11,7 +11,7 @@ import numpy as np
 ArraySource = Sequence[np.ndarray]
 
 def _ensure_color_image(image: np.ndarray) -> np.ndarray:
-    """确保输入图像为三通道BGR格式。"""
+    """Ensure the input image is in three-channel BGR format."""
     if image is None:
         raise ValueError("Input image is None")
     if image.ndim == 2:
@@ -37,11 +37,11 @@ def _collect_images_from_folder(source_folder: str) -> Tuple[List[np.ndarray], L
     return images, img_paths
 
 def _normalize_image_stack(images: Sequence[np.ndarray]) -> Tuple[List[np.ndarray], Tuple[int, int]]:
-    """统一图像尺寸并返回BGR列表。"""
+    """Unify image sizes and return a list of BGR images."""
     if not images:
-        raise ValueError("图像栈为空")
+        raise ValueError("Image stack is empty")
     
-    # 获取基准尺寸
+    # Get the reference size
     ref_img = images[0]
     target_h, target_w = ref_img.shape[:2]
     
@@ -53,7 +53,7 @@ def _normalize_image_stack(images: Sequence[np.ndarray]) -> Tuple[List[np.ndarra
         normalized.append(img_bgr)
         
     if target_h < 8 or target_w < 8:
-        raise ValueError("图像尺寸过小")
+        raise ValueError("Image size is too small")
         
     return normalized, (target_h, target_w)
 
@@ -64,15 +64,15 @@ def dct_focus_stack_fusion(
     kernel_size: int = 7,
 ) -> np.ndarray:
     """
-    高度优化的 DCT/方差 图像融合算法。
+    Highly optimized DCT/variance image-fusion algorithm.
     
-    优化说明:
-    利用 Parseval 定理，DCT 域的高频能量(方差)等价于空间域的像素方差。
-    通过 cv2.resize(INTER_AREA) 快速计算块均值和平方均值，替代了原本极其缓慢的
-    逐块 DCT 循环。
+    Optimization notes:
+    By Parseval's theorem, the high-frequency energy (variance) in the DCT domain is equivalent to the pixel variance in the spatial domain.
+    cv2.resize(INTER_AREA) is used to quickly compute block means and squared means, replacing the originally extremely slow
+    per-block DCT loop.
     """
     
-    # --- 1. 参数校验与准备 ---
+    # --- 1. Parameter validation and preparation ---
     if kernel_size % 2 == 0:
         kernel_size += 1
     block_size = max(2, int(block_size))
@@ -85,12 +85,12 @@ def dct_focus_stack_fusion(
         raise TypeError("Source must be folder path or image list.")
 
     if len(images) < 2:
-        raise ValueError("需要至少 2 张图像进行融合。")
+        raise ValueError("At least 2 images are required for fusion.")
 
-    # 归一化并获取尺寸
+    # Normalize and get the size
     normalized_images, (h, w) = _normalize_image_stack(images)
 
-    # 计算对齐后的尺寸 (必须是 block_size 的整数倍)
+    # Compute the aligned size (must be an integer multiple of block_size)
     h_trim = (h // block_size) * block_size
     w_trim = (w // block_size) * block_size
     map_h = h_trim // block_size
@@ -99,76 +99,76 @@ def dct_focus_stack_fusion(
     if map_h == 0 or map_w == 0:
         raise ValueError("Block size is too large for image size.")
 
-    # --- 2. 快速计算方差图 (核心优化) ---
-    # 预分配空间
+    # --- 2. Quickly compute the variance map (core optimization) ---
+    # Preallocate space
     max_variance_map = np.full((map_h, map_w), -1.0, dtype=np.float32)
-    # 使用较小的数据类型存储索引，节省内存
+    # Use a smaller data type to store indices, saving memory
     idx_dtype = np.uint8 if len(images) < 256 else np.int32
     best_index_map = np.zeros((map_h, map_w), dtype=idx_dtype)
 
     for idx, bgr_img in enumerate(normalized_images):
-        # 裁剪边缘以匹配 block 分块
+        # Crop the edges to match the block tiling
         img_trim = bgr_img[:h_trim, :w_trim]
         
-        # 转灰度并转 float32 以防止平方溢出
+        # Convert to grayscale and to float32 to prevent squaring overflow
         gray = cv2.cvtColor(img_trim, cv2.COLOR_BGR2GRAY).astype(np.float32)
         
-        # 1. 计算 E[X^2] (平方的均值)
-        # cv2.resize 使用 INTER_AREA 实际上就是在做块平均，速度极快
+        # 1. Compute E[X^2] (mean of squares)
+        # cv2.resize with INTER_AREA effectively does block averaging, which is very fast
         mean_sq = cv2.resize(gray ** 2, (map_w, map_h), interpolation=cv2.INTER_AREA)
         
-        # 2. 计算 (E[X])^2 (均值的平方)
+        # 2. Compute (E[X])^2 (square of the mean)
         mean_val = cv2.resize(gray, (map_w, map_h), interpolation=cv2.INTER_AREA)
         sq_mean = mean_val ** 2
         
-        # 3. 方差 Var(X) = E[X^2] - (E[X])^2
-        # 这在数学上严格等价于 DCT 交流分量的能量和
+        # 3. Variance Var(X) = E[X^2] - (E[X])^2
+        # This is mathematically strictly equivalent to the energy sum of the DCT AC components
         var_map = mean_sq - sq_mean
         
-        # 更新最大方差图
+        # Update the maximum-variance map
         mask = var_map > max_variance_map
         max_variance_map[mask] = var_map[mask]
         best_index_map[mask] = idx
 
-    # --- 3. 一致性验证 (中值滤波) ---
-    # 必须转回适合滤波的类型，虽然 uint8 也可以，但为了稳健转一下
+    # --- 3. Consistency verification (median filtering) ---
+    # Must convert back to a type suitable for filtering; uint8 would also work, but convert for robustness
     if idx_dtype == np.uint8:
         map_to_filter = best_index_map
     else:
         map_to_filter = best_index_map.astype(np.float32)
 
-    # 两次中值滤波去除噪点
+    # Two passes of median filtering to remove noise
     filtered_map = cv2.medianBlur(map_to_filter, kernel_size)
     filtered_map = cv2.medianBlur(filtered_map, kernel_size)
     
-    # 转回整数索引
+    # Convert back to integer indices
     if filtered_map.dtype != np.int32 and filtered_map.dtype != np.uint8:
         final_index_map = filtered_map.astype(np.int32)
     else:
         final_index_map = filtered_map
 
-    # --- 4. 快速重建 ---
-    # 将小尺寸的索引图一次性放大回原图尺寸 (Nearest Neighbor)
+    # --- 4. Fast reconstruction ---
+    # Scale the small index map back up to the original size in one go (Nearest Neighbor)
     full_size_indices = cv2.resize(
-        final_index_map.astype(np.uint8), # resize 对 uint8 最快
+        final_index_map.astype(np.uint8), # resize is fastest on uint8
         (w_trim, h_trim), 
         interpolation=cv2.INTER_NEAREST
     )
 
     fused_image = np.zeros((h_trim, w_trim, 3), dtype=np.uint8)
     
-    # 仅遍历用到的源图像索引进行填充
+    # Iterate only over the source-image indices that are used, to fill in
     unique_indices = np.unique(final_index_map)
     
     for idx in unique_indices:
-        # 生成掩膜：哪里需要这张图，哪里就是 True
+        # Generate the mask: True wherever this image is needed
         mask = (full_size_indices == idx)
         
-        # 即使这里是 Python 循环，也是针对整张图的掩膜操作，速度很快
-        # 裁剪源图像以匹配尺寸
+        # Even though this is a Python loop, it operates on whole-image masks, so it is fast
+        # Crop the source image to match the size
         source_layer = normalized_images[idx][:h_trim, :w_trim]
         
-        # 赋值
+        # Assign
         fused_image[mask] = source_layer[mask]
 
     if output_path:
@@ -178,12 +178,12 @@ def dct_focus_stack_fusion(
 
 
 # ==========================================
-# 运行入口
+# Entry point
 # ==========================================
 if __name__ == "__main__":
     t_start = time.time()
     
-    # 修改这里的路径为你实际的图片文件夹
+    # Change this path to your actual image folder
     TARGET_DIR = r"C:\Users\dell\Pictures\Helicon Focus\StackMFF V2 Used\Bug"
     OUTPUT_FILE = os.path.join(TARGET_DIR, "Fused_Result_Optimized.tif")
     
@@ -192,19 +192,19 @@ if __name__ == "__main__":
     
     if os.path.exists(TARGET_DIR):
         try:
-            print(f"开始处理: {TARGET_DIR}")
+            print(f"Start processing: {TARGET_DIR}")
             result = dct_focus_stack_fusion(
-                source=TARGET_DIR,  # 修正参数名
+                source=TARGET_DIR,  # corrected parameter name
                 output_path=OUTPUT_FILE,
                 block_size=BLOCK_SIZE,
                 kernel_size=KERNEL_SIZE
             )
             
             elapsed = time.time() - t_start
-            print(f"处理完成，耗时: {elapsed:.4f} 秒")
+            print(f"Processing done, elapsed: {elapsed:.4f} s")
             
             if result is not None:
-                # 显示结果 (限制最大显示尺寸)
+                # Show the result (limit the maximum display size)
                 h, w = result.shape[:2]
                 max_dim = 800
                 if max(h, w) > max_dim:
@@ -219,8 +219,8 @@ if __name__ == "__main__":
                 cv2.destroyAllWindows()
                 
         except Exception as e:
-            print(f"发生错误: {e}")
+            print(f"An error occurred: {e}")
             import traceback
             traceback.print_exc()
     else:
-        print("文件夹路径不存在，请检查配置。")
+        print("The folder path does not exist, please check the configuration.")

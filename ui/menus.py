@@ -196,7 +196,7 @@ def setup_menus(window: QMainWindow) -> None:
     window.ui_objs['action_lang_zh'] = lang_zh
 
     tile_action = QAction(trans.t('action_tile_settings'), window)
-    # 打开瓦片设置对话框
+    # Open the tile settings dialog
     tile_action.triggered.connect(lambda: window.show_tile_settings())
     settings_menu.addAction(tile_action)
     window.ui_objs['action_tile_settings'] = tile_action

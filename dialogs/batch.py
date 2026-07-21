@@ -28,23 +28,23 @@ from locales import trans
 
 
 class BatchProcessingDialog(QDialog):
-    """批处理设置对话框"""
+    """Batch-processing settings dialog"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(trans.t('batch_title'))
-        self.resize(800, 800)  # 增加高度以容纳更多文件夹
+        self.resize(800, 800)  # Increase height to fit more folders
         
-        # 存储选中的文件夹路径和对应的缩略图
+        # Store the selected folder paths and their thumbnails
         self.folder_paths = []
         self.folder_thumbnails = []
         self.single_folder_stacks = []
         self.single_folder_images_with_times = []
 
-        # 获取父窗口的融合和对齐设置
+        # Get the fusion and alignment settings from the parent window
         self.parent_window = parent
         
-        # 应用深色主题
+        # Apply the dark theme
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #2b2b2b;
@@ -150,7 +150,7 @@ class BatchProcessingDialog(QDialog):
         self.init_ui()
     
     def init_ui(self):
-        """初始化UI"""
+        """Initialize the UI"""
         layout = QVBoxLayout(self)
 
         import_mode_group = QGroupBox(trans.t('batch_import_mode'))
@@ -170,22 +170,22 @@ class BatchProcessingDialog(QDialog):
         self.folder_group = QGroupBox(trans.t('batch_stack_folders'))
         folder_layout = QVBoxLayout(self.folder_group)
         
-        # 路径输入框（参考demo.py的实现）
+        # Path input box (referencing the implementation in demo.py)
         self.path_input = QLineEdit()
         self.path_input.setPlaceholderText(trans.t('batch_path_placeholder'))
         folder_layout.addWidget(self.path_input)
         
-        # 添加文件夹按钮
+        # Add-folder button
         add_folder_btn = QPushButton(trans.t('batch_btn_add'))
         add_folder_btn.clicked.connect(self.add_folders)
         folder_layout.addWidget(add_folder_btn)
         
-        # 文件夹列表
+        # Folder list
         self.folder_list = QListWidget()
         self.folder_list.setIconSize(QSize(60, 60))
         folder_layout.addWidget(self.folder_list)
         
-        # 移除文件夹按钮
+        # Remove-folder button
         remove_folder_btn = QPushButton(trans.t('batch_btn_remove'))
         remove_folder_btn.clicked.connect(self.remove_selected_folders)
         folder_layout.addWidget(remove_folder_btn)
@@ -196,7 +196,7 @@ class BatchProcessingDialog(QDialog):
         self.single_folder_group.setVisible(False)
         single_folder_layout = QVBoxLayout(self.single_folder_group)
 
-        # 显示选取的文件夹路径
+        # Show the selected folder path
         self.single_folder_path_label = QLabel(trans.t('batch_folder_none'))
         self.single_folder_path_label.setStyleSheet("color: #aaa; font-size: 12px;")
         self.single_folder_path_label.setWordWrap(True)
@@ -237,7 +237,7 @@ class BatchProcessingDialog(QDialog):
 
         layout.addWidget(self.single_folder_group)
         
-        # 保存格式选择
+        # Save-format selection
         format_group = QGroupBox(trans.t('batch_output_format'))
         format_layout = QHBoxLayout(format_group)
         
@@ -247,7 +247,7 @@ class BatchProcessingDialog(QDialog):
         self.format_combo.currentTextChanged.connect(self.on_format_changed)
         format_layout.addWidget(self.format_combo)
         
-        # JPG质量控制（默认隐藏，只有JPG时显示）
+        # JPG quality control (hidden by default, shown only for JPG)
         self.quality_label = QLabel(trans.t('batch_quality_label'))
         self.quality_slider = QSlider(Qt.Orientation.Horizontal)
         self.quality_slider.setRange(0, 100)
@@ -263,7 +263,7 @@ class BatchProcessingDialog(QDialog):
         self.quality_layout.addStretch()
         format_layout.addLayout(self.quality_layout)
         
-        # 初始隐藏质量控制（非JPG格式）
+        # Initially hide the quality control (non-JPG format)
         self.quality_label.setVisible(False)
         self.quality_slider.setVisible(False)
         self.quality_value_label.setVisible(False)
@@ -272,34 +272,34 @@ class BatchProcessingDialog(QDialog):
         
         layout.addWidget(format_group)
         
-        # 输出方式选择
+        # Output-method selection
         output_group = QGroupBox(trans.t('batch_output_location'))
         output_layout = QVBoxLayout(output_group)
         
-        # 选项1：在源文件夹中创建子文件夹
+        # Option 1: create a subfolder inside the source folder
         self.rb_subfolder = QRadioButton(trans.t('batch_out_subfolder'))
         self.rb_subfolder.setChecked(True)
         self.rb_subfolder.toggled.connect(self.on_output_option_changed)
         output_layout.addWidget(self.rb_subfolder)
         
-        # 子文件夹名称输入
+        # Subfolder-name input
         subfolder_layout = QHBoxLayout()
         subfolder_layout.addWidget(QLabel(trans.t('batch_subfolder_name')))
         self.subfolder_name = QLineEdit("OpenFocus_Output")
         subfolder_layout.addWidget(self.subfolder_name)
         output_layout.addLayout(subfolder_layout)
         
-        # 选项2：与源文件夹相同
+        # Option 2: same as the source folder
         self.rb_same_folder = QRadioButton(trans.t('batch_out_same'))
         self.rb_same_folder.toggled.connect(self.on_output_option_changed)
         output_layout.addWidget(self.rb_same_folder)
         
-        # 选项3：指定文件夹
+        # Option 3: a specified folder
         self.rb_custom_folder = QRadioButton(trans.t('batch_out_custom'))
         self.rb_custom_folder.toggled.connect(self.on_output_option_changed)
         output_layout.addWidget(self.rb_custom_folder)
         
-        # 指定文件夹路径选择
+        # Specified-folder path selection
         custom_folder_layout = QHBoxLayout()
         self.custom_folder_path = QLineEdit()
         self.custom_folder_path.setEnabled(False)
@@ -314,16 +314,16 @@ class BatchProcessingDialog(QDialog):
         
         layout.addWidget(output_group)
         
-        # 保存对齐后图像栈的选项
+        # Option to save the aligned image stack
         self.save_aligned_cb = QCheckBox(trans.t('batch_save_aligned'))
         self.save_aligned_cb.setChecked(False)
         layout.addWidget(self.save_aligned_cb)
         
-        # 处理选项信息显示（从主窗口获取）
+        # Display of processing-option info (obtained from the main window)
         info_group = QGroupBox(trans.t('batch_proc_options'))
         info_layout = QVBoxLayout(info_group)
         
-        # 获取当前选中的融合方法
+        # Get the currently selected fusion method
         fusion_method = "None"
         kernel_size_value = None
         if self.parent_window:
@@ -350,7 +350,7 @@ class BatchProcessingDialog(QDialog):
             elif rb_d and rb_d.isChecked():
                 fusion_method = trans.t('radio_stackmff')
         
-        # 获取当前选中的配准方法
+        # Get the currently selected registration method
         reg_methods = []
         if self.parent_window:
             if self.parent_window.cb_align_homography.isChecked():
@@ -371,7 +371,7 @@ class BatchProcessingDialog(QDialog):
         
         layout.addWidget(info_group)
         
-        # 按钮区域
+        # Button area
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
@@ -385,56 +385,56 @@ class BatchProcessingDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        # 初始化质量滑块显示状态（确保对话框打开时滑块正确显示）
+        # Initialize the quality-slider visibility (ensure the slider displays correctly when the dialog opens)
         self.on_format_changed(self.format_combo.currentText())
     
     def add_folders(self):
-        """添加多个文件夹（参考demo.py的实现）"""
+        """Add multiple folders (referencing the implementation in demo.py)"""
         from PyQt6.QtWidgets import QFileDialog, QListView, QTreeView, QAbstractItemView, QLineEdit
         
-        # 创建文件对话框实例
+        # Create a file-dialog instance
         dialog = QFileDialog(self, "Select Image Stack Folders (Multi-Select)")
         dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
         dialog.setFileMode(QFileDialog.FileMode.Directory)
         dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
 
-        # 多选
+        # Multiple selection
         for view_class in (QListView, QTreeView):
             view = dialog.findChild(view_class)
             if view:
                 view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
-        # ✅ 设置初始目录为输入框内容（如果是有效目录）
+        # ✅ Set the initial directory to the input-box content (if it is a valid directory)
         path = self.path_input.text().strip()
         if os.path.isdir(path):
             dialog.setDirectory(path)
 
-        # 执行对话框并获取结果
+        # Execute the dialog and get the result
         if dialog.exec():
             selected_dirs = dialog.selectedFiles()
             selected_dirs = [d for d in selected_dirs if os.path.isdir(d)]
             
-            # 处理选中的文件夹
+            # Process the selected folders
             if selected_dirs:
                 for folder_path in selected_dirs:
                     if folder_path not in self.folder_paths:
-                        # 添加到路径列表
+                        # Add to the path list
                         self.folder_paths.append(folder_path)
                         
-                        # 获取文件夹中的第一张图像作为缩略图
+                        # Use the first image in the folder as the thumbnail
                         from core.image_loader import ImageStackLoader
                         loader = ImageStackLoader()
                         success, _, images, _ = loader.load_from_folder(folder_path)
                         
                         if success and images:
-                            # 创建缩略图
+                            # Create the thumbnail
                             thumbnail = loader.create_thumbnails([images[0]], thumb_size=60)[0]
                             self.folder_thumbnails.append(thumbnail)
                         else:
-                            # 如果没有图像，使用空图标
+                            # If there is no image, use an empty icon
                             self.folder_thumbnails.append(None)
                         
-                        # 添加到列表显示
+                        # Add to the list display
                         folder_name = os.path.basename(folder_path)
                         item_text = f"{folder_name}\n{folder_path}"
                         
@@ -445,7 +445,7 @@ class BatchProcessingDialog(QDialog):
                         self.folder_list.addItem(item)
 
     def add_folder_to_list(self, folder_path: str) -> None:
-        """添加文件夹到批处理列表（用于拖入场景）"""
+        """Add a folder to the batch list (for drag-and-drop scenarios)"""
         if folder_path in self.folder_paths:
             return
 
@@ -471,7 +471,7 @@ class BatchProcessingDialog(QDialog):
         self.folder_list.addItem(item)
 
     def add_single_folder_to_list(self, folder_list):
-        """添加单个文件夹到列表"""
+        """Add a single folder to the list"""
         from PyQt6.QtWidgets import QFileDialog
         
         folder_path = QFileDialog.getExistingDirectory(
@@ -485,10 +485,10 @@ class BatchProcessingDialog(QDialog):
             folder_list.addItem(item)
     
     def add_multiple_folders_to_list(self, folder_list):
-        """添加多个文件夹到列表"""
+        """Add multiple folders to the list"""
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
         
-        # 使用循环添加多个文件夹
+        # Add multiple folders using a loop
         first_time = True
         while True:
             if first_time:
@@ -509,7 +509,7 @@ class BatchProcessingDialog(QDialog):
             else:
                 break
             
-            # 每次添加后询问是否继续
+            # Ask whether to continue after each addition
             reply = QMessageBox.question(
                 self, "Continue?", 
                 "Do you want to add more folders?", 
@@ -519,14 +519,14 @@ class BatchProcessingDialog(QDialog):
                 break
     
     def remove_selected_from_list(self, folder_list):
-        """从列表中移除选中的文件夹"""
+        """Remove the selected folder from the list"""
         selected_items = folder_list.selectedItems()
         for item in selected_items:
             row = folder_list.row(item)
             folder_list.takeItem(row)
     
     def remove_selected_folders(self):
-        """移除选中的文件夹"""
+        """Remove the selected folder"""
         selected_items = self.folder_list.selectedItems()
         if not selected_items:
             return
@@ -539,7 +539,7 @@ class BatchProcessingDialog(QDialog):
                 self.folder_thumbnails.pop(row)
     
     def on_output_option_changed(self):
-        """输出选项改变时的处理"""
+        """Handler for when the output option changes"""
         subfolder_enabled = self.rb_subfolder.isChecked()
         same_enabled = self.rb_same_folder.isChecked()
         custom_enabled = self.rb_custom_folder.isChecked()
@@ -549,7 +549,7 @@ class BatchProcessingDialog(QDialog):
         self.browse_btn.setEnabled(custom_enabled)
     
     def on_import_mode_changed(self):
-        """导入模式改变时的处理"""
+        """Handler for when the import mode changes"""
         is_multiple = self.rb_multiple_folders.isChecked()
         
         self.folder_group.setVisible(is_multiple)
@@ -557,11 +557,11 @@ class BatchProcessingDialog(QDialog):
         
         self.setFixedHeight(800)
         
-        # 初始化质量滑块显示状态
+        # Initialize the quality-slider visibility
         self.on_format_changed(self.format_combo.currentText())
     
     def on_split_method_changed(self, index):
-        """分割方式改变时的处理"""
+        """Handler for when the split method changes"""
         if index == 0:
             self.param_label.setText(trans.t('batch_images_per_stack'))
             self.param_spinbox.setRange(2, 1000)
@@ -576,14 +576,14 @@ class BatchProcessingDialog(QDialog):
         self.update_single_folder_preview()
     
     def on_format_changed(self, format_text):
-        """格式改变时的处理 - 控制质量滑块显示"""
+        """Handler for when the format changes - controls quality-slider visibility"""
         is_jpg = format_text.upper() == "JPG"
         self.quality_label.setVisible(is_jpg)
         self.quality_slider.setVisible(is_jpg)
         self.quality_value_label.setVisible(is_jpg)
     
     def update_single_folder_preview(self):
-        """更新单文件夹预览"""
+        """Update the single-folder preview"""
         if not self.single_folder_images_with_times:
             self.preview_label.setText(trans.t('batch_preview_no_folder'))
             return
@@ -602,7 +602,7 @@ class BatchProcessingDialog(QDialog):
             self.preview_label.setText(trans.t('batch_preview_fmt_time').format(len(self.single_folder_images_with_times), len(stacks), param_value))
     
     def add_single_folder(self):
-        """添加单个文件夹（自动分割）"""
+        """Add a single folder (auto-split)"""
         from PyQt6.QtWidgets import QFileDialog
         from core.image_loader import ImageStackLoader
         
@@ -628,7 +628,7 @@ class BatchProcessingDialog(QDialog):
         self.single_folder_images_with_times = images_with_times
         self.single_folder_folder_path = folder_path
 
-        # 更新路径显示
+        # Update the path display
         folder_name = os.path.basename(folder_path)
         self.single_folder_path_label.setText(f"Folder: {folder_name}")
         self.single_folder_path_label.setToolTip(folder_path)
@@ -636,13 +636,13 @@ class BatchProcessingDialog(QDialog):
         self.update_single_folder_preview()
     
     def get_import_mode(self):
-        """获取导入模式"""
+        """Get the import mode"""
         if self.rb_single_folder.isChecked():
             return "single_folder"
         return "multiple_folders"
     
     def get_split_settings(self):
-        """获取分割设置"""
+        """Get the split settings"""
         if self.rb_multiple_folders.isChecked():
             return None, None
         
@@ -654,7 +654,7 @@ class BatchProcessingDialog(QDialog):
         return "time_threshold", param_value
     
     def browse_output_folder(self):
-        """浏览输出文件夹"""
+        """Browse for the output folder"""
         from PyQt6.QtWidgets import QFileDialog
         
         folder_path = QFileDialog.getExistingDirectory(
@@ -665,7 +665,7 @@ class BatchProcessingDialog(QDialog):
             self.custom_folder_path.setText(folder_path)
     
     def get_output_settings(self):
-        """获取输出设置"""
+        """Get the output settings"""
         if self.rb_subfolder.isChecked():
             return "subfolder", self.subfolder_name.text()
         elif self.rb_same_folder.isChecked():
@@ -674,10 +674,10 @@ class BatchProcessingDialog(QDialog):
             return "custom", self.custom_folder_path.text()
     
     def get_processing_settings(self):
-        """获取处理设置"""
+        """Get the processing settings"""
         format_str = self.format_combo.currentText().lower()
         
-        # 获取融合方法设置
+        # Get the fusion-method settings
         fusion_method = None
         fusion_params = {}
         
@@ -710,7 +710,7 @@ class BatchProcessingDialog(QDialog):
             elif rb_d and rb_d.isChecked():
                 fusion_method = "stackmffv4"
         
-        # 获取配准方法设置
+        # Get the registration-method settings
         reg_methods = []
         if self.parent_window:
             if self.parent_window.cb_align_homography.isChecked():
@@ -718,7 +718,7 @@ class BatchProcessingDialog(QDialog):
             if self.parent_window.cb_align_ecc.isChecked():
                 reg_methods.append("ecc")
         
-        # 获取JPG质量设置
+        # Get the JPG quality settings
         jpg_quality = 100
         if format_str == "jpg":
             jpg_quality = self.quality_slider.value()
@@ -729,28 +729,28 @@ class BatchProcessingDialog(QDialog):
             "fusion_method": fusion_method,
             "fusion_params": fusion_params,
             "reg_methods": reg_methods,
-            "save_aligned": self.save_aligned_cb.isChecked()  # 是否保存对齐后的图像栈
+            "save_aligned": self.save_aligned_cb.isChecked()  # Whether to save the aligned image stack
         }
 
     def preload_single_folder(self, folder_path: str, scale_factor: float = 1.0) -> None:
         """
-        预加载单个文件夹（用于拖入场景）
-        自动切换到单文件夹模式、加载文件夹、设置默认划分参数
+        Preload a single folder (for drag-and-drop scenarios)
+        Automatically switch to single-folder mode, load the folder, and set default split parameters
         """
         import cv2
         from core.image_loader import ImageStackLoader
 
-        # 1. 切换到单文件夹模式
+        # 1. Switch to single-folder mode
         self.rb_single_folder.setChecked(True)
         self.on_import_mode_changed()
 
-        # 2. 设置默认划分方式：Fixed Count, 5张/组
+        # 2. Set the default split method: Fixed Count, 5 per group
         self.split_method_combo.setCurrentIndex(0)  # Fixed Count
         self.param_spinbox.setValue(5)
         self.param_unit_label.setText("images")
         self.on_split_method_changed(0)
 
-        # 3. 加载文件夹并应用缩放
+        # 3. Load the folder and apply scaling
         loader = ImageStackLoader()
         success, message, images_with_times, filenames = loader.load_images_with_timestamps(folder_path)
 
@@ -763,7 +763,7 @@ class BatchProcessingDialog(QDialog):
             )
             return
 
-        # 应用缩放
+        # Apply scaling
         if scale_factor != 1.0 and 0 < scale_factor < 1.0:
             scaled_images = []
             for path, img, ts in images_with_times:
@@ -777,20 +777,20 @@ class BatchProcessingDialog(QDialog):
 
         self.single_folder_folder_path = folder_path
 
-        # 更新路径显示
+        # Update the path display
         folder_name = os.path.basename(folder_path)
         self.single_folder_path_label.setText(f"Folder: {folder_name}")
         self.single_folder_path_label.setToolTip(folder_path)
 
-        # 4. 更新preview
+        # 4. Update the preview
         self.update_single_folder_preview()
 
     def preload_multiple_folders(self, folder_paths: list[str], scale_factor: float = 1.0) -> None:
-        """预加载多个文件夹（用于拖入场景）
+        """Preload multiple folders (for drag-and-drop scenarios)
 
         Args:
-            folder_paths: 文件夹路径列表
-            scale_factor: 缩放因子（统一应用到所有文件夹）
+            folder_paths: list of folder paths
+            scale_factor: scale factor (applied uniformly to all folders)
         """
         import cv2
         from core.image_loader import ImageStackLoader
@@ -825,7 +825,7 @@ class BatchProcessingDialog(QDialog):
             self.folder_list.addItem(item)
 
     def start_batch_processing(self):
-        """开始批处理"""
+        """Start batch processing"""
         from PyQt6.QtWidgets import QMessageBox
 
         import_mode = self.get_import_mode()
@@ -847,7 +847,7 @@ class BatchProcessingDialog(QDialog):
 
 
 class FolderImportDialog(QDialog):
-    """文件夹导入选择对话框 - 让用户选择是单组图像栈还是多组图像栈"""
+    """Folder-import selection dialog - lets the user choose between a single image stack or multiple image stacks"""
     
     def __init__(self, folder_path: str, parent=None):
         super().__init__(parent)
@@ -939,5 +939,5 @@ class FolderImportDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def is_single_stack(self) -> bool:
-        """返回 True 表示单组图像栈，False 表示多组图像栈（批处理）"""
+        """Return True for a single image stack, False for multiple image stacks (batch processing)"""
         return self.rb_single.isChecked()

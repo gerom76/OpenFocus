@@ -157,7 +157,7 @@ class TransformManager:
         window.is_images_aligned = False
         window.last_alignment_options = None
         
-        # 清空ROI对齐缓存
+        # Clear the ROI alignment cache
         window.roi_aligned_images = []
         window.roi_aligned_raw_count = 0
         window.roi_mode_active = False

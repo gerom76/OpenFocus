@@ -14,7 +14,7 @@ class MagnifierLabel(QLabel):
     leavePreview = pyqtSignal()
     roiChanged = pyqtSignal(QRectF)  # Emits normalized ROI (0-1) or base coords? Let's use base coords (pixels)
     roiDeleted = pyqtSignal()
-    roiModeExitRequested = pyqtSignal()  # 请求退出ROI模式（点击X按钮或右键）
+    roiModeExitRequested = pyqtSignal()  # Request to exit ROI mode (click X button or right-click)
 
     def __init__(self, text: Optional[str] = "", parent=None):
         super().__init__(parent)
@@ -312,7 +312,7 @@ class MagnifierLabel(QLabel):
                 if "del" in handles and handles["del"].contains(pos):
                     self._roi_rect = None
                     self._roi_state = "none"
-                    self.roiModeExitRequested.emit()  # 请求退出ROI模式
+                    self.roiModeExitRequested.emit()  # Request to exit ROI mode
                     self.update()
                     event.accept()
                     return
@@ -354,7 +354,7 @@ class MagnifierLabel(QLabel):
                 return
 
         if event.button() == Qt.MouseButton.RightButton:
-            # 在ROI模式下，右键点击非ROI区域退出ROI模式
+            # In ROI mode, right-click outside the ROI area to exit ROI mode
             if self._roi_mode:
                 pos = event.position()
                 is_inside_roi = False
@@ -369,7 +369,7 @@ class MagnifierLabel(QLabel):
                     is_inside_roi = screen_roi.contains(pos)
                 
                 if not is_inside_roi:
-                    # 右键点击非ROI区域，请求退出ROI模式
+                    # Right-click outside the ROI area, request to exit ROI mode
                     self._roi_rect = None
                     self._roi_state = "none"
                     self.roiModeExitRequested.emit()

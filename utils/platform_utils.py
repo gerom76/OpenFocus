@@ -1,5 +1,5 @@
 """
-跨平台工具模块 - 处理 Windows/macOS/Linux 兼容性
+Cross-platform utility module - handles Windows/macOS/Linux compatibility
 """
 
 import sys
@@ -8,7 +8,7 @@ import platform
 
 def get_os_type() -> str:
     """
-    获取当前操作系统类型
+    Get the current operating-system type
     
     Returns:
         'windows' | 'macos' | 'linux'
@@ -26,50 +26,50 @@ def get_os_type() -> str:
 
 def get_ui_font_family() -> str:
     """
-    获取适合当前操作系统的 UI 字体族
+    Get the UI font family suitable for the current OS
     
     Returns:
-        字体族名字符串
+        Font-family name string
     """
     os_type = get_os_type()
     
     if os_type == 'macos':
-        # macOS 系统字体
+        # macOS system font
         return '"SF Pro", "Helvetica Neue", Arial, sans-serif'
     elif os_type == 'windows':
-        # Windows 系统字体
+        # Windows system font
         return '"Segoe UI", "Microsoft YaHei", Arial, sans-serif'
     else:
-        # Linux 系统字体
+        # Linux system font
         return '"Ubuntu", "DejaVu Sans", Arial, sans-serif'
 
 
 def get_monospace_font_family() -> str:
     """
-    获取适合当前操作系统的等宽字体族
+    Get the monospace font family suitable for the current OS
     
     Returns:
-        字体族名字符串
+        Font-family name string
     """
     os_type = get_os_type()
     
     if os_type == 'macos':
-        # macOS 等宽字体
+        # macOS monospace font
         return '"SF Mono", "Monaco", "Menlo", Consolas, monospace'
     elif os_type == 'windows':
-        # Windows 等宽字体
+        # Windows monospace font
         return 'Consolas, "Courier New", monospace'
     else:
-        # Linux 等宽字体
+        # Linux monospace font
         return '"Ubuntu Mono", "DejaVu Sans Mono", Consolas, monospace'
 
 
 def get_default_font() -> str:
     """
-    获取适合当前操作系统的默认字体
+    Get the default font suitable for the current OS
     
     Returns:
-        字体名字符串
+        Font-name string
     """
     os_type = get_os_type()
     
@@ -82,21 +82,21 @@ def get_default_font() -> str:
 
 
 def is_windows() -> bool:
-    """检查是否为 Windows 系统"""
+    """Check whether the OS is Windows"""
     return get_os_type() == 'windows'
 
 
 def is_macos() -> bool:
-    """检查是否为 macOS 系统"""
+    """Check whether the OS is macOS"""
     return get_os_type() == 'macos'
 
 
 def is_linux() -> bool:
-    """检查是否为 Linux 系统"""
+    """Check whether the OS is Linux"""
     return get_os_type() == 'linux'
 
 
-# 导出常用函数
+# Export commonly used functions
 __all__ = [
     'get_os_type',
     'get_ui_font_family',

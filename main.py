@@ -67,44 +67,44 @@ class OpenFocus(QMainWindow):
         self.setWindowTitle("OpenFocus")
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         
-        # 设置窗口图标
+        # Set the window icon
         icon_path = resource_path("assets", "OpenFocus.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         
-        # 数据初始化为空
-        self.stack_images = []  # QPixmap列表
+        # Initialize data as empty
+        self.stack_images = []  # List of QPixmap
         self.current_img_index = -1
-        self.image_filenames = []  # 文件名列表
-        self.raw_images = []  # 存储原始的numpy数组图像，用于配准和融合
-        self.base_images = []  # 存储首次加载的基准尺寸图像，用于恢复和resize计算
-        self.fusion_result = None  # 存储最新的融合结果
-        self.fusion_results = []  # 存储所有融合结果的历史记录
-        self.registration_results = []  # 存储配准后的图像栈
-        self.current_result_index = -1  # 当前显示的结果图像索引
-        self.aligned_images = []  # 存储已对齐的图像栈，避免重复对齐
-        self.is_images_aligned = False  # 标记图像是否已对齐
-        self.last_alignment_options = None  # 存储上次使用的对齐选项
+        self.image_filenames = []  # List of file names
+        self.raw_images = []  # Store the original numpy-array images, used for registration and fusion
+        self.base_images = []  # Store the base-size images from the first load, used for restoring and resize calculations
+        self.fusion_result = None  # Store the latest fusion result
+        self.fusion_results = []  # Store the history of all fusion results
+        self.registration_results = []  # Store the registered image stack
+        self.current_result_index = -1  # Index of the currently displayed result image
+        self.aligned_images = []  # Store the aligned image stack to avoid re-aligning
+        self.is_images_aligned = False  # Flag indicating whether the images are aligned
+        self.last_alignment_options = None  # Store the alignment options used last time
         self.current_kernel_mode = None
         
-        # ROI模式相关属性
-        self.roi_aligned_images = []  # 存储ROI模式下对齐的图像栈
-        self.roi_alignment_worker = None  # ROI配准工作线程
-        self.roi_mode_active = False  # ROI模式是否激活
-        self.roi_aligned_raw_count = 0  # 记录对齐时原始图像的数量，用于判断是否可以复用
+        # ROI-mode-related attributes
+        self.roi_aligned_images = []  # Store the aligned image stack in ROI mode
+        self.roi_alignment_worker = None  # ROI registration worker thread
+        self.roi_mode_active = False  # Whether ROI mode is active
+        self.roi_aligned_raw_count = 0  # Record the number of original images at alignment time, used to decide whether it can be reused
 
         # Tile settings defaults
         self.tile_enabled = True
         self.tile_block_size = TILE_BLOCK_SIZE
         self.tile_overlap = TILE_OVERLAP
         self.tile_threshold = TILE_THRESHOLD
-        # Registration downscale default (用户可在 Settings -> Registration 中修改)
+        # Registration downscale default (the user can change it in Settings -> Registration)
         self.reg_downscale_width = REG_DOWNSCALE_WIDTH
         # Parallel ECC pair computation (user-configurable in Settings -> Registration)
         self.ecc_parallel = ECC_PARALLEL
-        # 全局线程数设置，默认4（可在 Settings 中修改）
+        # Global thread-count setting, default 4 (can be changed in Settings)
         self.thread_count = DEFAULT_THREAD_COUNT
-        # StackMFF V4 批量大小设置，默认2（可在 Settings 中修改）
+        # StackMFF V4 batch-size setting, default 2 (can be changed in Settings)
         self.stackmffv4_batch_size = STACKMFFV4_BATCH_SIZE
         
         self.render_manager = RenderManager(self)
@@ -116,13 +116,13 @@ class OpenFocus(QMainWindow):
         self.batch_manager = BatchManager(self)
         self.settings_manager = SettingsManager(self)
 
-        # 初始化图像加载器
+        # Initialize the image loader
         self.image_loader = ImageStackLoader()
         
-        # 启用拖放
+        # Enable drag-and-drop
         self.setAcceptDrops(True)
         
-        # 当前显示的图像索引
+        # Index of the currently displayed image
         self.current_display_index = -1
 
         self.apply_dark_theme()
@@ -154,28 +154,28 @@ class OpenFocus(QMainWindow):
     def init_ui(self):
         setup_menus(self)
 
-        # 2. 主容器
+        # 2. Main container
         main_container = QWidget()
         self.setCentralWidget(main_container)
         main_layout = QHBoxLayout(main_container)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # === 核心布局：主分割器 ===
+        # === Core layout: main splitter ===
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         
         # ---------------------------------------------------------
-        # A. 图像显示区 (左侧)
+        # A. Image display area (left)
         # ---------------------------------------------------------
         image_display_container = QWidget()
         image_display_layout = QVBoxLayout(image_display_container)
-        image_display_layout.setContentsMargins(0, 0, 0, 0) # 边缘贴合
+        image_display_layout.setContentsMargins(0, 0, 0, 0) # Flush to the edges
         image_display_layout.setSpacing(0)
 
-        # 双视图分割器 (左：源图像栈， 右：融合结果)
+        # Dual-view splitter (left: source image stack, right: fusion result)
         self.view_splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        # --- A1/A2. 图像视图面板 ---
+        # --- A1/A2. Image view panels ---
         source_panel = create_source_panel()
         self.lbl_source_img = source_panel.image_label
         self.source_control_bar = source_panel.control_bar
@@ -186,14 +186,14 @@ class OpenFocus(QMainWindow):
         # ROI Button
         self.btn_preview_roi = source_panel.roi_btn
         self.btn_preview_roi.toggled.connect(self.toggle_roi_mode)
-        # 注意：现在ROI是在右侧面板选择的，所以lbl_source_img的roiDeleted不再控制按钮状态
+        # Note: the ROI is now selected in the right panel, so lbl_source_img's roiDeleted no longer controls the button state
         # self.lbl_source_img.roiDeleted.connect(lambda: self.btn_preview_roi.setChecked(False))
 
         result_panel = create_result_panel()
         self.lbl_result_img = result_panel.image_label
         self.result_control_bar = result_panel.control_bar
         self.result_slider = result_panel.slider
-        # 连接右侧面板的ROI模式退出请求信号
+        # Connect the right panel's ROI-mode exit-request signal
         self.lbl_result_img.roiModeExitRequested.connect(self._on_roi_mode_exit_requested)
         self.lbl_result_info = result_panel.info_label
         self.result_slider.valueChanged.connect(self.update_result_view)
@@ -206,14 +206,14 @@ class OpenFocus(QMainWindow):
         self.view_splitter.addWidget(source_panel.widget)
         self.view_splitter.addWidget(result_panel.widget)
         
-        # 监听分割器移动事件，实时更新图像尺寸
+        # Listen for splitter-move events to update the image size in real time
         self.view_splitter.splitterMoved.connect(self.on_splitter_moved)
         
         image_display_layout.addWidget(self.view_splitter)
         self.main_splitter.addWidget(image_display_container)
 
         # ---------------------------------------------------------
-        # B. 右侧控制面板
+        # B. Right-side control panel
         # ---------------------------------------------------------
         right_panel_components = create_right_panel()
         self.right_panel_components = right_panel_components
@@ -248,8 +248,8 @@ class OpenFocus(QMainWindow):
 
         self._configure_fusion_method_availability()
 
-        # 确保分割器已经添加了子部件后再设置折叠属性
-        # 使用QTimer来延迟设置折叠属性，确保所有子部件都已正确添加
+        # Make sure the splitter has added its child widgets before setting the collapsible property
+        # Use a QTimer to delay setting the collapsible property, ensuring all child widgets have been added correctly
         from PyQt6.QtCore import QTimer
         
         # Timer for system status updates
@@ -274,12 +274,12 @@ class OpenFocus(QMainWindow):
 
         QTimer.singleShot(100, set_splitter_properties)
         
-        # 比例设置：左侧图像区域占据大部分空间，右侧控制面板可调整
-        self.main_splitter.setStretchFactor(0, 3)  # 左侧图像区域伸展因子为3
-        self.main_splitter.setStretchFactor(1, 1)  # 右侧控制面板伸展因子为1
+        # Ratio setting: the left image area takes most of the space, the right control panel is adjustable
+        self.main_splitter.setStretchFactor(0, 3)  # Left image area stretch factor is 3
+        self.main_splitter.setStretchFactor(1, 1)  # Right control panel stretch factor is 1
         
-        # 设置初始分割比例（可选）
-        # 获取窗口宽度并设置初始比例为 75% : 25%
+        # Set the initial split ratio (optional)
+        # Get the window width and set the initial ratio to 75% : 25%
         total_width = self.width()
         self.main_splitter.setSizes([int(total_width * 0.75), int(total_width * 0.25)])
 
@@ -401,32 +401,32 @@ class OpenFocus(QMainWindow):
         except Exception:
             self.lbl_status_gpu.setText(trans.t('status_gpu').format('Err'))
 
-    # --- 逻辑控制 ---
+    # --- Logic control ---
 
     def reset_to_default(self):
-        """重置到默认状态"""
-        # 重置渲染方法 - 默认选中方法A
+        """Reset to the default state"""
+        # Reset the render method - method A selected by default
         self.rb_a.setChecked(True)
         self.rb_b.setChecked(False)
         self.rb_c.setChecked(False)
         self.rb_gfg.setChecked(False)
         self.rb_d.setChecked(False)
         
-        # 重置配准选项 - 默认选中 ECC，不选中 Homography
+        # Reset the registration options - ECC selected by default, Homography unselected
         self.cb_align_homography.setChecked(False)
         self.cb_align_ecc.setChecked(True)
         
-        # 重置滑块值到默认值
+        # Reset the slider value to the default
         self.slider_smooth.setValue(31)
         
-        # 更新滑块可用性
+        # Update slider availability
         self.update_slider_availability()
 
-        # 重置图像显示缩放与放大镜状态
+        # Reset the image-display zoom and magnifier state
         self.lbl_source_img.reset_view()
         self.lbl_result_img.reset_view()
         
-        # 恢复空状态提示 (如果当前没有加载图像)
+        # Restore the empty-state hint (if no image is currently loaded)
         if hasattr(self, 'stack_images') and not self.stack_images:
             self.lbl_source_img.setText(trans.t('drag_hint'))
             self.lbl_source_img.setFont(QFont(get_default_font(), 16))
@@ -451,17 +451,17 @@ class OpenFocus(QMainWindow):
             self.current_display_index = index
             
             try:
-                # 获取原始图片并根据需要叠加标签
+                # Get the original image and overlay labels as needed
                 original_pixmap = self.stack_images[index]
                 display_pixmap = self.label_manager.apply_labels_to_source_pixmap(original_pixmap, index)
 
-                # 使用自定义label处理缩放和缩放重置
+                # Use a custom label to handle zooming and zoom reset
                 self.lbl_source_img.set_display_pixmap(display_pixmap)
                 
-                # 更新文字
+                # Update the text
                 self.lbl_stack_info.setText(f"{index + 1} / {len(self.stack_images)}")
                 
-                # 只有当列表选中项和当前slider不一致时才去设置列表，防止信号死循环
+                # Only set the list when the list selection and the current slider disagree, to prevent a signal loop
                 if self.file_list.currentRow() != index:
                     self.file_list.setCurrentRow(index)
             except Exception as e:
@@ -475,19 +475,19 @@ class OpenFocus(QMainWindow):
     
     
     def handle_method_selection(self, selected_button):
-        """处理融合方法选择，实现互斥但可取消"""
-        # 如果点击的是已选中的按钮，则取消选中
+        """Handle fusion-method selection, mutually exclusive but cancelable"""
+        # If the clicked button is already selected, deselect it
         if selected_button.isChecked():
-            # 取消其他按钮的选中状态
+            # Deselect the other buttons
             for btn in [self.rb_a, self.rb_b, self.rb_c, self.rb_gfg, self.rb_d]:
                 if btn != selected_button:
                     btn.setChecked(False)
-        # 如果点击时未选中，则什么也不做（已经自动取消选中）
+        # If it was not selected when clicked, do nothing (already auto-deselected)
     
-    # handle_align_exclusive 已移除，因为不再需要互斥逻辑
+    # handle_align_exclusive removed, since the mutual-exclusion logic is no longer needed
 
     def handle_kernel_slider_change(self, value):
-        """确保核大小始终为奇数，并更新显示标签"""
+        """Ensure the kernel size is always odd, and update the display label"""
         adjusted = int(value)
         if adjusted % 2 == 0:
             if adjusted >= self.slider_smooth.maximum():
@@ -501,9 +501,9 @@ class OpenFocus(QMainWindow):
         self.lbl_smooth_value.setText(str(adjusted))
 
     def update_slider_availability(self):
-        """根据选中的融合方法更新滑块的可用性和默认值"""
-        # Guided Filter/DCT: 共享 kernel 滑块
-        # DTCWT / StackMFF-V4: 不使用滑块
+        """Update slider availability and default value based on the selected fusion method"""
+        # Guided Filter/DCT: shared kernel slider
+        # DTCWT / StackMFF-V4: no slider used
 
         if self.rb_a.isChecked():
             self.smooth_widget.setEnabled(True)
@@ -519,7 +519,7 @@ class OpenFocus(QMainWindow):
             # GFG-FGF uses the initial mean/blur kernel controlled by the same slider
             self.smooth_widget.setEnabled(True)
             if self.current_kernel_mode != "gfg":
-                # GFG-FGF 默认使用 kernel=7
+                # GFG-FGF uses kernel=7 by default
                 self.slider_smooth.setValue(7)
             self.current_kernel_mode = "gfg"
         else:
@@ -527,52 +527,52 @@ class OpenFocus(QMainWindow):
             self.current_kernel_mode = None
     
     def update_result_view(self, index):
-        """更新Output区域显示的图像（用于配准结果或ROI模式下的对齐图像）"""
-        # 如果ROI模式激活，显示对齐后的图像栈
+        """Update the image shown in the Output area (for registration results or aligned images in ROI mode)"""
+        # If ROI mode is active, show the aligned image stack
         if getattr(self, 'roi_mode_active', False) and self.roi_aligned_images:
             self._display_roi_aligned_image(index)
         else:
             self.output_manager.show_registration_result(index)
     
-    # --- 文件加载功能 ---
+    # --- File-loading features ---
     
     def open_folder_dialog(self):
-        """打开文件夹选择对话框"""
+        """Open the folder-selection dialog"""
         self.source_manager.prompt_and_load_stack()
     
     def open_video_dialog(self):
-        """打开视频文件选择对话框"""
+        """Open the video-file selection dialog"""
         self.source_manager.prompt_and_load_video()
     
     def show_environment_info(self):
-        """显示环境信息对话框"""
+        """Show the environment-info dialog"""
         dialog = EnvironmentInfoDialog(self)
         dialog.exec()
     
     def display_fusion_result(self):
-        """显示融合结果到右侧预览区"""
+        """Show the fusion result in the right-side preview area"""
         self.output_manager.show_fusion_result()
     
-    # --- 拖放功能 ---
+    # --- Drag-and-drop features ---
     
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """拖动进入事件"""
+        """Drag-enter event"""
         if self.source_manager.can_accept_drag(event):
             event.acceptProposedAction()
             return
         event.ignore()
     
     def dropEvent(self, event: QDropEvent):
-        """拖放事件"""
+        """Drop event"""
         self.source_manager.handle_drop_event(event)
     
     def on_splitter_moved(self, pos, index):
-        """分割器移动时重新缩放图像"""
+        """Rescale the image when the splitter moves"""
         self.source_manager.refresh_current_source_view()
         self.output_manager.refresh_current_result_view()
     
     def resizeEvent(self, event):
-        """窗口大小改变时重新缩放图像"""
+        """Rescale the image when the window size changes"""
         super().resizeEvent(event)
         self.source_manager.refresh_current_source_view()
         self.output_manager.refresh_current_result_view()
@@ -582,7 +582,7 @@ class OpenFocus(QMainWindow):
         When enabled, first align images using ECC, then display aligned stack on result panel for ROI selection.
         """
         if enabled:
-            # 检查是否有足够的图像
+            # Check whether there are enough images
             if not self.raw_images or len(self.raw_images) < 2:
                 show_warning_box(self, trans.t("msg_warning"), trans.t("roi_need_images"))
                 self.btn_preview_roi.blockSignals(True)
@@ -590,7 +590,7 @@ class OpenFocus(QMainWindow):
                 self.btn_preview_roi.blockSignals(False)
                 return
             
-            # 检查是否可以复用已有的对齐图像
+            # Check whether the existing aligned images can be reused
             can_reuse = (
                 len(self.roi_aligned_images) > 0 and
                 len(self.roi_aligned_images) == len(self.raw_images) and
@@ -598,27 +598,27 @@ class OpenFocus(QMainWindow):
             )
             
             if can_reuse:
-                # 直接使用已有的对齐图像
+                # Use the existing aligned images directly
                 self.roi_mode_active = True
                 self._display_roi_aligned_image(0)
                 
-                # 启用滑动条
+                # Enable the slider
                 self.result_slider.setRange(0, len(self.roi_aligned_images) - 1)
                 self.result_slider.setValue(0)
                 self.result_slider.setEnabled(True)
                 self.result_control_bar.setVisible(True)
                 
-                # 启用右侧面板的ROI选择模式
+                # Enable the ROI-selection mode in the right panel
                 if hasattr(self, 'lbl_result_img'):
                     self.lbl_result_img.roi_mode = True
                 return
             
-            # 需要重新对齐，禁用按钮，显示处理中状态
+            # Re-alignment needed: disable the button and show a processing state
             self.btn_preview_roi.setEnabled(False)
             self.btn_preview_roi.setText(trans.t("roi_aligning"))
             QApplication.processEvents()
             
-            # 启动ECC配准线程
+            # Start the ECC registration thread
             self.roi_alignment_worker = ROIAlignmentWorker(
                 self.raw_images,
                 reg_downscale_width=self.reg_downscale_width,
@@ -629,11 +629,11 @@ class OpenFocus(QMainWindow):
             self.roi_alignment_worker.error_signal.connect(self._on_roi_alignment_error)
             self.roi_alignment_worker.start()
         else:
-            # 退出ROI模式
+            # Exit ROI mode
             self.roi_mode_active = False
             if hasattr(self, 'lbl_result_img'):
                 self.lbl_result_img.roi_mode = False
-            # 恢复右侧面板显示
+            # Restore the right-panel display
             if self.fusion_result is not None:
                 self.output_manager.show_fusion_result()
             elif self.registration_results:
@@ -641,34 +641,34 @@ class OpenFocus(QMainWindow):
             else:
                 self.lbl_result_img.clear()
                 self.lbl_result_img.setText(trans.t("result_hint"))
-            # 清理ROI对齐图像
+            # Clear the ROI aligned images
             self.roi_aligned_images = []
 
     def _on_roi_alignment_finished(self, aligned_images, alignment_time):
-        """ROI配准完成的回调"""
+        """Callback for when ROI registration completes"""
         self.roi_aligned_images = aligned_images
-        self.roi_aligned_raw_count = len(self.raw_images)  # 记录对齐时的原图数量
+        self.roi_aligned_raw_count = len(self.raw_images)  # Record the number of original images at alignment time
         self.roi_mode_active = True
         
-        # 恢复按钮状态
+        # Restore the button state
         self.btn_preview_roi.setEnabled(True)
         self.btn_preview_roi.setText(trans.t("btn_roi"))
         
-        # 在右侧结果面板显示对齐后的第一张图像
+        # Show the first aligned image in the right-side result panel
         if aligned_images and len(aligned_images) > 0:
             self._display_roi_aligned_image(0)
             
-            # 启用滑动条，让用户可以浏览对齐后的图像栈
+            # Enable the slider so the user can browse the aligned image stack
             self.result_slider.setRange(0, len(aligned_images) - 1)
             self.result_slider.setValue(0)
             self.result_slider.setEnabled(True)
             self.result_control_bar.setVisible(True)
             
-            # 启用右侧面板的ROI选择模式
+            # Enable the ROI-selection mode in the right panel
             if hasattr(self, 'lbl_result_img'):
                 self.lbl_result_img.roi_mode = True
                 
-            # 显示提示信息
+            # Show a hint message
             show_message_box(
                 self, 
                 trans.t("roi_ready_title"),
@@ -680,7 +680,7 @@ class OpenFocus(QMainWindow):
         self.roi_alignment_worker = None
 
     def _on_roi_alignment_error(self, error_message):
-        """ROI配准错误的回调"""
+        """Callback for a ROI registration error"""
         self.btn_preview_roi.setEnabled(True)
         self.btn_preview_roi.setText(trans.t("btn_roi"))
         self.btn_preview_roi.blockSignals(True)
@@ -697,11 +697,11 @@ class OpenFocus(QMainWindow):
         self.roi_alignment_worker = None
 
     def _display_roi_aligned_image(self, index: int):
-        """在右侧结果面板显示ROI模式下对齐后的图像"""
+        """Show the ROI-mode aligned image in the right-side result panel"""
         if not self.roi_aligned_images or index < 0 or index >= len(self.roi_aligned_images):
             return
         
-        # 保存当前ROI区域，以便在切换图像时保持ROI选择
+        # Save the current ROI region so the ROI selection is kept when switching images
         current_roi = None
         if hasattr(self, 'lbl_result_img') and self.lbl_result_img.get_roi_rect() is not None:
             current_roi = self.lbl_result_img.get_roi_rect()
@@ -717,40 +717,40 @@ class OpenFocus(QMainWindow):
             
             self.lbl_result_img.set_display_pixmap(pixmap)
             self.lbl_result_info.setText(f"{index + 1} / {len(self.roi_aligned_images)}")
-            # ROI模式下保持控制栏可见，以便用户切换图像
+            # Keep the control bar visible in ROI mode so the user can switch images
             self.result_control_bar.setVisible(True)
             
-            # 恢复之前的ROI选择区域
+            # Restore the previously selected ROI region
             if current_roi is not None:
                 self.lbl_result_img.set_roi_rect(current_roi)
         except Exception as exc:
             show_error_box(self, trans.t("msg_error"), trans.t("roi_display_failed"), str(exc))
 
     def _on_roi_mode_exit_requested(self):
-        """处理ROI模式退出请求（点击X按钮或右键点击非ROI区域）"""
+        """Handle a ROI-mode exit request (click the X button or right-click outside the ROI area)"""
         if self.roi_mode_active:
-            # 取消ROI按钮的选中状态，这会触发toggle_roi_mode(False)
+            # Deselect the ROI button, which triggers toggle_roi_mode(False)
             self.btn_preview_roi.setChecked(False)
 
     def apply_dark_theme(self):
-        # 动态替换为平台特定字体
+        # Dynamically replace with the platform-specific font
         ui_font = get_ui_font_family()
         mono_font = get_monospace_font_family()
         style_sheet = GLOBAL_DARK_STYLE.replace('"Segoe UI", "Microsoft YaHei"', ui_font).replace('Consolas, "Segoe UI", monospace', mono_font)
         self.setStyleSheet(style_sheet)
 
     def show_contact_info(self):
-        """显示联系信息"""
-        # 创建联系信息对话框
+        """Show the contact info"""
+        # Create the contact-info dialog
         dialog = ContactInfoDialog(self)
         dialog.exec()
     
     def show_batch_processing_dialog(self, preload_folder_paths: list[str] = None, scale_factor: float = 1.0):
-        """显示批处理设置对话框
+        """Show the batch-processing settings dialog
 
         Args:
-            preload_folder_paths: 可选，预加载的文件夹路径列表（用于拖入场景）
-            scale_factor: 缩放因子，用于预加载时缩放图像
+            preload_folder_paths: optional, list of folder paths to preload (for drag-and-drop scenarios)
+            scale_factor: scale factor, used to scale images during preloading
         """
         from dialogs import BatchProcessingDialog
 
@@ -790,32 +790,32 @@ class OpenFocus(QMainWindow):
                 )
 
     def show_tile_settings(self):
-        """显示 Tile 设置对话框"""
+        """Show the Tile settings dialog"""
         dialog = TileSettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # 设置已由对话框写回到 self 属性；可在此处触发必要的刷新
+            # Settings have been written back to self attributes by the dialog; trigger any necessary refresh here
             self.update_slider_availability()
-            # 如果需要，可以在右侧面板或其它地方反映设置变化
+            # If needed, reflect the setting changes in the right panel or elsewhere
             return True
         return False
 
     def show_registration_settings(self):
-        """显示配准设置对话框，允许用户修改 downscale_width"""
+        """Show the registration settings dialog, allowing the user to change downscale_width"""
         from dialogs import RegistrationSettingsDialog
         dialog = RegistrationSettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # 值已写回到 self.reg_downscale_width
+            # the value has been written back to self.reg_downscale_width
             return True
         return False
 
     def show_thread_settings(self):
-        """显示线程数设置对话框"""
+        """Show the thread-count settings dialog"""
         from dialogs import ThreadSettingsDialog
         dialog = ThreadSettingsDialog(self)
         dialog.exec()
 
     def show_stackmffv4_batch_settings(self):
-        """显示 StackMFF V4 批量大小设置对话框"""
+        """Show the StackMFF V4 batch-size settings dialog"""
         dialog = StackMFFV4BatchSettingsDialog(self)
         dialog.exec()
 

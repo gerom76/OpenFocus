@@ -201,7 +201,7 @@ class LabelManager:
 
         self.font_family_combo = QFontComboBox()
         self.font_family_combo.setEditable(True)
-        self.font_family_combo.setCurrentFont(QFont("Arial"))  # 用户可选择其他字体
+        self.font_family_combo.setCurrentFont(QFont("Arial"))  # the user can choose another font
         self.font_family_combo.setMinimumWidth(200)
         self.font_family_combo.setStyleSheet(WHITE_COMBOBOX_STYLE)
         form_layout.addRow(trans.t('label_font_family'), self.font_family_combo)

@@ -1,12 +1,12 @@
 """
-集中存放全局样式 / 公共样式，避免在 main.py 中塞入大量 QSS 字符串。
+Centralized storage of global/shared styles, to avoid stuffing large QSS strings into main.py.
 """
 
 
-# 主题颜色常量
+# Theme color constants
 PRIMARY_BLUE = "#0033A0"
 
-# 主窗口 Dark Theme 样式（原 OpenFocus.apply_dark_theme 中的字符串）
+# Main-window Dark Theme style (originally the string in OpenFocus.apply_dark_theme)
 GLOBAL_DARK_STYLE = f"""
 QMainWindow {{ background-color: #1e1e1e; }}
 QWidget {{ color: #d0d0d0; font-family: \"Segoe UI\", \"Microsoft YaHei\"; font-size: 13px; }}
@@ -16,7 +16,7 @@ QSplitter::handle {{ background-color: #111; width: 2px; }}
 QGroupBox {{ border: 1px solid #444; margin-top: 20px; font-weight: normal; }}
 QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; padding: 0 5px; color: #aaa; }}
 
-/* 菜单栏样式 */
+/* Menu bar style */
 QMenuBar {{
     background-color: #2b2b2b;
     color: #e0e0e0;
@@ -33,7 +33,7 @@ QMenuBar::item:pressed {{
     background-color: #4a4a4a;
 }}
 
-/* 下拉菜单样式 */
+/* Drop-down menu style */
 QMenu {{
     background-color: #2b2b2b;
     color: #e0e0e0;
@@ -52,7 +52,7 @@ QMenu::separator {{
     margin: 4px 0;
 }}
 
-/* 单选框样式 */
+/* Radio button style */
 QRadioButton {{
     spacing: 5px;
 }}
@@ -70,7 +70,7 @@ QRadioButton::indicator:hover {{
     border: 2px solid #aaa;
 }}
 
-/* 复选框样式 */
+/* Checkbox style */
 QCheckBox {{
     spacing: 5px;
 }}
@@ -88,7 +88,7 @@ QCheckBox::indicator:hover {{
     border: 2px solid #aaa;
 }}
 
-/* === 修复 Slider 样式 === */
+/* === Fix Slider style === */
 QSlider::groove:horizontal {{ 
     border: 1px solid #333; 
     height: 6px; 
@@ -97,37 +97,37 @@ QSlider::groove:horizontal {{
     border-radius: 3px;
 }}
 
-/* 禁用状态的 groove - 更暗的颜色 */
+/* Disabled-state groove - darker color */
 QSlider::groove:horizontal:disabled {{
     background: #1a1a2a;
     border: 1px solid #222;
 }}
 
-/* handle 的 margin 必须小心设置，否则会跑出 groove 的范围 */
+/* The handle margin must be set carefully, otherwise it will extend beyond the groove */
 QSlider::handle:horizontal {{ 
     background: #888; 
     border: 1px solid #555; 
     width: 14px; 
     height: 14px;
-    margin: -5px 0; /* 使滑块垂直居中于 groove (6px height) */
+    margin: -5px 0; /* Center the handle vertically within the groove (6px height) */
     border-radius: 7px; 
 }}
 QSlider::handle:horizontal:hover {{ background: #aaa; }}
 QSlider::handle:horizontal:pressed {{ background: #fff; }}
 
-/* 禁用状态的 handle - 灰色不可点击 */
+/* Disabled-state handle - gray, non-clickable */
 QSlider::handle:horizontal:disabled {{
     background: #444;
     border: 1px solid #333;
 }}
 
-/* 移除 sub-page 样式或者简单设置，避免遮挡 handle */
+/* Remove or simplify the sub-page style to avoid covering the handle */
 QSlider::sub-page:horizontal {{
     background: {PRIMARY_BLUE};
     border-radius: 3px;
 }}
 
-/* 禁用状态的 sub-page - 灰色 */
+/* Disabled-state sub-page - gray */
 QSlider::sub-page:horizontal:disabled {{
     background: #2a2a2a;
 }}
@@ -135,19 +135,19 @@ QSlider::sub-page:horizontal:disabled {{
 QPushButton {{ background-color: #444; border: 1px solid #222; padding: 6px; border-radius: 4px; }}
 QPushButton:hover {{ background-color: #555; }}
 
-/* 禁用状态的 QLabel - 文字变灰 */
+/* Disabled-state QLabel - text turns gray */
 QLabel:disabled {{
     color: #555;
 }}
 
-/* 禁用状态的 QWidget - 降低不透明度 */
+/* Disabled-state QWidget - reduced opacity */
 QWidget:disabled {{
     opacity: 0.5;
 }}
 """
 
 
-# 通用 MessageBox 深色样式，供 main.py 中的各类提示复用
+# Generic MessageBox dark style, reused by the various prompts in main.py
 MESSAGE_BOX_STYLE = f"""
 QMessageBox {{
     background-color: #2b2b2b;
@@ -169,7 +169,7 @@ QMessageBox QPushButton:hover {{
 }}
 """
 
-# 进度条对话框样式
+# Progress-bar dialog style
 PROGRESS_DIALOG_STYLE = f"""
 QProgressDialog {{
     background-color: #2b2b2b;
@@ -202,12 +202,12 @@ QProgressBar::chunk {{
 }}
 """
 
-# 所有类型的消息框都使用相同的样式
+# All message-box types use the same style
 WARNING_MESSAGE_BOX_STYLE = MESSAGE_BOX_STYLE
 ERROR_MESSAGE_BOX_STYLE = MESSAGE_BOX_STYLE
 SUCCESS_MESSAGE_BOX_STYLE = MESSAGE_BOX_STYLE
 
-# === 右侧 Help 按钮样式（小圆形按钮） ===
+# === Right-side Help button style (small round button) ===
 HELP_BUTTON_STYLE = f"""
 QPushButton {{
     background-color: #555;
@@ -222,7 +222,7 @@ QPushButton:hover {{
 """
 
 
-# 重置按钮样式
+# Reset button style
 RESET_BUTTON_STYLE = f"""
 QPushButton {{
     background-color: #444;
@@ -241,7 +241,7 @@ QPushButton:pressed {{
 """
 
 
-# 渲染按钮样式
+# Render button style
 RENDER_BUTTON_STYLE = f"""
 QPushButton {{
     background-color: {PRIMARY_BLUE};
@@ -260,7 +260,7 @@ QPushButton:pressed {{
 """
 
 
-# 源 / 输出列表样式
+# Source / output list style
 SOURCE_LIST_STYLE = f"""
 QListWidget {{ background-color: #333; border: 1px solid #555; }}
 QListWidget::item {{ padding: 5px; color: #ccc; }}
@@ -271,7 +271,7 @@ QListWidget::item:hover {{ background-color: #444; }}
 OUTPUT_LIST_STYLE = SOURCE_LIST_STYLE
 
 
-# Add Label 对话框整体样式
+# Overall style of the Add Label dialog
 ADD_LABEL_DIALOG_STYLE = f"""
 QDialog {{
     background-color: #2b2b2b;
@@ -405,7 +405,7 @@ QComboBox::down-arrow {{
 }}
 """
 
-# 悬停高亮按钮样式
+# Hover-highlight button style
 HOVER_HIGHLIGHT_BUTTON_STYLE = f"""
 QPushButton {{
     background-color: #444;

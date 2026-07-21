@@ -21,15 +21,15 @@ from utils import resource_path
 
 
 class DurationDialog(QDialog):
-    """GIF Duration 设置对话框（从 main.py 抽离）"""
+    """GIF Duration settings dialog (extracted from main.py)"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(trans.t("dialog_duration_title"))
         self.resize(350, 150)
-        self.duration = 500  # 默认500毫秒
+        self.duration = 500  # Default 500 ms
 
-        # 应用深色主题
+        # Apply the dark theme
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #2b2b2b;
@@ -90,19 +90,19 @@ class DurationDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # 创建组框
+        # Create the group box
         duration_group = QGroupBox(trans.t("dialog_duration_group"))
         duration_layout = QHBoxLayout()
 
-        # 标签
+        # Label
         label = QLabel(trans.t("dialog_duration_label"))
         label.setMinimumWidth(120)
 
-        # 旋转框
+        # Spin box
         self.duration_spinbox = QSpinBox()
-        self.duration_spinbox.setRange(50, 10000)  # 50ms到10秒
+        self.duration_spinbox.setRange(50, 10000)  # 50 ms to 10 s
         self.duration_spinbox.setValue(self.duration)
-        self.duration_spinbox.setSingleStep(50)  # 每次增加50ms
+        self.duration_spinbox.setSingleStep(50)  # Increase by 50 ms per step
         self.duration_spinbox.setSuffix(" ms")
         self.duration_spinbox.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
         self.duration_spinbox.setMinimumHeight(30)
@@ -112,7 +112,7 @@ class DurationDialog(QDialog):
         duration_layout.addWidget(self.duration_spinbox)
         duration_group.setLayout(duration_layout)
 
-        # 按钮布局
+        # Button layout
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
@@ -130,12 +130,12 @@ class DurationDialog(QDialog):
         layout.addLayout(button_layout)
 
     def get_duration(self):
-        """返回用户设置的duration值（毫秒）"""
+        """Return the duration value set by the user (milliseconds)"""
         return self.duration_spinbox.value()
 
 
 class DownsampleDialog(QDialog):
-    """下采样设置对话框"""
+    """Downsampling settings dialog"""
 
     def __init__(self, parent=None, initial_scale=1.0):
         super().__init__(parent)
@@ -143,7 +143,7 @@ class DownsampleDialog(QDialog):
         self.resize(400, 150)
         self.scale_percent = int(initial_scale * 100)
 
-        # 应用深色主题
+        # Apply the dark theme
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #2b2b2b;
@@ -198,23 +198,23 @@ class DownsampleDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # 说明文字
+        # Description text
         info_label = QLabel(trans.t('ds_label'))
         layout.addWidget(info_label)
 
-        # 控件布局
+        # Widget layout
         controls_layout = QHBoxLayout()
 
-        # 减小按钮
+        # Decrease button
         self.decrease_btn = QPushButton("-")
         self.decrease_btn.setFixedSize(30, 30)
         self.decrease_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.decrease_btn.setAutoRepeat(True)  # 启用长按重复
-        self.decrease_btn.setAutoRepeatDelay(300)  # 长按延迟
-        self.decrease_btn.setAutoRepeatInterval(50)  # 重复间隔
+        self.decrease_btn.setAutoRepeat(True)  # Enable long-press repeat
+        self.decrease_btn.setAutoRepeatDelay(300)  # Long-press delay
+        self.decrease_btn.setAutoRepeatInterval(50)  # Repeat interval
         self.decrease_btn.clicked.connect(lambda: self.slider.setValue(self.slider.value() - 1))
         
-        # 小按钮样式
+        # Small button style
         btn_style = """
             QPushButton {
                 background-color: #444;
@@ -234,32 +234,32 @@ class DownsampleDialog(QDialog):
         """
         self.decrease_btn.setStyleSheet(btn_style)
 
-        # 滑块
+        # Slider
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(1, 100)
         self.slider.setValue(self.scale_percent)
         self.slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.slider.setTickInterval(10)
 
-        # 增大按钮
+        # Increase button
         self.increase_btn = QPushButton("+")
         self.increase_btn.setFixedSize(30, 30)
         self.increase_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.increase_btn.setAutoRepeat(True)  # 启用长按重复
-        self.increase_btn.setAutoRepeatDelay(300)  # 长按延迟
-        self.increase_btn.setAutoRepeatInterval(50)  # 重复间隔
+        self.increase_btn.setAutoRepeat(True)  # Enable long-press repeat
+        self.increase_btn.setAutoRepeatDelay(300)  # Long-press delay
+        self.increase_btn.setAutoRepeatInterval(50)  # Repeat interval
         self.increase_btn.clicked.connect(lambda: self.slider.setValue(self.slider.value() + 1))
         self.increase_btn.setStyleSheet(btn_style)
 
-        # 旋转框
+        # Spin box
         self.spinbox = QSpinBox()
-        self.spinbox.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)  # 隐藏自带按钮
+        self.spinbox.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)  # Hide the built-in buttons
         self.spinbox.setRange(1, 100)
         self.spinbox.setValue(self.scale_percent)
         self.spinbox.setSuffix("%")
         self.spinbox.setFixedWidth(60)
 
-        # 连接信号
+        # Connect signals
         self.slider.valueChanged.connect(self.spinbox.setValue)
         self.spinbox.valueChanged.connect(self.slider.setValue)
 
@@ -269,13 +269,13 @@ class DownsampleDialog(QDialog):
         controls_layout.addWidget(self.spinbox)
         layout.addLayout(controls_layout)
 
-        # 提示信息
+        # Hint text
         hint_label = QLabel(trans.t('ds_hint'))
         hint_label.setStyleSheet("color: #aaa; font-size: 11px; font-style: italic;")
         hint_label.setWordWrap(True)
         layout.addWidget(hint_label)
 
-        # 按钮布局
+        # Button layout
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
@@ -292,12 +292,12 @@ class DownsampleDialog(QDialog):
         layout.addLayout(button_layout)
 
     def get_scale_factor(self):
-        """返回缩放因子 (0.0 - 1.0)"""
+        """Return the scale factor (0.0 - 1.0)"""
         return self.slider.value() / 100.0
 
 
 class TileSettingsDialog(QDialog):
-    """用于用户自定义 Tile 设置的对话框"""
+    """Dialog for user-customized Tile settings"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -305,7 +305,7 @@ class TileSettingsDialog(QDialog):
         self.setWindowTitle(trans.t("dialog_tile_title"))
         self.resize(420, 260)
 
-        # 应用与其他对话框一致的深色样式
+        # Apply the dark style consistent with the other dialogs
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #2b2b2b;
@@ -362,7 +362,7 @@ class TileSettingsDialog(QDialog):
         self.spin_block.setRange(64, 16384)
         self.spin_block.setSingleStep(1)
         self.spin_block.setValue(1024)
-        # 移除右侧的增减按钮以便用户直接输入或使用键盘/滑块调整
+        # Remove the spin buttons on the right so the user can type directly or adjust with the keyboard/slider
         self.spin_block.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         block_layout.addWidget(self.spin_block)
         block_layout.addStretch()
@@ -375,7 +375,7 @@ class TileSettingsDialog(QDialog):
         self.spin_overlap.setRange(0, 4096)
         self.spin_overlap.setSingleStep(1)
         self.spin_overlap.setValue(256)
-        # 移除右侧的增减按钮
+        # Remove the spin buttons on the right
         self.spin_overlap.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         overlap_layout.addWidget(self.spin_overlap)
         overlap_layout.addStretch()
@@ -388,7 +388,7 @@ class TileSettingsDialog(QDialog):
         self.spin_threshold.setRange(256, 131072)
         self.spin_threshold.setSingleStep(1)
         self.spin_threshold.setValue(2048)
-        # 移除右侧的增减按钮
+        # Remove the spin buttons on the right
         self.spin_threshold.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         threshold_layout.addWidget(self.spin_threshold)
         threshold_layout.addStretch()

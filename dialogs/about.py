@@ -17,14 +17,14 @@ from ui.styles import PRIMARY_BLUE
 
 
 class EnvironmentInfoDialog(QDialog):
-    """环境信息对话框（从 main.py 抽离）"""
+    """Environment-info dialog (extracted from main.py)"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(trans.t('dialog_env_title'))
         self.resize(600, 500)
 
-        # 应用深色主题
+        # Apply the dark theme
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #1e1e1e;
@@ -56,39 +56,39 @@ class EnvironmentInfoDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # 标题
+        # Title
         title = QLabel(trans.t('env_subtitle'))
         title.setFont(QFont("Arial", 14, QFont.Weight.Normal))  # System UI font
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        # 信息显示区
+        # Info display area
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setFont(QFont("Consolas", 10))
         layout.addWidget(self.text_edit)
 
-        # 关闭按钮
+        # Close button
         close_btn = QPushButton(trans.t('btn_close'))
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
-        # 检测环境
+        # Detect the environment
         self.check_environment()
 
     def check_environment(self):
-        """检测环境依赖"""
+        """Detect environment dependencies"""
         info_lines = []
         info_lines.append("=" * 60)
         info_lines.append(trans.t('env_subtitle') if trans.current_lang == 'en' else "OpenFocus Environment Check")
         info_lines.append("=" * 60)
         info_lines.append("")
 
-        # Python 版本
+        # Python version
         info_lines.append(f"{trans.t('env_python')}: {sys.version}")
         info_lines.append("")
 
-        # 检测 OpenCV
+        # Detect OpenCV
         info_lines.append("-" * 60)
         info_lines.append("OpenCV (cv2)")
         try:
@@ -99,7 +99,7 @@ class EnvironmentInfoDialog(QDialog):
             info_lines.append(f"  ✗ {trans.t('env_not_installed')}")
         info_lines.append("")
 
-        # 检测 NumPy
+        # Detect NumPy
         info_lines.append("-" * 60)
         info_lines.append("NumPy")
         try:
@@ -110,7 +110,7 @@ class EnvironmentInfoDialog(QDialog):
             info_lines.append(f"  ✗ {trans.t('env_not_installed')}")
         info_lines.append("")
 
-        # 检测 PyQt6
+        # Detect PyQt6
         info_lines.append("-" * 60)
         info_lines.append("PyQt6")
         try:
@@ -121,7 +121,7 @@ class EnvironmentInfoDialog(QDialog):
             info_lines.append(f"  ✗ {trans.t('env_not_installed')}")
         info_lines.append("")
 
-        # 检测 PyTorch (StackMFF-V4)
+        # Detect PyTorch (StackMFF-V4)
         info_lines.append("-" * 60)
         info_lines.append("PyTorch (Required for StackMFF-V4)")
         try:
@@ -143,7 +143,7 @@ class EnvironmentInfoDialog(QDialog):
             info_lines.append(f"  ✗ {trans.t('env_stackmff_unavailable')}")
         info_lines.append("")
 
-        # 检测 DTCWT
+        # Detect DTCWT
         info_lines.append("-" * 60)
         info_lines.append("DTCWT (Dual-Tree Complex Wavelet Transform)")
         try:
@@ -154,7 +154,7 @@ class EnvironmentInfoDialog(QDialog):
             info_lines.append(f"  ✗ {trans.t('env_dtcwt_unavailable')}")
         info_lines.append("")
 
-        # 总结
+        # Summary
         info_lines.append("=" * 60)
         info_lines.append(trans.t('env_summary'))
         info_lines.append("=" * 60)
@@ -168,12 +168,12 @@ class EnvironmentInfoDialog(QDialog):
         info_lines.append(f"  {trans.t('env_fusion_desc')}")
         info_lines.append("")
 
-        # 显示信息
+        # Show the information
         self.text_edit.setPlainText("\n".join(info_lines))
 
 
 class ContactInfoDialog(QDialog):
-    """联系信息对话框"""
+    """Contact-info dialog"""
 
     def __init__(self, parent=None):
         contact_text = f"""
@@ -189,7 +189,7 @@ class ContactInfoDialog(QDialog):
         self.setWindowTitle(trans.t('dialog_contact_title'))
         self.resize(500, 400)
 
-        # 应用深色主题
+        # Apply the dark theme
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: #1e1e1e;
@@ -223,19 +223,19 @@ class ContactInfoDialog(QDialog):
         from PyQt6.QtWidgets import QTextBrowser
         from PyQt6.QtGui import QTextOption
 
-        # 创建可滚动的文本浏览器
+        # Create a scrollable text browser
         self.text_browser = QTextBrowser()
         self.text_browser.setHtml(contact_text)
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         layout.addWidget(self.text_browser)
 
-        # 关闭按钮
+        # Close button
         close_btn = QPushButton(trans.t('btn_close'))
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
-        # 居中显示
+        # Center on screen
         if parent:
             self.move(
                 parent.x() + parent.width() // 2 - self.width() // 2,

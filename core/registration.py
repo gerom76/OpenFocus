@@ -1,20 +1,20 @@
 """
-图像序列配准统一接口
+Unified interface for image-sequence registration
 
-提供三种配准方法的统一调用接口:
-1. Homography (单应性对齐)
-2. ECC (ECC对齐)
-3. Both (组合配准: Homography + ECC)
+Provides a unified calling interface for three registration methods:
+1. Homography (homography alignment)
+2. ECC (ECC alignment)
+3. Both (combined registration: Homography + ECC)
 
-所有算法实现都包含在此脚本中，无需外部依赖
+All algorithm implementations are contained in this script, with no external dependencies
 
-# 只进行单应性对齐
+# Homography alignment only
 python Registration.py --mode homography
 
-# 只进行ECC配准
+# ECC registration only
 python Registration.py --mode ecc
 
-# 组合配准（homography + ecc）
+# Combined registration (homography + ecc)
 python Registration.py --mode both
 
 """
@@ -36,7 +36,7 @@ if sys.stdout is not None and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 
-# # ========== 缩放对齐算法实现（线性） ==========
+# # ========== Scale-alignment algorithm implementation (linear) ==========
 
 
 
@@ -141,83 +141,83 @@ if sys.stdout is not None and hasattr(sys.stdout, "buffer"):
 #     return aligned_images
 
 
-# ========== 基于变换矩阵的精确裁切函数 ==========
+# ========== Precise cropping function based on transform matrices ==========
 
 def _compute_valid_region_from_transforms(H_matrices, img_shape, margin=2):
     """
-    通过变换矩阵计算所有图像的公共有效区域
+    Compute the common valid region of all images via the transform matrices
     
     Args:
-        H_matrices: 变换矩阵列表 (3x3)
-        img_shape: 图像尺寸 (h, w)
-        margin: 安全边距，用于处理透视变形导致的边缘不精确问题
+        H_matrices: list of transform matrices (3x3)
+        img_shape: image size (h, w)
+        margin: safety margin, used to handle edge inaccuracy caused by perspective distortion
     
     Returns:
-        (top, bottom, left, right): 公共有效区域的边界
+        (top, bottom, left, right): bounds of the common valid region
     """
     h, w = img_shape
     
-    # 图像四个角点
+    # The four corner points of the image
     corners = np.array([
         [0, 0, 1],
         [w, 0, 1],
         [w, h, 1],
         [0, h, 1]
-    ], dtype=np.float32).T  # 3x4 矩阵
+    ], dtype=np.float32).T  # 3x4 matrix
     
-    # 初始化有效区域为整个图像
+    # Initialize the valid region as the whole image
     top, bottom, left, right = 0.0, float(h), 0.0, float(w)
     
     for H in H_matrices:
         if H is None:
             continue
         
-        # 变换角点
+        # Transform the corner points
         transformed = H @ corners  # 3x4
-        # 齐次坐标转换
+        # Homogeneous-coordinate conversion
         w_coords = transformed[2:3, :]
-        # 防止除以零
+        # Prevent division by zero
         w_coords = np.where(np.abs(w_coords) < 1e-10, 1e-10, w_coords)
         transformed = transformed[:2, :] / w_coords  # 2x4
         
         x_coords = transformed[0, :]
         y_coords = transformed[1, :]
         
-        # 对于透视变换，我们需要考虑四边形的每条边
-        # 上边：连接左上和右上角，找最大y值（要裁切的区域）
-        # 下边：连接左下和右下角，找最小y值
-        # 左边：连接左上和左下角，找最大x值
-        # 右边：连接右上和右下角，找最小x值
+        # For perspective transforms, we need to consider each edge of the quadrilateral
+        # Top edge: connect the top-left and top-right corners, find the max y value (the region to crop)
+        # Bottom edge: connect the bottom-left and bottom-right corners, find the min y value
+        # Left edge: connect the top-left and bottom-left corners, find the max x value
+        # Right edge: connect the top-right and bottom-right corners, find the min x value
         
-        # 角点索引: 0=左上, 1=右上, 2=右下, 3=左下
-        # 上边的有效y：max(y_左上, y_右上)
+        # Corner indices: 0=top-left, 1=top-right, 2=bottom-right, 3=bottom-left
+        # Valid y for the top edge: max(y_top-left, y_top-right)
         valid_top_edge = max(y_coords[0], y_coords[1])
-        # 下边的有效y：min(y_左下, y_右下)
+        # Valid y for the bottom edge: min(y_bottom-left, y_bottom-right)
         valid_bottom_edge = min(y_coords[2], y_coords[3])
-        # 左边的有效x：max(x_左上, x_左下)
+        # Valid x for the left edge: max(x_top-left, x_bottom-left)
         valid_left_edge = max(x_coords[0], x_coords[3])
-        # 右边的有效x：min(x_右上, x_右下)
+        # Valid x for the right edge: min(x_top-right, x_bottom-right)
         valid_right_edge = min(x_coords[1], x_coords[2])
         
-        # 与画布边界取交集
+        # Intersect with the canvas bounds
         valid_left_edge = max(0, valid_left_edge)
         valid_right_edge = min(w, valid_right_edge)
         valid_top_edge = max(0, valid_top_edge)
         valid_bottom_edge = min(h, valid_bottom_edge)
         
-        # 更新公共有效区域（所有图像的交集）
+        # Update the common valid region (intersection of all images)
         left = max(left, valid_left_edge)
         right = min(right, valid_right_edge)
         top = max(top, valid_top_edge)
         bottom = min(bottom, valid_bottom_edge)
     
-    # 添加安全边距
+    # Add the safety margin
     top += margin
     bottom -= margin
     left += margin
     right -= margin
     
-    # 转换为整数，向内取整以确保安全
+    # Convert to integers, rounding inward to stay safe
     top = int(np.ceil(top))
     bottom = int(np.floor(bottom))
     left = int(np.ceil(left))
@@ -228,14 +228,14 @@ def _compute_valid_region_from_transforms(H_matrices, img_shape, margin=2):
 
 def _crop_with_transforms(images, H_matrices):
     """
-    基于变换矩阵精确裁切图像
+    Precisely crop the image based on the transform matrices
     
     Args:
-        images: 图像列表
-        H_matrices: 变换矩阵列表
+        images: list of images
+        H_matrices: list of transform matrices
     
     Returns:
-        裁切后的图像列表
+        list of cropped images
     """
     if not images or len(images) == 0:
         return images
@@ -243,12 +243,12 @@ def _crop_with_transforms(images, H_matrices):
     h, w = images[0].shape[:2]
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h, w))
     
-    # 确保裁切区域有效
+    # Ensure the crop region is valid
     if top >= bottom or left >= right:
         print("Warning: Invalid crop region, returning original images.")
         return images
     
-    # 裁切所有图像
+    # Crop all images
     cropped_images = []
     for img in images:
         cropped = img[top:bottom, left:right].copy()
@@ -259,32 +259,32 @@ def _crop_with_transforms(images, H_matrices):
     return cropped_images
 
 
-# ========== 单应性对齐算法实现（非线性） ==========
+# ========== Homography alignment algorithm implementation (non-linear) ==========
 
 def _align_homography_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4):
     """
-    商业级图像对齐算法优化版
-    特性：
-    1. 传递对齐 (Sequential Alignment)：解决大景深下的特征丢失问题
-    2. 金字塔加速 (Downscale Processing)：大幅提升特征检测速度
-    3. 矩阵累积 (Matrix Chaining)：减少累积误差
-    4. Lanczos插值：保证画质清晰度
-    5. 并行计算优化 (Parallel Processing)：利用多核加速特征提取和图像变换
+    Optimized commercial-grade image-alignment algorithm
+    Features:
+    1. Sequential Alignment: solves feature loss under large depth of field
+    2. Pyramid speedup (Downscale Processing): greatly improves feature-detection speed
+    3. Matrix Chaining: reduces accumulated error
+    4. Lanczos interpolation: preserves image sharpness
+    5. Parallel computation optimization (Parallel Processing): uses multiple cores to speed up feature extraction and image warping
     """
     import concurrent.futures
 
-    # --- 1. 数据加载与预处理 ---
+    # --- 1. Data loading and preprocessing ---
     if img_filenames is None and isinstance(input_source, str):
         num_pattern = re.compile(r"\d+")
-        # 支持常见格式，过滤非图片
+        # Support common formats, filter out non-images
         valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
         img_paths = sorted(
             (os.path.join(input_source, f) for f in os.listdir(input_source)
              if os.path.splitext(f)[1].lower() in valid_exts),
             key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
         )
-        # 注意：这里为了内存考虑，商业软件通常不会一次性读入所有大图
-        # 但为了保持接口一致，这里先全部读入。更好的做法是建立生成器。
+        # Note: for memory reasons, commercial software usually does not read all large images at once
+        # But to keep the interface consistent, we read them all in here. A better approach would be to build a generator.
         images = [cv2.imread(path) for path in img_paths]
         img_filenames = [os.path.basename(path) for path in img_paths]
     else:
@@ -294,45 +294,45 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
     if num_images < 2:
         return images
 
-    # --- 初始化 ---
+    # --- Initialization ---
     h_orig, w_orig = images[0].shape[:2]
-    # 如果单张图像过大（任一边 >= 2048），强制将用于下采样的目标宽度设为 1024
+    # If a single image is too large (any side >= 2048), force the target width used for downsampling to 1024
     max_dim = max(h_orig, w_orig)
     if max_dim >= 2048:
         try:
-            # 记录之前的值以便调试
+            # Record the previous value for debugging
             prev_down = downscale_width
         except NameError:
             prev_down = None
         downscale_width = 1024
         print(f"[Registration] Large image detected ({h_orig}x{w_orig}), setting downscale_width {prev_down} -> {downscale_width}")
     
-    # 全局累积矩阵 (用于将当前帧直接映射回第0帧)
+    # Global accumulated matrix (used to map the current frame directly back to frame 0)
     H_global = np.eye(3, dtype=np.float32)
     
-    # 收集所有变换矩阵用于精确裁切
-    H_matrices = [np.eye(3, dtype=np.float32)]  # 第一张是基准，单位矩阵
+    # Collect all transform matrices for precise cropping
+    H_matrices = [np.eye(3, dtype=np.float32)]  # The first image is the reference, identity matrix
 
     print(f"Aligning {num_images} images using Sequential Homography (Parallel Optimized)...")
 
-    # --- 2. 并行特征提取 ---
+    # --- 2. Parallel feature extraction ---
     print("  - Step 1/3: Extracting features concurrently...")
 
     def get_features_task(img):
-        # 在线程中创建独立的检测器，确保线程安全
+        # Create an independent detector in each thread to ensure thread safety
         local_detector = cv2.SIFT_create()
         h, w = img.shape[:2]
         scale = downscale_width / float(w) if w > downscale_width else 1.0
         if scale < 1.0:
-            # 使用 INTER_LINEAR 速度更快，对于特征检测通常足够
+            # INTER_LINEAR is faster and usually good enough for feature detection
             img_small = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
         else:
             img_small = img
         kps, des = local_detector.detectAndCompute(img_small, None)
         return kps, des, scale
 
-    # 使用线程池并行提取特征
-    # OpenCV 的大部分操作释放 GIL，因此多线程可以有效加速
+    # Use a thread pool to extract features in parallel
+    # Most OpenCV operations release the GIL, so multithreading can effectively speed things up
     try:
         max_workers = max(1, int(thread_count))
     except Exception:
@@ -341,24 +341,24 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         features_list = list(executor.map(get_features_task, images))
 
-    # --- 3. 序列矩阵计算 (必须串行) ---
+    # --- 3. Sequential matrix computation (must be serial) ---
     print("  - Step 2/3: Calculating transform matrices...")
     
     bf = cv2.BFMatcher(cv2.NORM_L2)
     
-    # 获取第一帧特征
+    # Get the features of the first frame
     last_kps, last_des, last_scale = features_list[0]
 
     for idx in range(1, num_images):
         curr_kps, curr_des, curr_scale = features_list[idx]
 
-        # 异常处理：特征不足
+        # Exception handling: insufficient features
         if curr_des is None or len(curr_kps) < 4 or last_des is None:
             print(f"Warning: Frame {idx} features insufficient. Keeping original position.")
             H_matrices.append(H_global.copy())
             continue
 
-        # 特征匹配 (Current vs Last)
+        # Feature matching (Current vs Last)
         matches = bf.knnMatch(curr_des, last_des, k=2)
 
         good_matches = []
@@ -373,30 +373,30 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
             H_matrices.append(H_global.copy())
             continue
 
-        # 提取坐标
+        # Extract coordinates
         pts_curr = np.float32([curr_kps[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2) / curr_scale
         pts_last = np.float32([last_kps[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2) / last_scale
 
-        # RANSAC 计算单应性矩阵
+        # Compute the homography matrix with RANSAC
         H_local, mask = cv2.findHomography(pts_curr, pts_last, cv2.RANSAC, 5.0)
 
         if H_local is None:
             print(f"Frame {idx} alignment failed.")
             H_local = np.eye(3)
 
-        # 矩阵链乘
+        # Matrix chain multiplication
         H_global = np.matmul(H_global, H_local)
         H_matrices.append(H_global.copy())
 
-        # 更新引用
+        # Update the reference
         last_kps = curr_kps
         last_des = curr_des
         last_scale = curr_scale
 
-    # --- 4. 并行应用变换与裁切 ---
+    # --- 4. Apply transforms and crop in parallel ---
     print("  - Step 3/3: Warping images concurrently...")
     
-    # 预先计算裁切区域，直接变换到目标区域，避免先变换后裁切的浪费
+    # Precompute the crop region and warp directly into the target region, avoiding the waste of warping first and cropping later
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
     
     do_crop = True
@@ -412,12 +412,12 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         offset_y = -top
         print(f"    Optimized: Warping directly to cropped region ({target_w}x{target_h})...")
 
-    # 构造裁切平移矩阵
+    # Build the crop translation matrix
     T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
 
     def warp_task(args):
         img, H = args
-        # 合并裁切变换
+        # Merge the crop transform
         if do_crop:
             H_final = T_crop @ H
         else:
@@ -426,13 +426,13 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         return cv2.warpPerspective(img, H_final, (target_w, target_h), 
                                  flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT)
 
-    # 准备参数
+    # Prepare the parameters
     warp_args = zip(images, H_matrices)
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         aligned_images = list(executor.map(warp_task, warp_args))
 
-    # 如果有输出路径，保存图像
+    # If an output path is provided, save the image
     if output_path:
         os.makedirs(output_path, exist_ok=True)
         print("  - Saving results...")
@@ -443,19 +443,19 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
     return aligned_images
 
 
-# ========== ECC对齐算法实现（高精度） ==========
+# ========== ECC alignment algorithm implementation (high precision) ==========
 
 def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscale_width=1000, thread_count: int = 4,
                     parallel_ecc: bool = True):
     """
-    基于 ECC (增强相关系数) 的高精度图像栈对齐算法
-    适用于：显微摄影、微距摄影中伴随呼吸效应的图像栈
-    优势：亚像素精度，自动处理缩放中心偏移，不依赖特征点
-    优化：并行预处理、并行变换、合并裁切操作
+    High-precision image-stack alignment algorithm based on ECC (Enhanced Correlation Coefficient)
+    Suitable for: image stacks with focus-breathing in microscopy and macro photography
+    Advantages: sub-pixel precision, automatically handles scaling-center offset, does not rely on feature points
+    Optimizations: parallel preprocessing, parallel warping, merged cropping operation
     """
     import concurrent.futures
 
-    # --- 1. 数据加载 ---
+    # --- 1. Data loading ---
     if img_filenames is None and isinstance(input_source, str):
         num_pattern = re.compile(r"\d+")
         img_paths = sorted(
@@ -471,9 +471,9 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
     if len(images) < 2:
         return images
 
-    # --- 2. 初始化 ---
+    # --- 2. Initialization ---
     h_orig, w_orig = images[0].shape[:2]
-    # 如果单张图像过大（任一边 >= 2048），强制将用于下采样的目标宽度设为 1024
+    # If a single image is too large (any side >= 2048), force the target width used for downsampling to 1024
     max_dim = max(h_orig, w_orig)
     if max_dim >= 2048:
         try:
@@ -483,28 +483,28 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         downscale_width = 1024
         print(f"[Registration][ECC] Large image detected ({h_orig}x{w_orig}), setting downscale_width {prev_down} -> {downscale_width}")
     
-    # 全局变换矩阵 (3x3 单位矩阵)
+    # Global transform matrix (3x3 identity matrix)
     H_global = np.eye(3, dtype=np.float32)
     
-    # 收集所有变换矩阵用于精确裁切
-    H_matrices = [np.eye(3, dtype=np.float32)]  # 第一张是基准
+    # Collect all transform matrices for precise cropping
+    H_matrices = [np.eye(3, dtype=np.float32)]  # The first image is the reference
     
-    # 定义 ECC 变换类型
+    # Define the ECC transform type
     warp_mode = cv2.MOTION_HOMOGRAPHY 
     
-    # ECC 终止条件
+    # ECC termination criteria
     number_of_iterations = 50
     termination_eps = 1e-4
     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, number_of_iterations, termination_eps)
 
-    # 预处理函数：转灰度 + 降采样 + 高斯模糊
+    # Preprocessing function: to grayscale + downsampling + Gaussian blur
     def preprocess(img):
         h, w = img.shape[:2]
         scale = downscale_width / float(w) if w > downscale_width else 1.0
         if scale < 1.0:
             small_img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         else:
-            small_img = img # 引用即可，无需拷贝
+            small_img = img # just reference, no copy needed
         
         gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -512,7 +512,7 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
 
     print(f"Aligning {len(images)} images using ECC (Parallel Optimized)...")
 
-    # --- 3. 并行预处理 ---
+    # --- 3. Parallel preprocessing ---
     # print("  - Step 1/3: Preprocessing images concurrently...")
     try:
         max_workers = max(1, int(thread_count))
@@ -520,13 +520,13 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         max_workers = min(8, os.cpu_count() or 1)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # map 保证结果顺序与输入一致
+        # map guarantees the result order matches the input
         preprocessed_data = list(executor.map(preprocess, images))
 
     # All images share the same width, so the first image's scale applies to all pairs
     _, scale_factor = preprocessed_data[0]
 
-    # 预先创建输出目录
+    # Create the output directory in advance
     if output_path:
         os.makedirs(output_path, exist_ok=True)
 
@@ -594,10 +594,10 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         H_inv = np.linalg.inv(H_global)
         H_matrices.append(H_inv.copy())
 
-    # --- 5. 并行应用变换与裁切 ---
+    # --- 5. Apply transforms and crop in parallel ---
     # print("  - Step 3/3: Warping and saving concurrently...")
 
-    # 计算公共有效区域
+    # Compute the common valid region
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
     
     do_crop = True
@@ -613,10 +613,10 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         offset_y = -top
         # print(f"    Optimized: Warping directly to cropped region ({target_w}x{target_h})...")
 
-    # 构造裁切平移矩阵
+    # Build the crop translation matrix
     T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
 
-    # 尝试导入 cupy
+    # Try to import cupy
     try:
         import cupy as cp
         import cupyx.scipy.ndimage
@@ -629,55 +629,55 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
     def warp_task(args):
         idx, img, H = args
         
-        # 合并裁切变换：先变换 H，再平移 T_crop
+        # Merge the crop transform: first apply H, then translate by T_crop
         if do_crop:
             H_final = T_crop @ H
         else:
             H_final = H
             
-        # 如果有 Cupy，使用 GPU 加速
+        # If Cupy is available, use GPU acceleration
         if HAS_CUPY:
-            # 将图像传输到 GPU
+            # Transfer the image to the GPU
             img_gpu = cp.asarray(img)
             
-            # Cupy 的 affine_transform 需要逆变换矩阵
-            # cv2.warpPerspective 使用的是 H_final (前向映射矩阵的逆，即从目标到源)
-            # 但 ndimage.affine_transform 也需要从输出坐标映射回输入坐标的矩阵
-            # 注意：ndimage.affine_transform 对矩阵的定义可能与 OpenCV 不同
+            # Cupy's affine_transform requires the inverse transform matrix
+            # cv2.warpPerspective uses H_final (the inverse of the forward mapping matrix, i.e. from destination to source)
+            # but ndimage.affine_transform also needs a matrix mapping from output coordinates back to input coordinates
+            # Note: ndimage.affine_transform may define the matrix differently from OpenCV
             # OpenCV: dst(x,y) = src(M * [x,y,1])
             # ndimage: output[i, j] = input[matrix @ [i,j] + offset]
             
-            # 对于透视变换 (Homography)，affine_transform 不够用，因为它只支持仿射
-            # 我们需要手动构建坐标网格并使用 map_coordinates
+            # For perspective transforms (Homography), affine_transform is insufficient because it only supports affine transforms
+            # We need to build the coordinate grid manually and use map_coordinates
             
-            # 创建目标网格
+            # Create the target grid
             y_grid, x_grid = cp.meshgrid(cp.arange(target_h), cp.arange(target_w), indexing='ij')
             
-            # 展平网格
+            # Flatten the grid
             ones = cp.ones_like(x_grid)
             coords = cp.stack([x_grid, y_grid, ones]) # 3 x N
             coords = coords.reshape(3, -1)
             
-            # 应用变换矩阵 (H_final 已经是 H_inv，即从目标到源的映射)
+            # Apply the transform matrix (H_final is already H_inv, i.e. the mapping from destination to source)
             # src_coords = H_final @ dst_coords
             H_gpu = cp.asarray(H_final)
             src_coords_homo = cp.matmul(H_gpu, coords)
             
-            # 归一化齐次坐标
+            # Normalize the homogeneous coordinates
             w_coords = src_coords_homo[2, :]
             w_coords = cp.where(cp.abs(w_coords) < 1e-10, 1e-10, w_coords)
             src_x = src_coords_homo[0, :] / w_coords
             src_y = src_coords_homo[1, :] / w_coords
             
-            # 重塑回图像形状
+            # Reshape back to the image shape
             src_x = src_x.reshape(target_h, target_w)
             src_y = src_y.reshape(target_h, target_w)
             
-            # 对每个通道进行插值
+            # Interpolate each channel
             channels = []
             for c in range(img.shape[2]):
-                # order=1 (linear) 速度最快, order=3 (cubic) 质量更好
-                # 这里使用 order=1 以获得最大加速，如果追求质量可用 order=3
+                # order=1 (linear) is fastest, order=3 (cubic) gives better quality
+                # Here we use order=1 for maximum speed; use order=3 if quality is preferred
                 channel_out = cupyx.scipy.ndimage.map_coordinates(
                     img_gpu[:, :, c], 
                     cp.stack([src_y, src_x]), 
@@ -689,11 +689,11 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
             
             aligned_img_gpu = cp.stack(channels, axis=2)
             
-            # 传回 CPU
+            # Transfer back to the CPU
             aligned_img = cp.asnumpy(aligned_img_gpu).astype(np.uint8)
             
         else:
-            # CPU 版本 (OpenCV)
+            # CPU version (OpenCV)
             aligned_img = cv2.warpPerspective(
                 img,
                 H_final,
@@ -702,33 +702,33 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
                 borderMode=cv2.BORDER_CONSTANT
             )
         
-        # 如果有输出路径，直接在线程中保存
+        # If an output path is provided, save directly in the thread
         if output_path:
             fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
             cv2.imwrite(os.path.join(output_path, fname), aligned_img)
             
         return aligned_img
 
-    # 准备参数
+    # Prepare the parameters
     task_args = []
     for i in range(len(images)):
         task_args.append((i, images[i], H_matrices[i]))
 
-    # 如果有 Cupy，不使用多线程，因为 GPU 操作本身是并行的且受限于 PCIe 带宽
-    # 多线程同时向 GPU 传输数据可能会导致争用
+    # If Cupy is available, do not use multithreading, since GPU operations are already parallel and limited by PCIe bandwidth
+    # Multiple threads transferring data to the GPU simultaneously may cause contention
     if HAS_CUPY:
         aligned_images = []
         for args in task_args:
             aligned_images.append(warp_task(args))
     else:
-        # CPU 模式下继续使用多线程
+        # Keep using multithreading in CPU mode
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             aligned_images = list(executor.map(warp_task, task_args))
 
     return aligned_images
 
 
-# ========== 稳定配准算法实现 ==========
+# ========== Stable registration algorithm implementation ==========
 
 def _stabilisation_impl(input_source, output_path=None, filenames=None):
     """
@@ -772,7 +772,7 @@ def _stabilisation_impl(input_source, output_path=None, filenames=None):
 
         prev_pts = cv2.goodFeaturesToTrack(prev_gray, **feature_params)
         if prev_pts is None:
-            # 如果没有找到特征点，使用上一次的变换
+            # If no feature points are found, use the previous transform
             if i > 0:
                 transforms[i] = transforms[i-1]
             continue
@@ -784,14 +784,14 @@ def _stabilisation_impl(input_source, output_path=None, filenames=None):
         curr_pts = curr_pts[idx]
         
         if len(prev_pts) < 4:
-            # 如果匹配点太少，使用上一次的变换
+            # If there are too few matching points, use the previous transform
             if i > 0:
                 transforms[i] = transforms[i-1]
             continue
 
         m, _ = cv2.estimateAffinePartial2D(prev_pts, curr_pts)
         if m is None:
-            # 如果估计失败，使用上一次的变换
+            # If estimation fails, use the previous transform
             if i > 0:
                 transforms[i] = transforms[i-1]
             continue
@@ -802,7 +802,7 @@ def _stabilisation_impl(input_source, output_path=None, filenames=None):
         transforms[i] = [dx, dy, da]
         prev_gray = curr_gray
 
-    # 最后一帧使用与倍数第二帧相同的变换
+    # The last frame uses the same transform as the second-to-last frame
     transforms[-1] = transforms[-2]
 
     # Smooth trajectory
@@ -821,7 +821,7 @@ def _stabilisation_impl(input_source, output_path=None, filenames=None):
     # Apply transforms
     stabilized_images = []
     for i, frame in enumerate(images):
-        # 每一帧应用对应的 difference 校正量
+        # Apply the corresponding difference correction to each frame
         dx, dy, da = difference[i]
         
         m = np.array([
@@ -848,11 +848,11 @@ def _stabilisation_impl(input_source, output_path=None, filenames=None):
     return stabilized_images
 
 
-# # ========== 组合配准算法实现 ==========
+# # ========== Combined registration algorithm implementation ==========
 
 # def _registration_impl(input_source, output_path=None):
 #     """
-#     组合配准算法内部实现
+#     Internal implementation of combined registration
 #     Args:
 #         input_source: string (directory path) or list of images
 #         output_path: string, directory path to save results (optional, None means no saving)
@@ -879,27 +879,27 @@ def _stabilisation_impl(input_source, output_path=None, filenames=None):
 #     return final_images
 
 
-# ========== 统一接口类 ==========
+# ========== Unified interface class ==========
 
 class ImageRegistration:
     """
-    图像序列配准统一接口类
+    Unified interface class for image-sequence registration
     
-    支持的方法:
-    - 'homography': 单应性对齐配准（非线性）
-    - 'ecc': ECC对齐配准（高精度、亚像素级）
-    - 'both': 组合配准（先 Homography 后 ECC）
+    Supported methods:
+    - 'homography': homography alignment registration (non-linear)
+    - 'ecc': ECC alignment registration (high precision, sub-pixel level)
+    - 'both': combined registration (Homography first, then ECC)
     
-    示例:
-        # 使用单应性对齐
+    Example:
+        # Use homography alignment
         registration = ImageRegistration(method='homography')
         result = registration.process('./images', './output')
         
-        # 使用ECC对齐
+        # Use ECC alignment
         registration = ImageRegistration(method='ecc')
         result = registration.process(image_list, './output')
 
-        # 使用组合对齐
+        # Use combined alignment
         registration = ImageRegistration(method='both')
         result = registration.process(image_list, './output')
     """
@@ -908,20 +908,20 @@ class ImageRegistration:
     
     def __init__(self, method: str = 'homography', downscale_width: int = 1024, ecc_parallel: bool = True):
         """
-        初始化配准器
+        Initialize the registrar
 
         Args:
-            method (str): 配准方法名称，可选 'homography', 'ecc', 'both'
+            method (str): registration method name, one of 'homography', 'ecc', 'both'
             ecc_parallel (bool): Compute ECC pair matrices concurrently (identical results, faster)
         """
         if method not in self.SUPPORTED_METHODS:
             raise ValueError(
-                f"不支持的配准方法: {method}. "
-                f"支持的方法: {', '.join(self.SUPPORTED_METHODS)}"
+                f"Unsupported registration method: {method}. "
+                f"Supported methods: {', '.join(self.SUPPORTED_METHODS)}"
             )
 
         self.method = method
-        # 用户可配置的下采样宽度，用于特征提取等预处理阶段
+        # User-configurable downsampling width, used in preprocessing stages such as feature extraction
         self.downscale_width = int(downscale_width) if downscale_width is not None else 1024
         self.ecc_parallel = bool(ecc_parallel)
     
@@ -930,30 +930,30 @@ class ImageRegistration:
                 output_path: Optional[str] = None,
                 thread_count: int = 4) -> List[np.ndarray]:
         """
-        执行图像配准
+        Perform image registration
         
         Args:
-            input_source (str or list): 图像目录路径或预加载的图像列表
-            output_path (str, optional): 输出目录路径。
-                - 如果提供路径，会将配准后的图像保存到磁盘
-                - 如果为 None，只返回图像列表不保存，节省磁盘空间和 I/O 开销
+            input_source (str or list): image directory path or a preloaded list of images
+            output_path (str, optional): output directory path.
+                - If a path is provided, the registered images are saved to disk
+                - If None, only the image list is returned without saving, saving disk space and I/O overhead
         
         Returns:
-            list: 配准后的图像列表（始终返回，无论是否保存到磁盘）
+            list: list of registered images (always returned, whether or not saved to disk)
         """
         if self.method == 'homography':
             return self._process_homography(input_source, output_path, thread_count=thread_count)
         elif self.method == 'ecc':
             return self._process_ecc(input_source, output_path, thread_count=thread_count)
         elif self.method == 'both':
-            # 组合模式：先 Homography，后 ECC
-            # 第一步：Homography (不保存中间结果，除非只做这一步)
+            # Combined mode: Homography first, then ECC
+            # Step 1: Homography (do not save intermediate results, unless this is the only step)
             print("=== Step 1: Homography Alignment ===")
-            # 如果是 both 模式，第一步不需要保存到 output_path，只在内存中传递
+            # In both mode, step 1 does not need to save to output_path, only passing in memory
             homography_result = self._process_homography(input_source, output_path=None, thread_count=thread_count)
             
             print("\n=== Step 2: ECC Alignment ===")
-            # 第二步：ECC (保存最终结果)
+            # Step 2: ECC (save the final result)
             return self._process_ecc(homography_result, output_path, thread_count=thread_count)
     
     def _process_homography(self, 
@@ -961,14 +961,14 @@ class ImageRegistration:
                            output_path: Optional[str] = None,
                            thread_count: int = 4) -> List[np.ndarray]:
         """
-        单应性对齐配准（非线性）
+        Homography alignment registration (non-linear)
         
         Args:
-            input_source: 图像源
-            output_path: 输出路径
+            input_source: image source
+            output_path: output path
         
         Returns:
-            配准后的图像列表
+            list of registered images
         """
         return _align_homography_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count)
     
@@ -977,95 +977,95 @@ class ImageRegistration:
                     output_path: Optional[str] = None,
                     thread_count: int = 4) -> List[np.ndarray]:
         """
-        ECC对齐配准（高精度、亚像素级）
+        ECC alignment registration (high precision, sub-pixel level)
         
         Args:
-            input_source: 图像源
-            output_path: 输出路径
+            input_source: image source
+            output_path: output path
         
         Returns:
-            配准后的图像列表
+            list of registered images
         """
         return _align_ecc_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
                                parallel_ecc=self.ecc_parallel)
     
     def set_method(self, method: str):
         """
-        切换配准方法
+        Switch the registration method
         
         Args:
-            method (str): 新的配准方法名称
+            method (str): the new registration method name
         """
         if method not in self.SUPPORTED_METHODS:
             raise ValueError(
-                f"不支持的配准方法: {method}. "
-                f"支持的方法: {', '.join(self.SUPPORTED_METHODS)}"
+                f"Unsupported registration method: {method}. "
+                f"Supported methods: {', '.join(self.SUPPORTED_METHODS)}"
             )
         
         self.method = method
     
     def get_info(self) -> dict:
         """
-        获取当前配准器信息
+        Get the current registrar info
         
         Returns:
-            dict: 包含配准方法等信息
+            dict: contains info such as the registration method
         """
         return {
             'method': self.method
         }
     
     def __repr__(self) -> str:
-        """字符串表示"""
+        """String representation"""
         return f"ImageRegistration(method='{self.method}')"
 
 
-# ========== 便捷函数 ==========
+# ========== Convenience function ==========
 
 def register_images(input_source: Union[str, List[np.ndarray]],
                     method: str = 'homography',
                     output_path: Optional[str] = None) -> List[np.ndarray]:
     """
-    便捷函数:一次性完成图像配准
+    Convenience function: perform image registration in one call
     
     Args:
-        input_source: 图像源(目录路径或图像列表)
-        method: 配准方法 ('homography', 'ecc', 'both')
-        output_path: 输出路径 (可选，None 表示只返回列表不保存)
+        input_source: image source (directory path or list of images)
+        method: registration method ('homography', 'ecc', 'both')
+        output_path: output path (optional, None means return the list only without saving)
     
     Returns:
-        配准后的图像列表
+        list of registered images
     
-    示例:
-        # 保存到磁盘并返回列表
+    Example:
+        # Save to disk and return the list
         result = register_images('./images', method='homography', output_path='./output')
         
-        # 只返回列表不保存，节省磁盘空间
+        # Return the list only without saving, to save disk space
         result = register_images('./images', method='ecc')
         
-        # 组合对齐
+        # Combined alignment
         result = register_images(image_list, method='both')
     """
     registration = ImageRegistration(method=method)
     return registration.process(input_source, output_path=output_path)
 
 
-# ========== 向后兼容的函数别名 ==========
+# ========== Backward-compatible function aliases ==========
 
 # def image_stack_align_zoom(input_source, output_path=None):
-#     """向后兼容的函数别名"""
+#     """Backward-compatible function aliases"""
 #     return _align_zoom_impl(input_source, output_path)
 
 # def image_stack_stabilisation(input_source, output_path=None, filenames=None):
-#     """向后兼容的函数别名"""
+#     """Backward-compatible function aliases"""
 #     return _stabilisation_impl(input_source, output_path, filenames)
 
 # def image_stack_registration(input_source, output_path=None):
-#     """向后兼容的函数别名"""
+#     """Backward-compatible function aliases"""
 #     return _registration_impl(input_source, output_path)
 
 # def process_image_stack(input_path, output_path=None):
-#     """向后兼容的函数别名"""
+#     """Backward-compatible function aliases"""
 #     return _registration_impl(input_path, output_path)
 
 def main():

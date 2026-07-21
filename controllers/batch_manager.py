@@ -67,7 +67,7 @@ class BatchManager:
             total_items = 1
 
         self._initialise_progress_dialog(total_items)
-        # 禁用在批处理运行时不应被修改的 UI 控件
+        # Disable UI controls that should not be modified while batch processing runs
         try:
             self.window.slider_smooth.setEnabled(False)
         except Exception:
@@ -167,7 +167,7 @@ class BatchManager:
         finally:
             self._close_progress_dialog()
             self._teardown_worker()
-            # 恢复 UI 控件
+            # Restore the UI controls
             try:
                 self.window.slider_smooth.setEnabled(True)
             except Exception:
@@ -199,7 +199,7 @@ class BatchManager:
         )
         self._close_progress_dialog()
         self._teardown_worker()
-        # 恢复 UI 控件
+        # Restore the UI controls
         try:
             self.window.slider_smooth.setEnabled(True)
         except Exception:
@@ -242,7 +242,7 @@ class BatchManager:
         if self._worker:
             self._worker.cancel()
         self._close_progress_dialog()
-        # 若用户取消，也恢复 UI
+        # If the user cancels, restore the UI as well
         try:
             self.window.slider_smooth.setEnabled(True)
         except Exception:

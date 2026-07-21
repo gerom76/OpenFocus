@@ -161,7 +161,7 @@ class SourceManager:
                     self.load_image_stack(paths[0], append=True)
                     event.acceptProposedAction()
                 else:
-                    # 多组图像栈 - 先弹出下采样设置
+                    # Multiple image stacks - first pop up the downsampling settings
                     current_scale = getattr(self.window, "current_scale_factor", 1.0)
                     dlg = DownsampleDialog(self.window, initial_scale=current_scale)
                     if not dlg.exec():
@@ -169,7 +169,7 @@ class SourceManager:
                         return
                     scale = dlg.get_scale_factor()
 
-                    # 打开批处理对话框并预加载文件夹
+                    # Open the batch dialog and preload the folder
                     self.window.show_batch_processing_dialog(preload_folder_paths=[paths[0]], scale_factor=scale)
                     event.acceptProposedAction()
             else:
@@ -354,7 +354,7 @@ class SourceManager:
         window.image_filenames = []
         window.current_display_index = -1
         
-        # 清空ROI对齐缓存
+        # Clear the ROI alignment cache
         window.roi_aligned_images = []
         window.roi_aligned_raw_count = 0
         window.roi_mode_active = False

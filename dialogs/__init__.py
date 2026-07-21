@@ -2,12 +2,12 @@
 """
 OpenFocus Dialogs Package
 
-重构后的对话框模块，按功能分组：
-- about: 关于和联系信息对话框
-- help: 帮助信息对话框
-- settings: 设置相关对话框
-- batch: 批处理相关对话框
-- roi: ROI相关对话框
+Refactored dialog module, grouped by function:
+- about: About and contact-info dialogs
+- help: Help-info dialogs
+- settings: Settings-related dialogs
+- batch: Batch-processing-related dialogs
+- roi: ROI-related dialogs
 """
 
 from dialogs.about import (
