@@ -47,10 +47,12 @@ MECHANISM_NOTES = {
                "scoring under 15% of the sharpest one. When a small detailed subject sits "
                "on a plain background, the background frame falls under that line and is "
                "dropped - so you get one of your originals back, unfused."),
-    "gff_ifcnn": ("Shifts colour",
+    "gff_ifcnn": ("Can disturb a fusion that was already right",
                   "The refinement pass converts the picture into a neural network's "
-                  "internal form and back again, and colour does not survive the round "
-                  "trip intact. It tidies edges, but everything drifts a little in hue."),
+                  "internal form and back again, and only the difference that round "
+                  "trip makes is applied - so a region it has nothing to add to is "
+                  "left alone. It tidies edges, but where the fusion was already "
+                  "correct it can still nudge things the wrong way."),
     "dct": ("Judges sharpness in blocks",
             "It decides which frame wins for each square block of pixels rather than each "
             "pixel, so boundaries between near and far can look slightly stepped. It also "

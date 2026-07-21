@@ -22,7 +22,7 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically | High | Low |
 | 4 | DCT | Quality | Result depends on the order frames are passed in | Medium | Low |
 | 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial |
-| 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip | Medium | Medium |
+| 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip - *fixed in 1.5.5* | Medium | Medium |
 | 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent | Medium | Medium |
 | 8 | DTCWT | Performance | CPU cost grows faster than image area | Medium | Medium |
 | 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything | Low | Low |
@@ -169,7 +169,8 @@ loss. The same pattern is worth checking anywhere else a float result is cast.
 
 **Fixed in 1.5.4.** Both truncating casts in `ifcnn.py` now round: `_to_bgr` and
 the tile accumulator in `_refine_tiled`, which had the same bias. A normalize /
-denormalize round trip through `_to_bgr` is now exact (max error 0 levels, was 1).
+denormalize round trip through the tensor conversion helpers is now exact (max
+error 0 levels, was 1).
 Mean shift from the guided-filter input to the refined output, across the six
 characterisation scenarios:
 
@@ -248,6 +249,48 @@ the input near edges, rather than adopting it everywhere.
 **Worth noting:** these are synthetic stacks, which give IFCNN no genuinely
 missed detail to recover, so they show its costs and not its benefits. Confirm
 against a real stack before changing behaviour.
+
+**Fixed in 1.5.5**, by a route that turned out cleaner than either idea above.
+
+The round trip is lossy, but the loss is *measurable in isolation*: decode the
+candidate's own features, with nothing merged in, and the difference from the
+candidate is the round-trip error by itself, carrying no fusion information. So
+`_refine_block` now returns
+
+```
+candidate + (decode(merged features) - decode(candidate's features))
+```
+
+instead of `decode(merged features)`. The bracket is what merging the sources
+contributed; the drift cancels. Where IFCNN finds nothing to add, the candidate
+comes back untouched rather than paying a whole-frame round trip for nothing -
+refine an image against itself and the output is now bit-identical to the input.
+
+No thresholds, no edge mask, no colour-space conversion. The cost is one extra
+decode per block (conv3 + conv4 on a feature map that is already computed);
+encoding, which dominates, is unchanged.
+
+Measured over the six characterisation scenarios, against the guided filter it
+refines:
+
+| | before | after | guided filter |
+|---|--------|-------|---------------|
+| PSNR | 30.14 dB | **37.14 dB** | 39.70 dB |
+| Edge PSNR | 29.16 dB | **33.37 dB** | 29.95 dB |
+| Colour error | 6.89 | **2.87** | 1.18 |
+
+Both of the report's warnings about the stage are now obsolete. It no longer
+scores below the best single frame anywhere (it did on `depth_edge`), and it now
+improves boundary rendering in 6 of 6 scenarios rather than 4. It still costs
+overall PSNR on 3 of 6 - these stacks hand it a near-perfect fusion and no missed
+detail, so there is nothing to win and something to disturb - but the worst case
+is 8.5 dB behind rather than 18.
+
+An edge-gated variant was measured alongside it: same residual, scaled by a
+blurred Laplacian of the candidate. It reads better on whole-frame numbers
+(PSNR 38.60, colour 2.27) because it suppresses the correction over most of the
+picture, but it gives back 1.3 dB at boundaries - which is the one thing the
+stage exists to improve - in exchange for two tuned constants. Not taken.
 
 ---
 

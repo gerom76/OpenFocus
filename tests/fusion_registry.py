@@ -260,10 +260,11 @@ METHODS = [
         ),
         deterministic=False,
         # IFCNN re-encodes an already near-perfect fusion, so on synthetic
-        # stacks it scores below the plain guided filter it refines (30.2 vs
-        # 39.5). It targets detail the fusion stage missed on real stacks.
+        # stacks it still scores below the plain guided filter it refines (37.1
+        # vs 39.7 averaged over the scenarios). It targets detail the fusion
+        # stage missed on real stacks.
         supports_folder=False,
-        min_psnr=25.0,      # measured 30.2
+        min_psnr=27.0,      # measured 29.3 on the weakest scenario
     ),
     FusionMethod(
         key="guided_filter_gpu", label="Guided Filter (GPU)", fuse=_gff_torch,

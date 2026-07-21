@@ -60,7 +60,7 @@ class OpenFocusApplication(QApplication):
     """QApplication subclass handling file open events from platform sources."""
 
     # Application version, shown next to the OpenFocus label in the menu bar.
-    VERSION = "1.5.4"
+    VERSION = "1.5.5"
 
     def __init__(self, *args, version: str = VERSION, **kwargs):
         super().__init__(*args, **kwargs)

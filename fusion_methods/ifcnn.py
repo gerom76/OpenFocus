@@ -4,7 +4,9 @@ Runs after a fusion method has produced an all-in-focus candidate. The candidate
 and the aligned source stack are encoded by IFCNN and merged element-wise in
 feature space, so detail the fusion step missed (blur bleeding around edges,
 pixels picked from the wrong slice) can be recovered from whichever source frame
-actually holds it.
+actually holds it. Only the difference the merge makes is applied to the
+candidate, so the network's lossy round trip is not charged to the whole frame;
+see ``_refine_block``.
 
 The pretrained weights are not bundled: drop the official IFCNN checkpoint at
 ``weights/ifcnn.pth`` to enable the stage.
@@ -123,18 +125,30 @@ def _get_model_and_device(model_path, use_gpu):
     return model, device
 
 
+def _to_rgb(bgr_image):
+    """BGR uint8 -> float RGB in [0, 1]."""
+    return cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+
+
 def _to_tensor(bgr_image, device):
     """BGR uint8 -> normalized RGB tensor of shape [1, 3, H, W]."""
-    rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    rgb = (rgb - _IMAGENET_MEAN) / _IMAGENET_STD
+    rgb = (_to_rgb(bgr_image) - _IMAGENET_MEAN) / _IMAGENET_STD
     tensor = torch.from_numpy(np.ascontiguousarray(rgb.transpose(2, 0, 1)))
     return tensor.unsqueeze(0).to(device)
 
 
-def _to_bgr(tensor):
-    """Normalized RGB tensor of shape [1, 3, H, W] -> BGR uint8 image."""
+def _from_tensor(tensor):
+    """Normalized RGB tensor of shape [1, 3, H, W] -> float RGB, left unclipped.
+
+    Clipping is deferred to _to_bgr so the difference of two decoded images can
+    be taken at full precision.
+    """
     rgb = tensor.squeeze(0).cpu().numpy().transpose(1, 2, 0)
-    rgb = rgb * _IMAGENET_STD + _IMAGENET_MEAN
+    return rgb * _IMAGENET_STD + _IMAGENET_MEAN
+
+
+def _to_bgr(rgb):
+    """Float RGB in [0, 1] -> BGR uint8 image."""
     rgb = np.clip(rgb, 0.0, 1.0) * 255.0
     # Round, do not truncate: a bare cast drops half a level from every pixel,
     # which shows up as a systematic darkening of the refined image.
@@ -142,14 +156,37 @@ def _to_bgr(tensor):
 
 
 def _refine_block(model, device, block_images):
-    """Encode every image of one block, merge the features, reconstruct."""
+    """Merge one block of images in feature space, as a correction to the first.
+
+    ``block_images[0]`` is the fused candidate; the rest are the sources it may
+    have taken detail from.
+
+    The decoder's output is not returned neat. IFCNN's encode/decode round trip
+    is not an identity map -- push an image through unchanged and it comes back
+    with its colours moved several levels -- so adopting the decoded picture
+    everywhere pays that cost over the whole frame in exchange for repairs that
+    only occur near edges. Decoding the candidate's own features alone measures
+    the round-trip error by itself, and subtracting it leaves just what merging
+    the sources contributed. Where IFCNN found nothing to add, the candidate
+    comes back untouched instead of drifting.
+    """
+    if len(block_images) < 2:
+        # Nothing to merge, so the round trip could only cost colour
+        return block_images[0].copy()
+
     with torch.no_grad():
+        lead_features = None
         running = None
         for image in block_images:
             features = model.encode(_to_tensor(image, device))
+            if lead_features is None:
+                lead_features = features
             running = model.accumulate(running, features)
         fused = model.finalize(running, len(block_images))
-        return _to_bgr(model.decode(fused))
+        merged = _from_tensor(model.decode(fused))
+        round_trip = _from_tensor(model.decode(lead_features))
+
+    return _to_bgr(_to_rgb(block_images[0]) + (merged - round_trip))
 
 
 def _feather_weights(x0, y0, x1, y1, w, h, overlap):

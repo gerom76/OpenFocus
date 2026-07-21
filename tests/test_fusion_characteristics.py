@@ -86,13 +86,13 @@ def test_fusion_beats_one_frame(results, scenario):
     The premise of the whole report: fusing is better than picking one photo.
 
     Two documented exceptions, both on the two-slice depth_edge scenario and
-    both with their own test below: GFG-FGF discards a frame there, and IFCNN's
-    colour shift costs more than the detail it recovers.
+    both with their own test below: GFG-FGF discards a frame there, and DCT's
+    block grid is too coarse for a curved boundary.
     """
     entry = results[scenario]
     baseline = entry["best_slice"]
     for key, rec in entry["methods"].items():
-        if scenario == "depth_edge" and key in ("gfgfgf", "dct", "gff_ifcnn"):
+        if scenario == "depth_edge" and key in ("gfgfgf", "dct"):
             continue  # each covered by its own test below
         assert rec["psnr"] > baseline, (
             f"{key} scored {rec['psnr']:.2f} dB on {scenario}, "
@@ -210,79 +210,86 @@ def test_gfgfgf_fuses_normally_when_frames_are_comparable(results):
 
 
 # ---------------------------------------------------------------------------
-# "IFCNN Refine tidies boundaries but shifts colour"
+# "IFCNN Refine tidies boundaries, and is applied as a correction"
 # ---------------------------------------------------------------------------
 
-def test_ifcnn_shifts_colour(results):
+def test_ifcnn_leaves_a_picture_it_cannot_improve_alone(results):
     """
-    The refinement stage normalises to ImageNet statistics and reconstructs, and
-    the round trip costs colour fidelity - several times the deviation of the
-    guided filter result it started from.
+    The property the whole stage rests on.
+
+    IFCNN's encode/decode round trip is not an identity - normalising to
+    ImageNet statistics and reconstructing moves colours by several levels. The
+    stage therefore applies only the *difference* the merge makes, rather than
+    the decoded picture itself. Refine an image against nothing but itself and
+    the merge changes nothing, so the round trip must cancel exactly and the
+    input must come back bit for bit.
     """
     _require("gff_ifcnn")
-    ratios = []
+    from fusion_methods.ifcnn import _ifcnn_refine_impl
+
+    stack, _, _ = sc.build("saturated_colour")
+    fused = reg.get("guided_filter").run(stack)
+    refined = _ifcnn_refine_impl(fused, [fused], os.path.join(reg.WEIGHTS_DIR, "ifcnn.pth"),
+                                 use_gpu=False)
+
+    drift = np.max(np.abs(refined.astype(np.int16) - fused.astype(np.int16)))
+    assert drift == 0, (
+        f"refining an image against itself moved it by {drift} levels; the "
+        f"round-trip correction is no longer cancelling")
+
+
+def test_ifcnn_colour_drift_stays_bounded(results):
+    """
+    Some drift survives - the correction cancels the round trip on the candidate,
+    not on the sources merged into it - but it must stay at a few levels rather
+    than the double digits an uncorrected round trip costs.
+    """
+    _require("gff_ifcnn")
+    errors = []
     for key, _, _, _ in sc.SCENARIOS:
         scores = _scores(results, "colour", key)
-        if "gff_ifcnn" not in scores or "guided_filter" not in scores:
-            continue
-        ratios.append(scores["gff_ifcnn"] / max(scores["guided_filter"], 1e-6))
+        if "gff_ifcnn" in scores:
+            errors.append(scores["gff_ifcnn"])
 
-    assert np.mean(ratios) > 3.0, (
-        f"IFCNN colour deviation averaged only {np.mean(ratios):.1f}x the "
-        f"guided filter's")
+    assert max(errors) < 10.0, (
+        f"IFCNN colour deviation peaked at {max(errors):.1f} levels")
+    assert np.mean(errors) < 5.0, (
+        f"IFCNN colour deviation averaged {np.mean(errors):.1f} levels")
 
 
-def test_ifcnn_can_score_below_a_single_frame(results):
-    """
-    The colour shift is large enough to outweigh the detail recovered: on the
-    two-slice depth_edge scenario the refined result scores below simply keeping
-    the sharpest source frame. Worth stating outright in the report, because it
-    is the one case where running a stage makes the picture measurably worse
-    than doing nothing.
-    """
+def test_ifcnn_improves_boundaries_everywhere(results):
+    """It is a boundary-repair stage, so it should help there in every scenario."""
     _require("gff_ifcnn")
-    entry = results["depth_edge"]
-    refined = entry["methods"]["gff_ifcnn"]["psnr"]
-    assert refined < entry["best_slice"], (
-        f"IFCNN now scores {refined:.2f} dB against a {entry['best_slice']:.2f} dB "
-        f"single frame; if this improved, update the report's warning")
-
-
-def test_ifcnn_improves_boundaries_more_often_than_not(results):
-    """It is a boundary-repair stage, so it should help there even as colour drifts."""
-    _require("gff_ifcnn")
-    better = 0
-    total = 0
     for key, _, _, _ in sc.SCENARIOS:
         scores = _scores(results, "edge_psnr", key)
         if "gff_ifcnn" not in scores or "guided_filter" not in scores:
             continue
-        total += 1
-        if scores["gff_ifcnn"] > scores["guided_filter"]:
-            better += 1
-    assert better > total / 2, (
-        f"IFCNN improved boundaries in only {better} of {total} scenarios")
+        assert scores["gff_ifcnn"] > scores["guided_filter"], (
+            f"{key}: IFCNN scored {scores['gff_ifcnn']:.2f} dB at boundaries "
+            f"against the guided filter's {scores['guided_filter']:.2f} dB")
 
 
-def test_ifcnn_costs_overall_accuracy(results):
+def test_ifcnn_still_costs_some_overall_accuracy(results):
     """
-    Worth stating plainly in the report: on synthetic stacks the refinement
-    lowers overall accuracy versus the plain guided filter, because the stacks
-    give it no genuinely missed detail to recover.
+    Worth stating plainly in the report: on synthetic stacks the refinement can
+    still lower overall accuracy versus the plain guided filter, because these
+    stacks give it no genuinely missed detail to recover - only the chance to
+    disturb a near-perfect fusion. The cost is now bounded rather than ruinous.
     """
     _require("gff_ifcnn")
-    worse = 0
-    total = 0
+    gaps = []
     for key, _, _, _ in sc.SCENARIOS:
         scores = _scores(results, "psnr", key)
         if "gff_ifcnn" not in scores or "guided_filter" not in scores:
             continue
-        total += 1
-        if scores["gff_ifcnn"] < scores["guided_filter"]:
-            worse += 1
-    assert worse >= total - 1, (
-        f"IFCNN was worse than the plain guided filter in {worse} of {total} "
-        f"scenarios; the report says it costs accuracy on synthetic stacks")
+        gaps.append(scores["guided_filter"] - scores["gff_ifcnn"])
+
+    assert any(gap > 0 for gap in gaps), (
+        "IFCNN no longer costs accuracy on any synthetic scenario; the report "
+        "says it does, so rewrite the caveat")
+    assert max(gaps) < 12.0, (
+        f"IFCNN fell {max(gaps):.1f} dB behind the plain guided filter; the "
+        f"report describes the cost as bounded")
 
 
 # ---------------------------------------------------------------------------
