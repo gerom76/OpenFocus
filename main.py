@@ -53,6 +53,7 @@ from controllers.transform_manager import TransformManager
 from controllers.batch_manager import BatchManager
 from controllers.settings_manager import SettingsManager
 from core import is_stackmffv4_available
+from fusion_methods.ifcnn import get_ifcnn_model_path, is_ifcnn_available
 from constants import (
     WINDOW_WIDTH, WINDOW_HEIGHT,
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
@@ -229,6 +230,7 @@ class OpenFocus(QMainWindow):
         self.rb_c = right_panel_components.rb_c
         self.rb_gfg = right_panel_components.rb_gfg
         self.rb_d = right_panel_components.rb_d
+        self.cb_ifcnn = right_panel_components.cb_ifcnn
         self.cb_align_homography = right_panel_components.cb_align_homography
         self.cb_align_ecc = right_panel_components.cb_align_ecc
         self.slider_smooth = right_panel_components.slider_smooth
@@ -430,7 +432,10 @@ class OpenFocus(QMainWindow):
         self.rb_c.setChecked(False)
         self.rb_gfg.setChecked(False)
         self.rb_d.setChecked(False)
-        
+
+        # Reset the post-fusion refinement stage
+        self.cb_ifcnn.setChecked(False)
+
         # Reset the registration options - ECC selected by default, Homography unselected
         self.cb_align_homography.setChecked(False)
         self.cb_align_ecc.setChecked(True)
@@ -460,6 +465,15 @@ class OpenFocus(QMainWindow):
         else:
             self.rb_d.setEnabled(True)
             self.rb_d.setToolTip("")
+
+        # The IFCNN stage needs its checkpoint on disk; it is not bundled
+        if not is_ifcnn_available():
+            self.cb_ifcnn.setChecked(False)
+            self.cb_ifcnn.setEnabled(False)
+            self.cb_ifcnn.setToolTip(trans.t("msg_ifcnn_unavailable_text").format(path=get_ifcnn_model_path()))
+        else:
+            self.cb_ifcnn.setEnabled(True)
+            self.cb_ifcnn.setToolTip(trans.t("tip_ifcnn_refine"))
 
 
     def update_source_view(self, index):
@@ -994,7 +1008,10 @@ class OpenFocus(QMainWindow):
         c.rb_c.setText(trans.t('radio_dtcwt'))
         c.rb_gfg.setText(trans.t('radio_gfg'))
         c.rb_d.setText(trans.t('radio_stackmff'))
-        
+        c.cb_ifcnn.setText(trans.t('check_ifcnn_refine'))
+        # Availability tooltips carry translated text, so refresh them here too
+        self._configure_fusion_method_availability()
+
         c.registration_group.setTitle(trans.t('group_registration'))
         c.cb_align_ecc.setText(trans.t('check_align_ecc'))
         c.cb_align_homography.setText(trans.t('check_align_homography'))

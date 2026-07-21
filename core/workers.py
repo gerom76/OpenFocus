@@ -6,11 +6,42 @@ import numpy as np
 import imageio.v2 as imageio
 from core.registration import ImageRegistration
 from core.multi_focus_fusion import MultiFocusFusion
+from fusion_methods.ifcnn import _ifcnn_refine_impl, get_ifcnn_model_path, is_ifcnn_available
 from utils import resource_path, normalize_kernel_size, get_imwrite_params
 from constants import (
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
     DEFAULT_THREAD_COUNT
 )
+
+
+def refine_with_ifcnn(fusion_result, source_images, tile_enabled=None, tile_block_size=None,
+                      tile_overlap=None, tile_threshold=None):
+    """Run the IFCNN refinement stage on a fusion result.
+
+    Returns the unrefined result unchanged when the stage cannot run, so a
+    missing checkpoint or a model failure never costs the user their render.
+    """
+    if fusion_result is None:
+        return fusion_result
+
+    if not is_ifcnn_available():
+        print(f"IFCNN refinement skipped: weights not found at {get_ifcnn_model_path()}", flush=True)
+        return fusion_result
+
+    try:
+        return _ifcnn_refine_impl(
+            fusion_result,
+            source_images,
+            get_ifcnn_model_path(),
+            use_gpu=True,
+            tile_enabled=(tile_enabled if tile_enabled is not None else True),
+            tile_block_size=(tile_block_size if tile_block_size is not None else TILE_BLOCK_SIZE),
+            tile_overlap=(tile_overlap if tile_overlap is not None else TILE_OVERLAP),
+            tile_threshold=(tile_threshold if tile_threshold is not None else TILE_THRESHOLD),
+        )
+    except Exception as e:
+        print(f"IFCNN refinement failed, keeping the unrefined result: {e}", flush=True)
+        return fusion_result
 
 
 class ROIAlignmentWorker(QThread):
@@ -84,6 +115,7 @@ class RenderWorker(QThread):
         roi_mode="crop", # 'crop' or 'paste'
         roi_base_index=0,
         ecc_parallel: bool = True,
+        ifcnn_refine: bool = False,
     ):
         super().__init__()
         self.raw_images = raw_images
@@ -106,6 +138,8 @@ class RenderWorker(QThread):
         self.rb_gfg_checked = rb_gfg_checked
         self.rb_d_checked = rb_d_checked
         self.kernel_slider_value = kernel_slider_value
+        # Optional IFCNN refinement stage, applied to the fusion result
+        self.ifcnn_refine = bool(ifcnn_refine)
         # Tile params passed from UI (may be None -> use fusion defaults)
         self.tile_enabled = tile_enabled
         self.tile_block_size = tile_block_size
@@ -176,6 +210,12 @@ class RenderWorker(QThread):
                 # Fuse using the cropped images (if ROI is enabled)
                 fusion_images = cropped_images if cropped_images is not None else processed_images
                 fusion_result, device_name = self._run_fusion(fusion_images)
+
+                # 4. IFCNN refinement stage (repairs detail the fusion step missed)
+                if self.ifcnn_refine and fusion_result is not None:
+                    refine_start_time = time.time()
+                    fusion_result = self._run_ifcnn_refine(fusion_result, fusion_images)
+                    print(f"IFCNN refinement completed in {time.time() - refine_start_time:.2f}s", flush=True)
 
                 # ROI paste stage
                 if self.roi_mode == "paste" and base_full_image is not None and fusion_result is not None and roi_rect_int is not None:
@@ -332,6 +372,17 @@ class RenderWorker(QThread):
             )
 
         return result, device_name
+
+    def _run_ifcnn_refine(self, fusion_result, source_images):
+        """Refine the fusion result with IFCNN using this worker's tile settings."""
+        return refine_with_ifcnn(
+            fusion_result,
+            source_images,
+            tile_enabled=self.tile_enabled,
+            tile_block_size=self.tile_block_size,
+            tile_overlap=self.tile_overlap,
+            tile_threshold=self.tile_threshold,
+        )
 
     def _get_fusion_algorithm(self):
         """Get the fusion-algorithm name based on the UI selection"""
@@ -584,6 +635,16 @@ class BatchWorker(QThread):
             else:
                 result = None
 
+            if result is not None and self.processing_settings.get('ifcnn_refine'):
+                result = refine_with_ifcnn(
+                    result,
+                    aligned_images,
+                    tile_enabled=self.tile_enabled,
+                    tile_block_size=self.tile_block_size,
+                    tile_overlap=self.tile_overlap,
+                    tile_threshold=self.tile_threshold,
+                )
+
             output_format = self.processing_settings.get('format', 'jpg')
             imwrite_params = get_imwrite_params(output_format)
 
@@ -669,6 +730,16 @@ class BatchWorker(QThread):
             
             # Call the fuse method to perform fusion
             fusion_result = fusion.fuse(aligned_images, thread_count=self.thread_count, **fusion_params)
+
+            if fusion_result is not None and self.processing_settings.get('ifcnn_refine'):
+                fusion_result = refine_with_ifcnn(
+                    fusion_result,
+                    aligned_images,
+                    tile_enabled=self.tile_enabled,
+                    tile_block_size=self.tile_block_size,
+                    tile_overlap=self.tile_overlap,
+                    tile_threshold=self.tile_threshold,
+                )
         else:
             fusion_result = None
         

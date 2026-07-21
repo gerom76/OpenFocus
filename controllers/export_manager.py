@@ -86,9 +86,9 @@ class ExportManager:
                 return ""
         return ""
 
-    def generate_default_filename(self) -> str:
+    def _fusion_suffix(self) -> str:
+        """Describe the fusion stages in the name: method, kernel, refinement."""
         window = self.window
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if window.rb_a.isChecked():
             fusion_method = "GuidedFilter"
@@ -103,14 +103,27 @@ class ExportManager:
         else:
             fusion_method = "None"
 
+        fusion_method += self._kernel_suffix()
+
+        # The IFCNN stage runs on top of the method above, so it reads as an addition
+        if getattr(window, "cb_ifcnn", None) is not None and window.cb_ifcnn.isChecked():
+            fusion_method += "+IFCNN"
+
+        return fusion_method
+
+    def _registration_suffix(self) -> str:
+        """Describe the registration stages in the name."""
+        window = self.window
         reg_methods = []
         if window.cb_align_homography.isChecked():
             reg_methods.append("Homography")
         if window.cb_align_ecc.isChecked():
             reg_methods.append("ECC")
-        reg_method_str = "+".join(reg_methods) if reg_methods else "NoAlign"
+        return "+".join(reg_methods) if reg_methods else "NoAlign"
 
-        return f"OpenFocus_{timestamp}_{fusion_method}{self._kernel_suffix()}_{reg_method_str}"
+    def generate_default_filename(self) -> str:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"OpenFocus_{timestamp}_{self._fusion_suffix()}_{self._registration_suffix()}"
 
     def _suggested_output_name(self) -> str:
         """Prefer the name of the selected output entry, so saving matches the list."""
@@ -125,31 +138,11 @@ class ExportManager:
         window = self.window
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        if window.rb_a.isChecked():
-            fusion_method = "GuidedFilter"
-        elif window.rb_b.isChecked():
-            fusion_method = "DCT"
-        elif window.rb_c.isChecked():
-            fusion_method = "DTCWT"
-        elif window.rb_gfg.isChecked():
-            fusion_method = "GFGFGF"
-        elif window.rb_d.isChecked():
-            fusion_method = "StackMFFV4"
-        else:
-            fusion_method = "None"
-
-        reg_methods = []
-        if window.cb_align_homography.isChecked():
-            reg_methods.append("Homography")
-        if window.cb_align_ecc.isChecked():
-            reg_methods.append("ECC")
-        reg_method_str = "+".join(reg_methods) if reg_methods else "NoAlign"
-
         folder_basename = "OpenFocus_Stack"
         if getattr(window, "current_folder_path", None):
             folder_basename = os.path.basename(window.current_folder_path)
 
-        return f"{folder_basename}_{timestamp}_{fusion_method}{self._kernel_suffix()}_{reg_method_str}"
+        return f"{folder_basename}_{timestamp}_{self._fusion_suffix()}_{self._registration_suffix()}"
 
     # ------------------------------------------------------------------
     # Export helpers

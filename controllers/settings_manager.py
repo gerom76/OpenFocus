@@ -163,6 +163,7 @@ class SettingsManager:
             "thread_count": window.thread_count,
             "stackmffv4_batch_size": window.stackmffv4_batch_size,
             "fusion_method": self._selected_fusion_method(),
+            "ifcnn_refine": window.cb_ifcnn.isChecked(),
             "align_homography": window.cb_align_homography.isChecked(),
             "align_ecc": window.cb_align_ecc.isChecked(),
             "smooth_kernel": window.slider_smooth.value(),
@@ -235,8 +236,8 @@ class SettingsManager:
             if button is not None:
                 button.setChecked(False)
 
-        # Registration option checkboxes -> unchecked
-        for attr in ("cb_align_homography", "cb_align_ecc"):
+        # Registration option and refinement stage checkboxes -> unchecked
+        for attr in ("cb_align_homography", "cb_align_ecc", "cb_ifcnn"):
             checkbox = getattr(window, attr, None)
             if checkbox is not None:
                 checkbox.setChecked(False)
@@ -302,6 +303,10 @@ class SettingsManager:
             button = method_buttons[method]
             if button.isEnabled():
                 button.setChecked(True)
+
+        # Post-fusion refinement stage (skipped when its weights are missing)
+        if "ifcnn_refine" in data and window.cb_ifcnn.isEnabled():
+            window.cb_ifcnn.setChecked(bool(data["ifcnn_refine"]))
 
         # Sync slider enablement/kernel mode to the selected method, then restore the
         # saved kernel value last so it is not overwritten by the per-method default.

@@ -43,6 +43,7 @@ class RightPanelComponents:
     rb_c: QRadioButton
     rb_gfg: QRadioButton
     rb_d: QRadioButton
+    cb_ifcnn: QCheckBox
     cb_align_homography: QCheckBox
     cb_align_ecc: QCheckBox
     slider_smooth: QSlider
@@ -101,8 +102,14 @@ def create_right_panel() -> RightPanelComponents:
     method_layout.addWidget(rb_a)
     method_layout.addWidget(rb_b)
     method_layout.addWidget(rb_c)
+    # Post-fusion refinement stage, combinable with any fusion method above
+    cb_ifcnn = QCheckBox(trans.t('check_ifcnn_refine'))
+    cb_ifcnn.setChecked(False)
+
     method_layout.addWidget(rb_gfg)
     method_layout.addWidget(rb_d)
+    method_layout.addSpacing(6)
+    method_layout.addWidget(cb_ifcnn)
     method_layout.addStretch()
 
     method_help_layout = QHBoxLayout()
@@ -249,6 +256,7 @@ def create_right_panel() -> RightPanelComponents:
         rb_c=rb_c,
         rb_gfg=rb_gfg,
         rb_d=rb_d,
+        cb_ifcnn=cb_ifcnn,
         cb_align_homography=cb_align_homography,
         cb_align_ecc=cb_align_ecc,
         slider_smooth=slider_smooth,

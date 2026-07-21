@@ -93,8 +93,11 @@ class RenderMethodHelpDialog(HelpDialog):
     GFG-FGF is a multi-focus image fusion algorithm based on a generalized four-neighborhood Gaussian gradient (GFG) operator combined with a fast guided filter (FGF). Feature extraction uses the GFG operator to capture high-frequency edge and gradient information. Information enhancement leverages the FGF together with the original image texture to smooth defocused regions while emphasizing focused areas. The fusion strategy constructs a pixel-wise decision map by selecting the maximum focus measure per pixel and then refines these decisions with FGF for edge-preserving smoothing, producing a weighted fusion that favors sharp, well-focused pixels.</p>
 
     <p>StackMFF-V4<br/>
-    A neural network trained on everyday focus stacks. It generally produces the strongest results with minimal tuning. Because it is not fine-tuned for specialist domains (microphotography, microscopy, medical imaging, etc.), avoid it when domain shifts are expected. Runs fastest with GPU acceleration.</p>"""
-        
+    A neural network trained on everyday focus stacks. It generally produces the strongest results with minimal tuning. Because it is not fine-tuned for specialist domains (microphotography, microscopy, medical imaging, etc.), avoid it when domain shifts are expected. Runs fastest with GPU acceleration.</p>
+
+    <p>+ IFCNN Refine<br/>
+    An optional stage that runs after the selected fusion method rather than replacing it. The fused candidate and the aligned source stack are encoded by IFCNN and merged in feature space, so detail the fusion step missed - blur bleeding across edges, pixels taken from the wrong slice - is recovered from whichever source frame actually holds it. Requires PyTorch and the IFCNN weights file in the weights folder; large images are processed tile by tile.</p>"""
+
         super().__init__(trans.t('help_render_title'), help_text, parent)
 
 

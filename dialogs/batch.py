@@ -714,6 +714,9 @@ class BatchProcessingDialog(QDialog):
             elif rb_d and rb_d.isChecked():
                 fusion_method = "stackmffv4"
         
+        # The IFCNN refinement stage is inherited from the main window
+        cb_ifcnn = getattr(self.parent_window, 'cb_ifcnn', None) if self.parent_window else None
+
         # Get the registration-method settings
         reg_methods = []
         if self.parent_window:
@@ -733,6 +736,7 @@ class BatchProcessingDialog(QDialog):
             "fusion_method": fusion_method,
             "fusion_params": fusion_params,
             "reg_methods": reg_methods,
+            "ifcnn_refine": bool(fusion_method) and bool(cb_ifcnn and cb_ifcnn.isChecked()),
             "save_aligned": self.save_aligned_cb.isChecked()  # Whether to save the aligned image stack
         }
 

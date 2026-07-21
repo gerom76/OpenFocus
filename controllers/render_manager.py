@@ -27,6 +27,34 @@ class RenderManager:
         else:
             console.stop_progress()
 
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        """Lock the pipeline controls while a render is running, unlock afterwards."""
+        window = self.window
+        for attr in (
+            "slider_smooth",
+            "rb_a", "rb_b", "rb_c", "rb_gfg", "rb_d",
+            "cb_ifcnn",
+            "cb_align_homography", "cb_align_ecc",
+            "btn_reset",
+        ):
+            widget = getattr(window, attr, None)
+            if widget is not None:
+                widget.setEnabled(enabled)
+
+        if enabled:
+            # Methods and stages with optional dependencies stay disabled
+            try:
+                window._configure_fusion_method_availability()
+            except Exception:
+                pass
+
+    def _abort_render(self) -> None:
+        """Undo the pre-render UI state after bailing out before the worker starts."""
+        self._set_controls_enabled(True)
+        self.window.btn_render.setEnabled(True)
+        self.window.btn_render.setText(trans.t('btn_render'))
+        self._set_console_progress(False)
+
     def start_render(self) -> None:
         window = self.window
 
@@ -40,27 +68,7 @@ class RenderManager:
         QApplication.processEvents()
 
         # Disable UI controls that should not be modified during processing
-        try:
-            window.slider_smooth.setEnabled(False)
-        except Exception:
-            pass
-        try:
-            window.rb_a.setEnabled(False)
-            window.rb_b.setEnabled(False)
-            window.rb_c.setEnabled(False)
-            window.rb_gfg.setEnabled(False)
-            window.rb_d.setEnabled(False)
-        except Exception:
-            pass
-        try:
-            window.cb_align_homography.setEnabled(False)
-            window.cb_align_ecc.setEnabled(False)
-        except Exception:
-            pass
-        try:
-            window.btn_reset.setEnabled(False)
-        except Exception:
-            pass
+        self._set_controls_enabled(False)
 
         need_align_homography = window.cb_align_homography.isChecked()
         need_align_ecc = window.cb_align_ecc.isChecked()
@@ -86,9 +94,18 @@ class RenderManager:
                 trans.t("msg_stackmff_unavailable_text"),
             )
             window.rb_d.setChecked(False)
-            window.btn_render.setEnabled(True)
-            window.btn_render.setText(trans.t('btn_render'))
-            self._set_console_progress(False)
+            self._abort_render()
+            return
+
+        # The IFCNN stage refines a fused image, so it cannot run on its own
+        ifcnn_refine = bool(window.cb_ifcnn.isChecked())
+        if ifcnn_refine and not need_fusion:
+            show_warning_box(
+                window,
+                trans.t("msg_ifcnn_needs_fusion_title"),
+                trans.t("msg_ifcnn_needs_fusion_text"),
+            )
+            self._abort_render()
             return
 
         # Handle ROI options - check if ROI mode is active and we have aligned images
@@ -109,9 +126,7 @@ class RenderManager:
                     roi_base_index = dialog.base_frame_index
                 else:
                     # User cancelled the ROI dialog -> cancel render
-                    window.btn_render.setEnabled(True)
-                    window.btn_render.setText(trans.t('btn_render'))
-                    self._set_console_progress(False)
+                    self._abort_render()
                     return
         
         # Determine the image source to use
@@ -158,6 +173,7 @@ class RenderManager:
             roi_mode=roi_mode,
             roi_base_index=roi_base_index,
             ecc_parallel=getattr(window, "ecc_parallel", True),
+            ifcnn_refine=ifcnn_refine,
         )
 
         self.worker.finished_signal.connect(self.on_render_finished)
@@ -267,6 +283,9 @@ class RenderManager:
                 else:
                     method_name = trans.t("radio_guided_filter")
 
+                if window.cb_ifcnn.isChecked():
+                    method_name = trans.t("info_fusion_method_refined").format(method_name)
+
                 info_lines.append(trans.t("info_fusion_method").format(method_name))
                 info_lines.append(trans.t("info_fusion_time").format(fusion_time))
                 info_lines.append(trans.t("info_proc_unit").format(device_name))
@@ -296,27 +315,7 @@ class RenderManager:
 
         finally:
             # Restore the UI controls
-            try:
-                window.slider_smooth.setEnabled(True)
-            except Exception:
-                pass
-            try:
-                window.rb_a.setEnabled(True)
-                window.rb_b.setEnabled(True)
-                window.rb_c.setEnabled(True)
-                window.rb_gfg.setEnabled(True)
-                window.rb_d.setEnabled(True)
-            except Exception:
-                pass
-            try:
-                window.cb_align_homography.setEnabled(True)
-                window.cb_align_ecc.setEnabled(True)
-            except Exception:
-                pass
-            try:
-                window.btn_reset.setEnabled(True)
-            except Exception:
-                pass
+            self._set_controls_enabled(True)
 
             window.btn_render.setEnabled(True)
             window.btn_render.setText(trans.t('btn_render'))
@@ -326,6 +325,7 @@ class RenderManager:
     def on_render_error(self, error_message: str) -> None:
         window = self.window
 
+        self._set_controls_enabled(True)
         window.btn_render.setEnabled(True)
         window.btn_render.setText(trans.t('btn_render'))
         self._set_console_progress(False)
