@@ -1,0 +1,32 @@
+# OpenFocus dependencies
+# Verified against Python 3.14 (D:\Python314) on 2026-07-21.
+#
+# torch/torchvision are pinned to CUDA 13.0 builds. Install them from the
+# PyTorch index, otherwise pip resolves the CPU-only wheels from PyPI:
+#
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+#
+# Note: if a CPU torch of the same version is already installed, pip treats it
+# as satisfied and will not switch builds. Use --force-reinstall for torch.
+
+# --- GUI ---
+PyQt6==6.11.0
+
+# --- Imaging / IO ---
+opencv-python==5.0.0.93
+pillow==12.3.0
+imageio==2.37.4
+rawpy==0.27.0          # RAW decoding, optional at runtime (core/image_loader.py)
+
+# --- Numerics ---
+numpy==2.5.1
+scipy==1.18.0
+dtcwt==0.13.0          # CPU dual-tree complex wavelet fusion
+
+# --- Torch stack (CUDA 13.0) ---
+torch==2.13.0+cu130
+torchvision==0.28.0+cu130
+
+# --- Misc ---
+psutil==7.2.2
+setuptools==83.0.0     # provides pkg_resources, shimmed in fusion_methods/dtcwt_torch.py

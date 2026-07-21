@@ -1,0 +1,17 @@
+# Optional accelerators and dev tooling. Everything here degrades gracefully:
+# the app falls back to a CPU path when the package is absent.
+#
+#   pip install -r requirements-optional.txt
+
+# GPU registration; falls back to CPU in core/registration.py
+# Pick the wheel matching your CUDA runtime, e.g. cupy-cuda13x.
+cupy-cuda13x
+
+# GPU DTCWT fusion; falls back to CPU in fusion_methods/dtcwt_torch.py
+pytorch_wavelets
+
+# FLOP counting, used only by the __main__ block of core/models/stackmffv4_network.py
+fvcore
+
+# Tests
+pytest==9.1.1
