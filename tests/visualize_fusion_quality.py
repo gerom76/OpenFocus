@@ -207,6 +207,9 @@ def build_payload(stack, reference, method_key, compare, values_override, crop_w
             "img": _b64(fused),
             "crop": _b64(_crop(fused, crop_window)),
             "seconds": elapsed,
+            # Recorded per run: a method that alters the geometry it was given
+            # misaligns every caller downstream, so the table shows it outright
+            "size": f"{fused.shape[1]}x{fused.shape[0]}",
         }
         # DCT and DTCWT can return a slightly different geometry than they were
         # given, so measure on the region every image actually shares
@@ -360,6 +363,10 @@ CSS = r"""
   th:first-child, td:first-child { text-align:left; }
   tbody tr:last-child td { border-bottom:0; }
   td.best { color:var(--accent); font-weight:700; }
+  td.warn { color:#b4462a; font-weight:700; }
+  @media (prefers-color-scheme: dark) { td.warn { color:#f0846a; } }
+  :root[data-theme="dark"] td.warn { color:#f0846a; }
+  :root[data-theme="light"] td.warn { color:#b4462a; }
   caption { caption-side:bottom; text-align:left; padding-top:12px; }
   footer { border-top:1px solid var(--line-strong); padding-top:20px;
            font-family:var(--font-mono); font-size:12px; color:var(--ink-3); }
@@ -495,13 +502,18 @@ def _table(payload):
 
     bests = {key: max(r[key] for r in payload["runs"]) for key, _, _ in keys}
 
+    expected = f"{payload['width']}x{payload['height']}"
     rows = []
     for r in payload["runs"]:
         cells = "".join(
             "<td{}>{}</td>".format(' class="best"' if r[key] == bests[key] else "",
                                    fmt.format(r[key]))
             for key, _, fmt in keys)
-        rows.append(f"<tr><td>{_esc(r['label'])}</td>{cells}<td>{r['seconds']:.2f}s</td></tr>")
+        size = r.get("size", expected)
+        size_cell = (f"<td>{size}</td>" if size == expected
+                     else f'<td class="warn">{size}</td>')
+        rows.append(f"<tr><td>{_esc(r['label'])}</td>{size_cell}{cells}"
+                    f"<td>{r['seconds']:.2f}s</td></tr>")
 
     headers = "".join(f"<th>{label}</th>" for _, label, _ in keys)
 
@@ -521,7 +533,7 @@ def _table(payload):
       <div class="scroller">
         <table>
           <caption class="note">{caveat}</caption>
-          <thead><tr><th>{_esc(payload['param_label'])}</th>{headers}<th>Time</th></tr></thead>
+          <thead><tr><th>{_esc(payload['param_label'])}</th><th>Output</th>{headers}<th>Time</th></tr></thead>
           <tbody>{''.join(rows)}</tbody>
         </table>
       </div>

@@ -80,8 +80,10 @@ def dct_torch_impl(
     dev = torch.device(device)
 
     with torch.no_grad():
-        def to_device_u8(chunk):
-            arr = np.stack([np.ascontiguousarray(img[:h_trim, :w_trim]) for img in chunk])
+        def to_device_u8(chunk, trim=True):
+            if trim:
+                chunk = [img[:h_trim, :w_trim] for img in chunk]
+            arr = np.stack([np.ascontiguousarray(img) for img in chunk])
             return torch.from_numpy(arr).to(dev).permute(0, 3, 1, 2)  # (B, 3, H, W) uint8 BGR
 
         # Pass 1: per-block variance via Var(X) = E[X^2] - E[X]^2, running max
@@ -111,14 +113,24 @@ def dct_torch_impl(
         # Pass 2: reconstruction — nearest-neighbor upscale of the index map, then
         # copy each source image into its selected blocks
         full_index = final_index.repeat_interleave(block_size, dim=0).repeat_interleave(block_size, dim=1)
-        fused = torch.zeros((3, h_trim, w_trim), dtype=torch.uint8, device=dev)
+
+        # The block grid only covers a multiple of block_size. Extend the last
+        # row/column of decisions over the remaining strip so the output keeps
+        # the geometry it was handed (matches the CPU path in dct.py).
+        if (h_trim, w_trim) != (h, w):
+            full_index = torch.cat(
+                [full_index, full_index[-1:, :].expand(h - h_trim, -1)], dim=0)
+            full_index = torch.cat(
+                [full_index, full_index[:, -1:].expand(-1, w - w_trim)], dim=1)
+
+        fused = torch.zeros((3, h, w), dtype=torch.uint8, device=dev)
 
         used = torch.unique(final_index).tolist()
         for start in range(0, n, CHUNK_SIZE):
             chunk_ids = [k for k in range(start, min(start + CHUNK_SIZE, n)) if k in used]
             if not chunk_ids:
                 continue
-            t = to_device_u8([normalized_images[k] for k in chunk_ids])
+            t = to_device_u8([normalized_images[k] for k in chunk_ids], trim=False)
             for j, k in enumerate(chunk_ids):
                 fused = torch.where(full_index == k, t[j], fused)
 

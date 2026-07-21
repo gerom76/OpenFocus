@@ -151,11 +151,21 @@ def dct_focus_stack_fusion(
     # Scale the small index map back up to the original size in one go (Nearest Neighbor)
     full_size_indices = cv2.resize(
         final_index_map.astype(np.uint8), # resize is fastest on uint8
-        (w_trim, h_trim), 
+        (w_trim, h_trim),
         interpolation=cv2.INTER_NEAREST
     )
 
-    fused_image = np.zeros((h_trim, w_trim, 3), dtype=np.uint8)
+    # The block grid only covers a multiple of block_size, so an image whose
+    # dimensions do not divide evenly leaves a strip on the right and bottom.
+    # Extend the last row/column of decisions over it rather than returning a
+    # smaller image than we were given.
+    if (h_trim, w_trim) != (h, w):
+        full_size_indices = cv2.copyMakeBorder(
+            full_size_indices, 0, h - h_trim, 0, w - w_trim,
+            cv2.BORDER_REPLICATE
+        )
+
+    fused_image = np.zeros((h, w, 3), dtype=np.uint8)
     
     # Iterate only over the source-image indices that are used, to fill in
     unique_indices = np.unique(final_index_map)
@@ -165,9 +175,8 @@ def dct_focus_stack_fusion(
         mask = (full_size_indices == idx)
         
         # Even though this is a Python loop, it operates on whole-image masks, so it is fast
-        # Crop the source image to match the size
-        source_layer = normalized_images[idx][:h_trim, :w_trim]
-        
+        source_layer = normalized_images[idx]
+
         # Assign
         fused_image[mask] = source_layer[mask]
 

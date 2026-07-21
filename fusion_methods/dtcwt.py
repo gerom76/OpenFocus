@@ -164,7 +164,14 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
     # Clip and Convert
     fused_img = np.clip(fused_img * 255.0, 0, 255).astype(np.uint8)
     fused_img = cv2.cvtColor(fused_img, cv2.COLOR_RGB2BGR)
-    
+
+    # dtcwt duplicates the bottom row and rightmost column of an odd-sized image
+    # before decomposing, so the reconstruction comes back one pixel larger.
+    # Drop the padding again to return the geometry we were handed.
+    src_h, src_w = images[0].shape[:2]
+    if fused_img.shape[:2] != (src_h, src_w):
+        fused_img = fused_img[:src_h, :src_w]
+
     return fused_img
 
 
