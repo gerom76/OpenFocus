@@ -12,12 +12,11 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QSpinBox,
     QSlider,
-    QTextEdit,
+
     QPushButton,
     QListWidget,
     QListWidgetItem,
-    QFileDialog,
-    QMessageBox,
+
     QComboBox,
     QLineEdit,
     QRadioButton,
@@ -25,6 +24,7 @@ from PyQt6.QtWidgets import (
 )
 from ui.styles import PRIMARY_BLUE
 from locales import trans
+from utils import log_message_box, show_warning_box
 
 
 class BatchProcessingDialog(QDialog):
@@ -510,6 +510,11 @@ class BatchProcessingDialog(QDialog):
                 break
             
             # Ask whether to continue after each addition
+            log_message_box(
+                "Continue?",
+                "Do you want to add more folders?",
+                icon=QMessageBox.Icon.Question,
+            )
             reply = QMessageBox.question(
                 self, "Continue?", 
                 "Do you want to add more folders?", 
@@ -617,8 +622,7 @@ class BatchProcessingDialog(QDialog):
         success, message, images_with_times, filenames = loader.load_images_with_timestamps(folder_path)
         
         if not success or not images_with_times:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(
+            show_warning_box(
                 self,
                 trans.t("msg_load_failed"),
                 trans.t("msg_load_images_failed_text").format(message=message),
@@ -755,8 +759,7 @@ class BatchProcessingDialog(QDialog):
         success, message, images_with_times, filenames = loader.load_images_with_timestamps(folder_path)
 
         if not success or not images_with_times:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(
+            show_warning_box(
                 self,
                 trans.t("msg_load_failed"),
                 trans.t("msg_load_images_failed_text").format(message=message),
@@ -833,11 +836,11 @@ class BatchProcessingDialog(QDialog):
 
         if import_mode == "multiple_folders":
             if not self.folder_paths:
-                QMessageBox.warning(self, trans.t("msg_no_folders_title"), trans.t("msg_no_folders_text"))
+                show_warning_box(self, trans.t("msg_no_folders_title"), trans.t("msg_no_folders_text"))
                 return
         else:
             if not self.single_folder_images_with_times:
-                QMessageBox.warning(self, trans.t("msg_no_folder_title"), trans.t("msg_no_folder_text"))
+                show_warning_box(self, trans.t("msg_no_folder_title"), trans.t("msg_no_folder_text"))
                 return
 
         output_type, output_path = self.get_output_settings()

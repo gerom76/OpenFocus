@@ -1,9 +1,9 @@
 import os
 import sys
+from datetime import datetime
 from typing import Optional
 
 from PyQt6.QtWidgets import QMessageBox
-from PyQt6.QtGui import QPixmap, QImage
 
 
 def resource_path(*relative_parts: str) -> str:
@@ -89,6 +89,48 @@ _styles_spec.loader.exec_module(_styles_module)
 MESSAGE_BOX_STYLE = _styles_module.MESSAGE_BOX_STYLE
 
 
+# Icon -> log level shown in the terminal / status console
+_ICON_LEVELS = {
+    QMessageBox.Icon.NoIcon: "INFO",
+    QMessageBox.Icon.Information: "INFO",
+    QMessageBox.Icon.Question: "QUESTION",
+    QMessageBox.Icon.Warning: "WARNING",
+    QMessageBox.Icon.Critical: "ERROR",
+}
+
+
+def log_message_box(
+    title: str,
+    text: str,
+    informative_text: str = "",
+    icon: QMessageBox.Icon = QMessageBox.Icon.Information,
+) -> None:
+    """Mirror a dialog to the terminal (and therefore the status console).
+
+    Every message box the user sees is timestamped to the millisecond so the
+    console keeps a readable trace of when each one was raised.
+    """
+    level = _ICON_LEVELS.get(icon, "INFO")
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    parts = [part for part in (title, text, informative_text) if part]
+    message = " | ".join(str(part).replace("\n", " ") for part in parts)
+
+    stream = sys.stderr if level == "ERROR" else sys.stdout
+    print(f"[{stamp}] [{level}] {message}", file=stream, flush=True)
+
+
+def exec_message_box(msg_box: QMessageBox):
+    """Log a hand-built QMessageBox, then show it and return its result."""
+    log_message_box(
+        msg_box.windowTitle(),
+        msg_box.text(),
+        msg_box.informativeText(),
+        msg_box.icon(),
+    )
+    return msg_box.exec()
+
+
 def show_message_box(
     parent: Optional[QMessageBox],
     title: str,
@@ -96,6 +138,7 @@ def show_message_box(
     informative_text: str = "",
     icon: QMessageBox.Icon = QMessageBox.Icon.Information,
 ) -> None:
+    log_message_box(title, text, informative_text, icon)
     msg_box = QMessageBox(parent)
     msg_box.setWindowTitle(title)
     msg_box.setText(text)
@@ -141,6 +184,7 @@ def show_custom_message_box(
     icon: QMessageBox.Icon = QMessageBox.Icon.Information,
     style_sheet: str = MESSAGE_BOX_STYLE,
 ) -> None:
+    log_message_box(title, text, informative_text, icon)
     msg_box = QMessageBox(parent)
     msg_box.setWindowTitle(title)
     msg_box.setText(text)

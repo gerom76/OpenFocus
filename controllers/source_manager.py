@@ -1,14 +1,13 @@
 from dataclasses import dataclass
 from typing import Any
 
-import cv2
 import os
 from PyQt6.QtCore import QPoint
 from PyQt6.QtGui import QAction, QIcon, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox, QDialog
 
 from dialogs import DownsampleDialog
-from utils import show_message_box, show_warning_box
+from utils import exec_message_box, show_message_box, show_warning_box
 from ui.styles import MESSAGE_BOX_STYLE
 from locales import trans
 
@@ -254,7 +253,7 @@ class SourceManager:
                 if no_btn:
                     no_btn.setText(trans.t("btn_cancel_generic"))
                 msg.setStyleSheet(MESSAGE_BOX_STYLE)
-                ret = msg.exec()
+                ret = exec_message_box(msg)
                 if ret != QMessageBox.StandardButton.Yes:
                     event.ignore()
                     return
@@ -335,7 +334,7 @@ class SourceManager:
         if no_btn:
             no_btn.setText(trans.t("btn_cancel_generic"))
         msg.setStyleSheet(MESSAGE_BOX_STYLE)
-        ret = msg.exec()
+        ret = exec_message_box(msg)
         return ret == QMessageBox.StandardButton.Yes
 
     def refresh_current_source_view(self) -> None:
@@ -534,7 +533,7 @@ class SourceManager:
             if no_btn:
                 no_btn.setText(trans.t("btn_cancel_generic"))
             msg.setStyleSheet(MESSAGE_BOX_STYLE)
-            if msg.exec() != QMessageBox.StandardButton.Yes:
+            if exec_message_box(msg) != QMessageBox.StandardButton.Yes:
                 return
 
         load_options = self._build_load_options(full_res_images, filenames, scale)

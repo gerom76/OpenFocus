@@ -15,6 +15,8 @@ from utils.image_utils import (
 )
 
 from utils.ui_utils import (
+    log_message_box,
+    exec_message_box,
     show_message_box,
     show_warning_box,
     show_error_box,
@@ -54,6 +56,8 @@ __all__ = [
     'cv2_to_pixmap',
     'get_imwrite_params',
     # ui_utils
+    'log_message_box',
+    'exec_message_box',
     'show_message_box',
     'show_warning_box',
     'show_error_box',
