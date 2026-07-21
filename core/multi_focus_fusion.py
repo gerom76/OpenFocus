@@ -152,6 +152,19 @@ class MultiFocusFusion:
         if kernel_size % 2 == 0:
             kernel_size = max(1, kernel_size - 1)
 
+        if self.use_gpu:
+            try:
+                from fusion_methods.gfg_fgf_torch import gfgfgf_torch_impl
+                return gfgfgf_torch_impl(input_source, img_resize, kernel_size=kernel_size)
+            except Exception as exc:
+                print(f"Warning: GPU GFG-FGF fusion failed ({exc}); falling back to CPU.")
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
         thread_count = kwargs.get('thread_count', None)
         return gfgfgf_impl(input_source, img_resize, kernel_size=kernel_size, thread_count=thread_count)
 
@@ -701,7 +714,7 @@ class MultiFocusFusion:
 
         # GPU fusion paths are already parallel internally; running tiles
         # concurrently would only contend for the device and multiply GPU memory use
-        if self.use_gpu and algorithm in ('guided_filter', 'dct', 'dtcwt'):
+        if self.use_gpu and algorithm in ('guided_filter', 'dct', 'dtcwt', 'gfgfgf'):
             optimal_threads = 1
 
         print(f"Tiled fusion: {len(tile_coords)} tiles, {optimal_threads} parallel workers (memory-optimized)", flush=True)
