@@ -58,6 +58,8 @@ class SettingsManager:
             "align_homography": window.cb_align_homography.isChecked(),
             "align_ecc": window.cb_align_ecc.isChecked(),
             "smooth_kernel": window.slider_smooth.value(),
+            "show_status_console": getattr(window, "status_console", None) is not None
+                                   and window.status_console.isVisible(),
         }
 
     # --- Save ---
@@ -175,6 +177,10 @@ class SettingsManager:
 
         # Sync slider enablement/kernel mode to the selected method, then restore the
         # saved kernel value last so it is not overwritten by the per-method default.
+        # Status console visibility (drives the View menu action, which hides the panel)
+        if "show_status_console" in data and hasattr(window, "action_show_console"):
+            window.action_show_console.setChecked(bool(data["show_status_console"]))
+
         window.update_slider_availability()
         if "smooth_kernel" in data:
             try:

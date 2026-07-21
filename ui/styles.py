@@ -403,6 +403,28 @@ QComboBox::down-arrow {{
     border-right: 5px solid transparent;
     border-top: 5px solid #000;
 }}
+
+/* Bottom status console */
+QWidget#consoleHeader {{
+    background-color: #2b2b2b;
+    border-top: 1px solid #444;
+}}
+QPushButton#consoleButton {{
+    background-color: transparent;
+    color: #aaa;
+    border: none;
+    padding: 2px 8px;
+}}
+QPushButton#consoleButton:hover {{
+    background-color: #3a3a3a;
+    color: #fff;
+}}
+QPlainTextEdit#consoleOutput {{
+    background-color: #141414;
+    color: #d0d0d0;
+    border: none;
+    selection-background-color: {PRIMARY_BLUE};
+}}
 """
 
 # Hover-highlight button style

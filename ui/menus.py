@@ -167,6 +167,19 @@ def setup_menus(window: QMainWindow) -> None:
     batch_menu.addAction(batch_action)
     window.ui_objs['action_batch_process'] = batch_action
 
+    # --- View Menu ---
+    view_menu = menubar.addMenu(trans.t('menu_view'))
+    window.ui_objs['menu_view'] = view_menu
+
+    show_console_action = QAction(trans.t('action_show_console'), window)
+    show_console_action.setCheckable(True)
+    show_console_action.setChecked(True)
+    show_console_action.setShortcut("Ctrl+`")
+    show_console_action.toggled.connect(window.toggle_status_console)
+    view_menu.addAction(show_console_action)
+    window.ui_objs['action_show_console'] = show_console_action
+    window.action_show_console = show_console_action
+
     # --- Settings Menu ---
     settings_menu = menubar.addMenu(trans.t('menu_settings'))
     window.ui_objs['menu_settings'] = settings_menu

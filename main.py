@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QSplitter,
     QMessageBox,
     QDialog,
@@ -42,6 +41,7 @@ from utils import (
     resource_path,
 )
 from ui.image_panels import create_source_panel, create_result_panel
+from widgets import StatusConsole
 from ui.menus import setup_menus
 from ui.right_panel import bind_right_panel, create_right_panel
 from controllers.render_manager import RenderManager
@@ -159,7 +159,7 @@ class OpenFocus(QMainWindow):
         # 2. Main container
         main_container = QWidget()
         self.setCentralWidget(main_container)
-        main_layout = QHBoxLayout(main_container)
+        main_layout = QVBoxLayout(main_container)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
@@ -285,7 +285,24 @@ class OpenFocus(QMainWindow):
         total_width = self.width()
         self.main_splitter.setSizes([int(total_width * 0.75), int(total_width * 0.25)])
 
-        main_layout.addWidget(self.main_splitter)
+        # ---------------------------------------------------------
+        # C. Status output area (bottom) — mirrors the terminal output
+        # ---------------------------------------------------------
+        self.status_console = StatusConsole()
+
+        self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.vertical_splitter.addWidget(self.main_splitter)
+        self.vertical_splitter.addWidget(self.status_console)
+        self.vertical_splitter.setStretchFactor(0, 5)
+        self.vertical_splitter.setStretchFactor(1, 0)
+        self.vertical_splitter.setCollapsible(0, False)
+        self.vertical_splitter.setCollapsible(1, True)
+
+        total_height = self.height()
+        console_height = max(120, int(total_height * 0.18))
+        self.vertical_splitter.setSizes([total_height - console_height, console_height])
+
+        main_layout.addWidget(self.vertical_splitter)
 
     def eventFilter(self, obj, event):
         """Global event filter to handle Space key and Delete key interactions."""
@@ -882,7 +899,23 @@ class OpenFocus(QMainWindow):
         if hasattr(self, 'status_timer') and self.status_timer.isActive():
             self.status_timer.stop()
 
+        # Give stdout/stderr back to the real terminal
+        if hasattr(self, 'status_console'):
+            self.status_console.restore_streams()
+
         super().closeEvent(event)
+
+    # --- Status console ---
+
+    def toggle_status_console(self, visible: bool) -> None:
+        """Show or hide the bottom status output area."""
+        if not hasattr(self, 'status_console'):
+            return
+        self.status_console.setVisible(visible)
+        if visible and self.vertical_splitter.sizes()[1] == 0:
+            total = self.vertical_splitter.height()
+            console_height = max(120, int(total * 0.18))
+            self.vertical_splitter.setSizes([total - console_height, console_height])
 
     # --- Language ---
     
@@ -939,6 +972,10 @@ class OpenFocus(QMainWindow):
         # Status
         self.update_loaded_status()
         self._update_dynamic_status()
+
+        # Status console
+        if hasattr(self, 'status_console'):
+            self.status_console.update_ui_text()
         
         # Drag hint
         if not self.stack_images:

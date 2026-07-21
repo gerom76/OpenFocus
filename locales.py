@@ -62,10 +62,20 @@ class TranslationManager(QObject):
                 'action_tile_settings': 'Tile Settings',
                 'action_stackmffv4_batch_settings': 'StackMFF V4 Batch Size',
                 
+                # Menu View
+                'menu_view': 'View',
+                'action_show_console': 'Status Output',
+
                 # Menu Help
                 'menu_help': 'Help',
                 'action_env_info': 'Environment Info',
                 'action_contact': 'Contact Us',
+
+                # Status console
+                'console_title': 'Output',
+                'console_clear': 'Clear',
+                'console_collapse': 'Collapse',
+                'console_expand': 'Expand',
                 
                 # Right Panel
                 'group_fusion': 'Fusion',
@@ -482,10 +492,20 @@ class TranslationManager(QObject):
                 'action_tile_settings': '分块设置',
                 'action_stackmffv4_batch_settings': 'StackMFF V4 批量大小',
                 
+                # Menu View
+                'menu_view': '视图',
+                'action_show_console': '状态输出',
+
                 # Menu Help
                 'menu_help': '帮助',
                 'action_env_info': '环境信息',
                 'action_contact': '联系我们',
+
+                # Status console
+                'console_title': '输出',
+                'console_clear': '清空',
+                'console_collapse': '折叠',
+                'console_expand': '展开',
                 
                 # Right Panel
                 'group_fusion': '融合算法',
