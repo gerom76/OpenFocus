@@ -4,7 +4,14 @@ from typing import Any
 import os
 from PyQt6.QtCore import QPoint
 from PyQt6.QtGui import QAction, QIcon, QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox, QDialog
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QDialog,
+)
 
 from dialogs import DownsampleDialog
 from utils import exec_message_box, show_message_box, show_warning_box
@@ -33,6 +40,34 @@ class SourceManager:
         count = self.window.file_list.count()
         self.window.source_images_label.setText(f"Source Images: {count}")
 
+    # ------------------------------------------------------------------
+    # Load progress
+    # ------------------------------------------------------------------
+    def _begin_load_progress(self):
+        """Show the console progress bar and return a callback for the loader.
+
+        Loading runs on the GUI thread, so the callback pumps the event loop to
+        keep the bar and the console output moving. Returns None when there is
+        no console to drive.
+        """
+        console = getattr(self.window, "status_console", None)
+        if console is None:
+            return None
+
+        console.start_progress()
+        QApplication.processEvents()
+
+        def report(current: int, total: int) -> None:
+            console.set_progress(current, total)
+            QApplication.processEvents()
+
+        return report
+
+    def _end_load_progress(self) -> None:
+        console = getattr(self.window, "status_console", None)
+        if console is not None:
+            console.stop_progress()
+
     def load_image_stack(self, folder_path: str, append: bool = False) -> None:
         window = self.window
 
@@ -47,7 +82,7 @@ class SourceManager:
 
         try:
             success, message, full_res_images, filenames = window.image_loader.load_from_folder(
-                folder_path, scale_factor=scale_factor
+                folder_path, scale_factor=scale_factor, progress_callback=self._begin_load_progress()
             )
 
             if not success:
@@ -67,6 +102,8 @@ class SourceManager:
                 f"Error: {str(exc)}",
                 QMessageBox.Icon.Critical,
             )
+        finally:
+            self._end_load_progress()
 
     def load_video_stack(self, video_path: str, append: bool = False) -> None:
         """Load image stack from a video file."""
@@ -83,7 +120,7 @@ class SourceManager:
 
         try:
             success, message, full_res_images, filenames = window.image_loader.load_from_video(
-                video_path, scale_factor=scale_factor
+                video_path, scale_factor=scale_factor, progress_callback=self._begin_load_progress()
             )
 
             if not success:
@@ -103,6 +140,8 @@ class SourceManager:
                 f"Error: {str(exc)}",
                 QMessageBox.Icon.Critical,
             )
+        finally:
+            self._end_load_progress()
 
     def prompt_and_load_stack(self) -> None:
         window = self.window
@@ -232,7 +271,10 @@ class SourceManager:
                 return
             scale = dlg.get_scale_factor()
 
-            success, message, full_res_images, filenames = loader.load_from_filepaths(valid_paths, scale_factor=scale)
+            success, message, full_res_images, filenames = loader.load_from_filepaths(
+                valid_paths, scale_factor=scale, progress_callback=self._begin_load_progress()
+            )
+            self._end_load_progress()
             if not success:
                 show_warning_box(self.window, trans.t("msg_load_failed"), trans.t("msg_load_dropped_failed_text"), message)
                 event.ignore()
@@ -274,6 +316,8 @@ class SourceManager:
                 QMessageBox.Icon.Critical,
             )
             event.ignore()
+        finally:
+            self._end_load_progress()
 
     def _build_load_options(
         self,
@@ -510,7 +554,12 @@ class SourceManager:
         scale = dlg.get_scale_factor()
 
         loader = self.window.image_loader if hasattr(self.window, "image_loader") else ImageStackLoader()
-        success, message, full_res_images, filenames = loader.load_from_filepaths(file_paths, scale_factor=scale)
+        try:
+            success, message, full_res_images, filenames = loader.load_from_filepaths(
+                file_paths, scale_factor=scale, progress_callback=self._begin_load_progress()
+            )
+        finally:
+            self._end_load_progress()
 
         if not success:
             show_warning_box(self.window, trans.t("msg_load_failed"), trans.t("msg_load_dropped_failed_text"), message)

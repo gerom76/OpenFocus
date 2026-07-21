@@ -7,8 +7,12 @@ import os
 import cv2
 import numpy as np
 import concurrent.futures
+import time
 from datetime import datetime
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Callable, List, Tuple, Optional, Dict, Any
+
+# Called as (completed, total) while a stack is being decoded.
+ProgressCallback = Callable[[int, int], None]
 
 try:
     from PIL import Image as PILImage
@@ -56,12 +60,14 @@ class ImageStackLoader:
         entries: List[Tuple[str, str]],
         scale_factor: float = 1.0,
         max_workers: Optional[int] = None,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> List[Optional[np.ndarray]]:
         """Decode a list of (filename, full_path) entries in parallel.
 
         Decoding (cv2/rawpy) releases the GIL, so threads give near-linear speedup.
         Returns decoded images in input order (None for entries that failed);
-        progress is printed as files complete.
+        progress is printed as files complete and reported to progress_callback,
+        followed by a summary line with elapsed time and throughput.
         """
         if max_workers is None:
             max_workers = min(8, os.cpu_count() or 4)
@@ -83,6 +89,9 @@ class ImageStackLoader:
             except Exception as e:
                 return index, filename, None, str(e)
 
+        start_time = time.perf_counter()
+        failed = 0
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(decode, i, filename, full_path)
@@ -94,17 +103,42 @@ class ImageStackLoader:
                 results[index] = img
                 completed += 1
                 if error == "not_found":
+                    failed += 1
                     print(f"[{completed}/{total}] File not found: {filename}", flush=True)
                 elif error is not None:
+                    failed += 1
                     print(f"[{completed}/{total}] Failed to load {filename}: {error}", flush=True)
                 elif img is None:
+                    failed += 1
                     print(f"[{completed}/{total}] Failed to load {filename}", flush=True)
                 else:
                     print(f"[{completed}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
 
+                if progress_callback is not None:
+                    try:
+                        progress_callback(completed, total)
+                    except Exception:
+                        pass
+
+        print(self._format_load_stats(total - failed, failed, time.perf_counter() - start_time), flush=True)
+
         return results
 
-    def load_from_folder(self, folder_path: str, scale_factor: float = 1.0) -> Tuple[bool, str, List[np.ndarray], List[str]]:
+    @staticmethod
+    def _format_load_stats(loaded: int, failed: int, elapsed: float) -> str:
+        """One-line summary: how many images, how long it took, and the mean rate."""
+        rate = loaded / elapsed if elapsed > 0 else 0.0
+        message = f"Loaded {loaded} image(s) in {elapsed:.2f} s ({rate:.1f} images/s)"
+        if failed > 0:
+            message += f" - {failed} failed"
+        return message
+
+    def load_from_folder(
+        self,
+        folder_path: str,
+        scale_factor: float = 1.0,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not os.path.isdir(folder_path):
             return False, "Selected path is not a valid directory", [], []
 
@@ -120,7 +154,7 @@ class ImageStackLoader:
 
         image_files.sort(key=lambda x: x[0])
 
-        decoded = self._load_files_parallel(image_files, scale_factor)
+        decoded = self._load_files_parallel(image_files, scale_factor, progress_callback=progress_callback)
 
         loaded_images = []
         filenames = []
@@ -146,7 +180,12 @@ class ImageStackLoader:
 
         return True, message, loaded_images, filenames
 
-    def load_from_video(self, video_path: str, scale_factor: float = 1.0) -> Tuple[bool, str, List[np.ndarray], List[str]]:
+    def load_from_video(
+        self,
+        video_path: str,
+        scale_factor: float = 1.0,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not os.path.isfile(video_path):
             return False, "Video file does not exist", [], []
 
@@ -162,6 +201,8 @@ class ImageStackLoader:
         filenames = []
         frame_index = 0
         video_name = os.path.splitext(os.path.basename(video_path))[0]
+
+        start_time = time.perf_counter()
 
         try:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -179,8 +220,22 @@ class ImageStackLoader:
                 loaded_images.append(frame)
                 filenames.append(f"{video_name}_frame_{frame_index:04d}.png")
                 frame_index += 1
+
+                if total_frames > 0:
+                    print(f"[{frame_index}/{total_frames}] Extracted frame "
+                          f"({frame.shape[1]}x{frame.shape[0]})", flush=True)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(frame_index, total_frames)
+                    except Exception:
+                        pass
         finally:
             cap.release()
+
+        elapsed = time.perf_counter() - start_time
+        rate = len(loaded_images) / elapsed if elapsed > 0 else 0.0
+        print(f"Extracted {len(loaded_images)} frame(s) in {elapsed:.2f} s "
+              f"({rate:.1f} frames/s)", flush=True)
 
         if not loaded_images:
             return False, "No frames could be extracted from the video", [], []
@@ -198,12 +253,17 @@ class ImageStackLoader:
         ext = os.path.splitext(filepath)[1].lower()
         return ext in self.SUPPORTED_VIDEO_FORMATS
 
-    def load_from_filepaths(self, filepaths: list[str], scale_factor: float = 1.0) -> Tuple[bool, str, List[np.ndarray], List[str]]:
+    def load_from_filepaths(
+        self,
+        filepaths: list[str],
+        scale_factor: float = 1.0,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not filepaths:
             return False, "No file paths provided", [], []
 
         entries = [(os.path.basename(p), p) for p in filepaths]
-        decoded = self._load_files_parallel(entries, scale_factor)
+        decoded = self._load_files_parallel(entries, scale_factor, progress_callback=progress_callback)
 
         loaded_images = []
         filenames = []
@@ -316,7 +376,8 @@ class ImageStackLoader:
     def load_images_with_timestamps(
         self,
         folder_path: str,
-        sort_by: str = 'timestamp'
+        sort_by: str = 'timestamp',
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> Tuple[bool, str, List[Tuple[str, np.ndarray, Optional[float]]], List[str]]:
         if not os.path.isdir(folder_path):
             return False, "Selected path is not a valid directory", [], []
@@ -331,7 +392,7 @@ class ImageStackLoader:
         if not image_files:
             return False, "No supported image files found in the folder", [], []
 
-        decoded = self._load_files_parallel(image_files)
+        decoded = self._load_files_parallel(image_files, progress_callback=progress_callback)
 
         loaded_data = []
         failed_count = 0
