@@ -6,7 +6,7 @@ from locales import trans
 def setup_menus(window: QMainWindow) -> None:
     """Configure the main menu bar and attach actions to the window."""
     menubar = window.menuBar()
-    
+
     # Initialize the ui_objs container if not present
     if not hasattr(window, 'ui_objs'):
         window.ui_objs = {}

@@ -64,7 +64,9 @@ class OpenFocus(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("OpenFocus")
+        app = QApplication.instance()
+        version = getattr(app, 'version', '') or getattr(app, 'VERSION', '')
+        self.setWindowTitle(f"OpenFocus v{version}" if version else "OpenFocus")
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         
         # Set the window icon

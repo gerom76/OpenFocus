@@ -59,8 +59,12 @@ class PlatformFileHandler:
 class OpenFocusApplication(QApplication):
     """QApplication subclass handling file open events from platform sources."""
 
-    def __init__(self, *args, **kwargs):
+    # Application version, shown next to the OpenFocus label in the menu bar.
+    VERSION = "1.0.1"
+
+    def __init__(self, *args, version: str = VERSION, **kwargs):
         super().__init__(*args, **kwargs)
+        self.version = version
         self.main_window = None
         self._pending: List[str] = []
         self._ready = False
