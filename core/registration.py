@@ -621,7 +621,16 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         import cupy as cp
         import cupyx.scipy.ndimage
         HAS_CUPY = True
-        print("    [Info] Cupy detected. GPU acceleration enabled for warping.")
+        try:
+            props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+            gpu_name = props['name'].decode()
+            free_mem, total_mem = cp.cuda.runtime.memGetInfo()
+            print(f"    [Info] Cupy {cp.__version__} detected. GPU acceleration enabled for warping.")
+            print(f"           Device: {gpu_name} ({free_mem / 1024**3:.1f}/{total_mem / 1024**3:.1f} GB free)")
+        except Exception as e:
+            # Cupy imports fine but no usable CUDA device (driver mismatch, no GPU, ...)
+            HAS_CUPY = False
+            print(f"    [Info] Cupy installed but GPU unavailable ({e}). Using CPU for warping.")
     except ImportError:
         HAS_CUPY = False
         print("    [Info] Cupy not found. Using CPU for warping.")
