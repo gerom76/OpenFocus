@@ -71,6 +71,21 @@ class ExportManager:
     # ------------------------------------------------------------------
     # Filename helpers
     # ------------------------------------------------------------------
+    def _kernel_suffix(self) -> str:
+        """Return a '_k<size>' suffix for methods that use the kernel slider.
+
+        Only GuidedFilter (rb_a), DCT (rb_b) and GFG-FGF (rb_gfg) rely on the
+        kernel-size slider; DTCWT and StackMFF-V4 ignore it, so no suffix is
+        emitted for those.
+        """
+        window = self.window
+        if window.rb_a.isChecked() or window.rb_b.isChecked() or window.rb_gfg.isChecked():
+            try:
+                return f"_k{int(window.slider_smooth.value())}"
+            except Exception:
+                return ""
+        return ""
+
     def generate_default_filename(self) -> str:
         window = self.window
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -95,7 +110,7 @@ class ExportManager:
             reg_methods.append("ECC")
         reg_method_str = "+".join(reg_methods) if reg_methods else "NoAlign"
 
-        return f"OpenFocus_{timestamp}_{fusion_method}_{reg_method_str}"
+        return f"OpenFocus_{timestamp}_{fusion_method}{self._kernel_suffix()}_{reg_method_str}"
 
     def generate_default_foldername(self) -> str:
         window = self.window
@@ -125,7 +140,7 @@ class ExportManager:
         if getattr(window, "current_folder_path", None):
             folder_basename = os.path.basename(window.current_folder_path)
 
-        return f"{folder_basename}_{timestamp}_{fusion_method}_{reg_method_str}"
+        return f"{folder_basename}_{timestamp}_{fusion_method}{self._kernel_suffix()}_{reg_method_str}"
 
     # ------------------------------------------------------------------
     # Export helpers
