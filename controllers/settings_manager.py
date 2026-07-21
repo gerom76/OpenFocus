@@ -29,6 +29,7 @@ class SettingsManager:
         self.window = window
         self.recent_folders: list[str] = []
         self.recent_videos: list[str] = []
+        self.output_dir: str = ""
 
     # --- Recently opened paths ---
 
@@ -47,6 +48,30 @@ class SettingsManager:
     def clear_recent_videos(self) -> None:
         self.recent_videos.clear()
         self._persist_recent()
+
+    # --- Output folder ---
+
+    def set_output_dir(self, path: str) -> None:
+        """Remember the folder the user last exported an image to."""
+        if not path:
+            return
+        if not os.path.isdir(path):
+            path = os.path.dirname(path)
+        if not path or not os.path.isdir(path):
+            return
+
+        path = os.path.normpath(path)
+        if os.path.normcase(path) == os.path.normcase(self.output_dir):
+            return
+
+        self.output_dir = path
+        self._persist_recent()
+
+    def default_output_path(self, filename: str) -> str:
+        """Prefix a suggested filename with the remembered output folder."""
+        if self.output_dir and os.path.isdir(self.output_dir):
+            return os.path.join(self.output_dir, filename)
+        return filename
 
     def last_folder_dir(self) -> str:
         """Directory the Open Folder dialog should start in."""
@@ -77,7 +102,7 @@ class SettingsManager:
         self._persist_recent()
 
     def _persist_recent(self) -> None:
-        """Write only the recent lists back, leaving other saved settings alone.
+        """Write only the remembered paths back, leaving other saved settings alone.
 
         Recent paths are recorded as soon as a stack loads, which must not
         silently overwrite settings the user has not chosen to save.
@@ -95,6 +120,7 @@ class SettingsManager:
 
         data["recent_folders"] = list(self.recent_folders)
         data["recent_videos"] = list(self.recent_videos)
+        data["output_dir"] = self.output_dir
 
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -144,6 +170,7 @@ class SettingsManager:
                                    and window.status_console.isVisible(),
             "recent_folders": list(self.recent_folders),
             "recent_videos": list(self.recent_videos),
+            "output_dir": self.output_dir,
         }
 
     # --- Save ---
@@ -245,6 +272,8 @@ class SettingsManager:
         # Recently opened paths
         self.recent_folders = self._sanitize_recent(data.get("recent_folders"))
         self.recent_videos = self._sanitize_recent(data.get("recent_videos"))
+        output_dir = data.get("output_dir")
+        self.output_dir = os.path.normpath(output_dir) if isinstance(output_dir, str) and output_dir else ""
         refresh = getattr(window, "refresh_recent_menus", None)
         if callable(refresh):
             refresh()

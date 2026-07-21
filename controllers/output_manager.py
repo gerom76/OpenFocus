@@ -104,11 +104,12 @@ class OutputManager:
         if row < 0:
             return
 
-        default_filename = window.export_manager.generate_default_filename()
+        # Propose the name shown in the output list so the saved file matches the entry.
+        default_filename = item.text().strip() or window.export_manager.generate_default_filename()
         file_path, _selected_filter = QFileDialog.getSaveFileName(
             window,
             trans.t("action_save"),
-            default_filename,
+            window.settings_manager.default_output_path(default_filename),
             "PNG Files (*.png);;JPG Files (*.jpg);;Bitmap Files (*.bmp);;TIFF Files (*.tif *.tiff);;All Files (*)",
         )
 
@@ -120,6 +121,7 @@ class OutputManager:
             file_path,
             fallback_extension=fallback_ext if fallback_ext else None,
         )
+        window.settings_manager.set_output_dir(os.path.dirname(file_path))
 
         try:
             if row < len(window.fusion_results):

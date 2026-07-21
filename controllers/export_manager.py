@@ -112,6 +112,15 @@ class ExportManager:
 
         return f"OpenFocus_{timestamp}_{fusion_method}{self._kernel_suffix()}_{reg_method_str}"
 
+    def _suggested_output_name(self) -> str:
+        """Prefer the name of the selected output entry, so saving matches the list."""
+        output_list = getattr(self.window, "output_list", None)
+        if output_list is not None:
+            item = output_list.currentItem()
+            if item is not None and item.text().strip():
+                return item.text().strip()
+        return self.generate_default_filename()
+
     def generate_default_foldername(self) -> str:
         window = self.window
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -161,11 +170,11 @@ class ExportManager:
             show_warning_box(window, trans.t("msg_no_result_title"), trans.t("msg_no_result_text"))
             return
 
-        default_filename = self.generate_default_filename()
+        default_filename = self._suggested_output_name()
         file_path, _ = QFileDialog.getSaveFileName(
             window,
             title,
-            default_filename,
+            window.settings_manager.default_output_path(default_filename),
             "All Supported Formats (*.png *.jpg *.bmp *.tif *.tiff);;"
             "JPG Files (*.jpg);;PNG Files (*.png);;Bitmap Files (*.bmp);;TIFF Files (*.tif *.tiff);;All Files (*)",
         )
@@ -174,6 +183,7 @@ class ExportManager:
             return
 
         file_path = self.normalize_export_path(file_path)
+        window.settings_manager.set_output_dir(os.path.dirname(file_path))
 
         try:
             index = 0 if window.fusion_result is not None else window.current_result_index
@@ -225,12 +235,15 @@ class ExportManager:
         folder_path = QFileDialog.getExistingDirectory(
             window,
             "Select Folder to Save Registration Stack",
-            default_foldername,
+            window.settings_manager.default_output_path(default_foldername),
             QFileDialog.Option.ShowDirsOnly,
         )
 
         if not folder_path:
             return
+
+        # Remember the parent so the next export starts beside the created stack folder.
+        window.settings_manager.set_output_dir(os.path.dirname(folder_path))
 
         try:
             saved_count = 0
@@ -294,16 +307,18 @@ class ExportManager:
             return
 
         duration_ms = duration_dialog.get_duration()
-        default_filename = self.generate_default_filename() + ".gif"
+        default_filename = self._suggested_output_name() + ".gif"
         file_path, _ = QFileDialog.getSaveFileName(
             window,
             "Save as GIF",
-            default_filename,
+            window.settings_manager.default_output_path(default_filename),
             "GIF Files (*.gif);;All Files (*)",
         )
 
         if not file_path:
             return
+
+        window.settings_manager.set_output_dir(os.path.dirname(file_path))
 
         self.gif_progress_dialog = QProgressDialog(
             trans.t("msg_gif_saving_text"),
@@ -362,12 +377,15 @@ class ExportManager:
         folder_path = QFileDialog.getExistingDirectory(
             window,
             "Select Folder to Save Processed Input Stack",
-            default_foldername,
+            window.settings_manager.default_output_path(default_foldername),
             QFileDialog.Option.ShowDirsOnly,
         )
 
         if not folder_path:
             return
+
+        # Remember the parent so the next export starts beside the created stack folder.
+        window.settings_manager.set_output_dir(os.path.dirname(folder_path))
 
         try:
             saved_count = 0
