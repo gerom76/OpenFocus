@@ -25,8 +25,8 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip - *fixed in 1.5.5* | Medium | Medium |
 | 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent | Medium | Medium |
 | 8 | DTCWT | Performance | CPU cost grows faster than image area | Medium | Medium |
-| 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything | Low | Low |
-| 10 | Guided Filter | Performance | Dead code; per-frame float32 copies dominate memory | Low | Low |
+| 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything - *investigated and closed in 1.5.6* | Low | Low |
+| 10 | Guided Filter | Performance | Dead code; per-frame float32 copies dominate memory - *fixed in 1.5.6* | Low | Low |
 
 ---
 
@@ -349,19 +349,53 @@ whenever `pytorch_wavelets` and `pywt` are installed.
 The kernel slider is exposed in the UI, so users reasonably assume it matters.
 Swept across a 13-fold range:
 
-| kernel_size | 7 | 15 | 31 | 63 | 95 |
-|-------------|---|----|----|----|----|
-| PSNR | 41.78 | 42.27 | 42.27 | 42.31 | 42.32 |
+| kernel_size                 | 7     | 15    | 31    | 63    | 95    |
+|-----------------------------|-------|-------|-------|-------|-------|
+| PSNR (as first measured)    | 41.78 | 42.27 | 42.27 | 42.31 | 42.32 |
+| PSNR (re-measured at 1.5.5) | 42.50 | 43.12 | 43.23 | 43.24 | 43.24 |
 
-Under 0.6 dB from end to end, and flat above 15. For comparison, DTCWT's `N`
+Under 0.8 dB from end to end, and flat above 15. For comparison, DTCWT's `N`
 moves its result by 13.6 dB and GFG-FGF's kernel by 5.9 dB.
 
-Two readings, and they call for different actions. Either the parameter genuinely
-does not matter much - in which case the UI is inviting users to fiddle with a
-dead control, and it should be de-emphasised or given a narrower range - or the
-base/detail split it controls is contributing less to the result than intended,
-which is worth investigating. The synthetic fixture's focus regions are large and
-smooth, which flatters large kernels, so **confirm on a real stack before acting**.
+**Resolved in 1.5.6: the first reading is correct, and structurally so.** The
+second reading - that the base/detail split is contributing less than intended -
+was tested and rejected. GFF reconstructs `base + detail` exactly, so with
+normalised weights the output is
+
+```text
+fused = Σ wd_k·I_k  +  Σ (wb_k − wd_k)·B_k
+```
+
+The base layers `B_k` - the only thing the kernel controls - reach the output
+solely through the *gap* between the two weight maps. That gap is small, so the
+kernel is near-inert by construction, not by accident.
+
+Measured directly, comparing each setting's output against the default's rather
+than against the reference (higher dB = more alike; 60 dB is roughly 0.16 grey
+levels RMS):
+
+| kernel_size          | 7    | 15   | 31 | 63   | 95   |
+|----------------------|------|------|----|------|------|
+| PSNR vs. k=31 output | 50.9 | 58.0 | -  | 68.0 | 67.6 |
+
+Every setting is visually identical to every other. The same holds for `r1`, the
+base-layer weight radius the kernel feeds: a 21-fold sweep (7 → 150) moves the
+output by 60-70 dB. The whole base-layer branch is inert.
+
+Two changes followed:
+
+- `r1` is now derived from the kernel at the paper's own 3:1 ratio
+  (`base_weight_radius()`), instead of being pinned at 45. `kernel_size=31`
+  still yields exactly `r1=45`, so the default is unchanged, but the weight
+  smoothing now tracks the decomposition scale. That removes the one setting
+  where the slider actively hurt: small kernels used to degrade the result
+  (42.69 dB at k=7 against 43.42 at the default), and now do not. Sweep spread
+  falls from 0.74 dB to 0.03 dB - the control is flat *and* safe everywhere.
+- The method help no longer promises the slider will "balance sharpness and
+  smoothness". It says the setting has almost no visible effect and explains why.
+
+The slider itself is left in place and full-range: it is shared with DCT and
+GFG-FGF, where it does matter, and every value is now harmless.
 
 ---
 
@@ -381,6 +415,28 @@ smooth, which flatters large kernels, so **confirm on a real stack before acting
   level between runs. Harmless numerically, but it means output is not
   reproducible bit-for-bit; accumulating in a fixed order would cost nothing
   measurable.
+
+**Fixed in 1.5.6.** The dead `guided_filter()` is gone. The three full-stack
+float32 lists (`stack_flt`, `base_layers`, `detail_layers`) and the stacked
+saliency maps are gone with it: frames are converted on demand, saliency is
+reduced with a running maximum, and decomposition now happens inside the fusion
+pass. `_map_in_order()` keeps a sliding window of exactly `max_workers` tasks
+outstanding, so peak memory is set by the pool size rather than by stack depth,
+and results are consumed in index order - which also makes accumulation
+reproducible, so `deterministic=False` has been dropped from the registry.
+
+Peak working set, 1536x1536 frames:
+
+| frames | 4       | 8        | 16       | 24       |
+|--------|---------|----------|----------|----------|
+| before | 962 MiB | 1889 MiB | 3603 MiB | 5570 MiB |
+| after  | 891 MiB | 1772 MiB | 1722 MiB | 1704 MiB |
+
+Growth with stack depth stops once the depth exceeds the worker count; the curve
+is flat from there. Cost is ~5% throughput (0.99 s → 1.04 s on 16 frames), from
+capping the default pool at 8 threads - the OpenCV filters are internally
+parallel, so the extra Python threads bought little. Output is bit-identical to
+the previous implementation on the test stack.
 
 ---
 

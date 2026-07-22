@@ -196,12 +196,13 @@ METHODS = [
         sweeps=(
             ("kernel_size", [7, 15, 31, 63, 95],
              "Size of the averaging window that splits each frame into a smooth "
-             "base layer and a detail layer. Larger keeps more of the picture in "
-             "the detail layer, which sharpens edges but can raise haloing."),
+             "base layer and a detail layer, and (at a fixed 3:1 ratio) the "
+             "radius that smooths the base-layer weights. Near-inert by design: "
+             "base + detail reconstructs the frame exactly, so the split only "
+             "reaches the output through the gap between the two weight maps. "
+             "End to end the sweep moves PSNR by 0.03 dB and the outputs sit "
+             "60+ dB apart, i.e. indistinguishable."),
         ),
-        # Weights accumulate in thread-completion order, so repeat runs can
-        # differ by one level; see test_gff_quality.py
-        deterministic=False,
         min_psnr=33.0,      # measured 39.5
     ),
     FusionMethod(

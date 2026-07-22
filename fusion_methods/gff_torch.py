@@ -17,8 +17,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from fusion_methods.gff import base_weight_radius
+
 # Parameters matching the CPU implementation in gff.py
-DEFAULT_R1 = 45
 DEFAULT_R2 = 7
 DEFAULT_EPS1 = 0.3
 DEFAULT_EPS2 = 10e-6
@@ -129,6 +130,7 @@ def gff_torch_impl(input_source, img_resize=None, kernel_size=31, device=None):
     if average_filter_size % 2 == 0:
         average_filter_size += 1
     blur_radius = average_filter_size // 2
+    r1 = base_weight_radius(average_filter_size)
 
     stack_ori = _load_stack(input_source)
     if not stack_ori:
@@ -140,7 +142,7 @@ def gff_torch_impl(input_source, img_resize=None, kernel_size=31, device=None):
     h, w = stack_ori[0].shape[:2]
 
     # Reflect padding requires pad < dim; below this size use the CPU path instead
-    max_pad = max(DEFAULT_R1, blur_radius, GAUSS_KSIZE // 2)
+    max_pad = max(r1, blur_radius, GAUSS_KSIZE // 2)
     if min(h, w) <= max_pad:
         raise ValueError(
             f"Image {w}x{h} too small for GPU guided-filter fusion (needs > {max_pad} px per side)"
@@ -193,7 +195,7 @@ def gff_torch_impl(input_source, img_resize=None, kernel_size=31, device=None):
             ks = torch.arange(start, start + b, device=dev).view(b, 1, 1)
             masks = (max_indices.unsqueeze(0) == ks).float().unsqueeze(1)  # (B, 1, H, W)
 
-            weight_base = _guided_filter(gray, masks, DEFAULT_R1, DEFAULT_EPS1)
+            weight_base = _guided_filter(gray, masks, r1, DEFAULT_EPS1)
             weight_detail = _guided_filter(gray, masks, DEFAULT_R2, DEFAULT_EPS2)
 
             base_num += (base * weight_base).sum(dim=0)

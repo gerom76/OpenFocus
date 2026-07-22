@@ -81,7 +81,7 @@ class RenderMethodHelpDialog(HelpDialog):
         help_text = """<h3>Render Methods</h3>
         
     <p>Guided Filter<br/>
-    Guided-filter fusion tuned for practical edge preservation. Ideal for simpler scenes or moderate focus variations, and you can fine-tune the kernel slider to balance sharpness and smoothness.</p>
+    Guided-filter fusion tuned for practical edge preservation. Ideal for simpler scenes or moderate focus variations. The kernel slider sets the base/detail split, but this method reconstructs base + detail exactly, so the setting has almost no visible effect - leave it at the default unless you have a reason not to.</p>
 
     <p>DCT<br/>
     Frequency-domain fusion that evaluates block-wise DCT variance and keeps the sharpest contributor per region. It is fast, fully CPU-based, and works well when you need crisp edges without deploying neural models.</p>
