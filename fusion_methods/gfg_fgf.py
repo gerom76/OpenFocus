@@ -140,15 +140,10 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
     # The original uint8 data is no longer needed; release the reference (if not held externally)
     del stack_ori
 
-    # Determine the channel used for focus computation (Channel Selection)
-    # Sum each channel of the first image and take the index of the largest channel
-    # Use sum(axis=(0,1)) for fast summation
-    ch_sum = imgs_f32[0].sum(axis=(0, 1))
-    channel_idx = int(np.argmax(ch_sum))
-
-    # Extract the grayscale/single channel of all images for guiding (N, H, W)
-    # Reference the slice directly without copying data (View)
-    grays = [img[:, :, channel_idx] for img in imgs_f32]
+    # Guide image for the guided filter: luminance, not a single colour channel.
+    # Detail is measured across all channels further down, so a structure that
+    # only exists in one channel (e.g. red text on a dark background) is not lost.
+    grays = [cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) for img in imgs_f32]
 
     # -------------------------------------------------------------------------
     # 3. Compute focus measure (Focus Measure) - stage 1
@@ -160,18 +155,18 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
     focus_vals = np.zeros(num_imgs, dtype=np.float32)
 
     def compute_focus_score(idx):
-        gray_img = grays[idx]
+        # Measure gradient energy on every colour channel and keep the strongest
+        # response per pixel, so detail carried by a single channel still counts.
+        img = imgs_f32[idx]
         # filter2D is well-parallelized internally, but a ThreadPool still helps with many small images
-        gx = cv2.filter2D(gray_img, cv2.CV_32F, kx, borderType=cv2.BORDER_REFLECT)
-        gy = cv2.filter2D(gray_img, cv2.CV_32F, ky, borderType=cv2.BORDER_REFLECT)
-        
+        gx = cv2.filter2D(img, cv2.CV_32F, kx, borderType=cv2.BORDER_REFLECT)
+        gy = cv2.filter2D(img, cv2.CV_32F, ky, borderType=cv2.BORDER_REFLECT)
+
         # Ignore a 1-pixel border to avoid boundary artifacts
-        # Slice before using np.mean
-        sub_gx = gx[1:-1, 1:-1]
-        sub_gy = gy[1:-1, 1:-1]
-        
-        # Vectorized computation of the mean of squares
-        score = np.mean(sub_gx**2 + sub_gy**2)
+        energy = (gx * gx + gy * gy)[1:-1, 1:-1]
+
+        # Vectorized computation of the mean of the per-pixel channel maximum
+        score = np.mean(energy.max(axis=2))
         return idx, score
 
     # Decide the thread-pool size: prefer the passed-in thread_count, otherwise use the original strategy (max 8)
@@ -195,32 +190,40 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
     # -------------------------------------------------------------------------
     # 4. Compute the initial decision maps (AFMs) - stage 2
     # -------------------------------------------------------------------------
-    scale = 0.15
     g_msz = kernel_size
     g_gsz = 5
     g_eps = 0.3
     threshold = 0.005
-    
+
+    # A frame is only dropped when it carries no gradient energy at all (a blank
+    # or dead frame). A global sharpness quota would throw away frames that are
+    # mostly defocused yet hold the only sharp region for part of the field --
+    # the per-pixel argmax below is what decides which frame wins where.
+    active = focus_vals > 1e-6 * max_focus
+
     # Preallocate the stack space (N, H, W)
     afms_stack = np.zeros((num_imgs, h, w), dtype=np.float32)
 
     def compute_afm_map(i):
-        # Skip when the focus value is too low, keeping all zeros
-        if focus_vals[i] < scale * max_focus:
+        # Skip degenerate frames, keeping all zeros
+        if not active[i]:
             return i, None
-        
-        g = grays[i]
+
+        img = imgs_f32[i]
         # Local averaging
-        src_blur = cv2.blur(g, (g_msz, g_msz))
+        src_blur = cv2.blur(img, (g_msz, g_msz))
         # Difference
-        src_diff = cv2.absdiff(g, src_blur)
-        
+        src_diff = cv2.absdiff(img, src_blur)
+
+        # Collapse the per-channel local contrast by taking the strongest channel
+        activity = src_diff.max(axis=2)
+
         # Thresholding: in-place operation optimization
-        # gfg_map = src_diff if src_diff > threshold else 0
-        _, gfg_map = cv2.threshold(src_diff, threshold, 0, cv2.THRESH_TOZERO)
-        
+        # gfg_map = activity if activity > threshold else 0
+        _, gfg_map = cv2.threshold(activity, threshold, 0, cv2.THRESH_TOZERO)
+
         # Guided filtering
-        afm = _run_guided_filter(g, gfg_map, g_gsz, g_eps)
+        afm = _run_guided_filter(grays[i], gfg_map, g_gsz, g_eps)
         return i, afm
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -250,7 +253,7 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
     # Since GuidedFilter is time-consuming, we still compute the filter in parallel and accumulate in the main thread.
     
     def compute_fusion_component(i):
-        if focus_vals[i] < scale * max_focus:
+        if not active[i]:
             return None
             
         # Generate a binary mask (float)

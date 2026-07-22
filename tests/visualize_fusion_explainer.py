@@ -125,12 +125,16 @@ def figures_gfgfgf(stack):
     grays = [cv2.cvtColor(s, cv2.COLOR_BGR2GRAY).astype(np.float32) for s in stack]
     scores = [float(np.abs(cv2.Laplacian(g, cv2.CV_32F)).mean()) for g in grays]
 
-    contrast = [np.abs(g - cv2.blur(g, (7, 7))) for g in grays]
+    # Local contrast on every colour channel, strongest response kept - the same
+    # channel-agnostic activity the method itself measures
+    colour = [s.astype(np.float32) for s in stack]
+    contrast = [np.abs(c - cv2.blur(c, (7, 7))).max(axis=2) for c in colour]
     raw = np.argmax(np.stack(contrast), axis=0)
 
     return [
         (b64(heat(contrast[0])), "Local contrast",
-         "How much each small neighbourhood of frame 1 differs from its own average. Bright means detail."),
+         "How much each small neighbourhood of frame 1 differs from its own average, across all "
+         "three colour channels. Bright means detail."),
         (b64(decision_image(raw, len(stack))), "Winner per pixel",
          "The frame with the most local contrast at each point."),
     ], scores
@@ -320,12 +324,6 @@ CSS = r"""
   .score-row .bar div { height:100%; background:var(--accent); border-radius:0 3px 3px 0; }
   .score-row .val { font-family:var(--font-mono); font-size:13px; color:var(--ink-2);
                     font-variant-numeric:tabular-nums; }
-  .cutoff { display:grid; grid-template-columns:92px minmax(0,1fr) 54px; gap:12px; }
-  .cutoff span { grid-column:2; position:relative; font-family:var(--font-mono);
-                 font-size:11px; color:var(--f2); padding-left:15%; }
-  .cutoff span::before { content:""; position:absolute; left:15%; top:-24px; bottom:14px;
-                         border-left:2px dashed var(--f2); }
-  .cut { border-color:var(--f2) !important; }
   footer { border-top:1px solid var(--line-strong); padding-top:22px;
            font-family:var(--font-mono); font-size:12px; color:var(--ink-3); line-height:1.9; }
   @media (prefers-reduced-motion:reduce) { * { transition:none !important; } }
@@ -494,17 +492,16 @@ def build(out_path):
         rows = []
         for i, value in enumerate(scores):
             pct = value / top * 100
-            dropped = pct < 15
             rows.append(f"""
-          <div class="score-row"><span{' style="color:var(--f2)"' if dropped else ''}>{names[i]}</span>
-            <div class="bar"><div style="width:{max(pct, 1):.0f}%{';background:var(--f2)' if dropped else ''}"></div></div>
-            <span class="val"{' style="color:var(--f2)"' if dropped else ''}>{pct:.0f}%{' &times;' if dropped else ''}</span></div>""")
+          <div class="score-row"><span>{names[i]}</span>
+            <div class="bar"><div style="width:{max(pct, 1):.0f}%"></div></div>
+            <span class="val">{pct:.0f}%</span></div>""")
         return "".join(rows)
 
     score_rows = score_bars(gfg_scores, FRAME_NAMES)
 
-    # The scenario where the shortlist rule actually fires: a small detailed
-    # subject on a plain background pushes the background frame under the line
+    # A small detailed subject on a plain background: the background frame is
+    # far softer overall, yet holds the only sharp version of the background
     edge_stack, _, _ = sc.build("depth_edge")
     edge_rows = score_bars(focus_scores(edge_stack), ["Subject frame", "Background frame"])
 
@@ -647,32 +644,34 @@ def build(out_path):
     </div>
 
     <div class="method">
-      <div class="title"><h3>GFG-FGF</h3><span class="tag">pixel by pixel, with a shortlist</span></div>
+      <div class="title"><h3>GFG-FGF</h3><span class="tag">pixel by pixel</span></div>
       <p class="lede">
         Closely related to the guided filter, and faster. It measures how much each small
         neighbourhood stands out from its surroundings, then refines the result the same
         edge-aware way.
       </p>
       <p>
-        It adds one step the others do not have: before looking at any detail, it gives each
-        frame <b>a single overall sharpness score</b>, and drops any frame scoring under 15% of
-        the best one. The idea is to save time by ignoring hopelessly blurred frames.
+        It looks for that local contrast in <b>all three colour channels</b> and keeps whichever
+        responds most strongly. That matters for a subject whose detail is coloured rather than
+        bright or dark &mdash; a stained specimen, a circuit board, a painted surface &mdash;
+        where texture can sit almost entirely in one channel and be invisible in a plain
+        black-and-white conversion.
       </p>
-      <p class="tight"><b>A normal stack</b> &mdash; every frame comfortably above the line,
-        so all three are used:</p>
-      <div class="scores">{score_rows}<div class="cutoff"><span>15% cut-off</span></div></div>
+      <p class="tight"><b>Overall sharpness of a normal stack</b> &mdash; each frame is sharp
+        across a different band, so the three scores come out close together:</p>
+      <div class="scores">{score_rows}</div>
       <div class="callout">
         <p>
-          <b>This is worth knowing about.</b> If your subject is small and detailed against a
-          plain background, the frame focused on the background can score below that 15% line
-          and be thrown away &mdash; even though it held the only sharp version of the
-          background. When that happens you get one of your original photos back, unchanged.
-          We reproduce it in our tests, so it is not hypothetical.
+          <b>An overall score is not what decides anything.</b> Every frame is compared against
+          the others one pixel at a time, so a frame that is soft nearly everywhere still wins
+          the region it alone got right. Only a frame with no detectable detail at all &mdash;
+          a blank or dead exposure &mdash; is skipped.
         </p>
       </div>
       <p class="tight"><b>A small subject on a plain background</b> &mdash; the background frame
-        falls under the line and is discarded, and the result is the other frame, unchanged:</p>
-      <div class="scores">{edge_rows}<div class="cutoff"><span>15% cut-off</span></div></div>
+        scores far lower overall, and is used anyway, because it holds the only sharp version of
+        the background:</p>
+      <div class="scores">{edge_rows}</div>
       <div class="strip">{strip(gfg_figs)}</div>
     </div>
 

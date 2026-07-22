@@ -42,11 +42,11 @@ CROP_PX = 132   # px, side of the magnified detail window
 # Notes that a rank cannot express: a named mechanism behind a behaviour.
 # Only added to a card when the run actually reproduces the behaviour.
 MECHANISM_NOTES = {
-    "gfgfgf": ("Can ignore a whole frame",
-               "It rates each frame's sharpness as a single number and skips any frame "
-               "scoring under 15% of the sharpest one. When a small detailed subject sits "
-               "on a plain background, the background frame falls under that line and is "
-               "dropped - so you get one of your originals back, unfused."),
+    "gfgfgf": ("Blends rather than picks",
+               "It decides which frame wins at each pixel, then smooths those decisions "
+               "into soft weights and mixes the frames together. That hides the stepping "
+               "a block-based method shows, but where two frames both claim a region the "
+               "average of the two is slightly softer than either."),
     "gff_ifcnn": ("Can disturb a fusion that was already right",
                   "The refinement pass converts the picture into a neural network's "
                   "internal form and back again, and only the difference that round "

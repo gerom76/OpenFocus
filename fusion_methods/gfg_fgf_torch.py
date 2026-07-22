@@ -23,7 +23,7 @@ import torch
 import torch.nn.functional as F
 
 # Parameters matching the CPU implementation in gfg_fgf.py
-SCALE = 0.15          # skip images whose focus < SCALE * max_focus
+SCALE = 1e-6          # skip only frames with essentially no gradient energy
 G_GSZ = 5             # guided-filter radius for weight refinement
 G_EPS = 0.3           # guided-filter regularization
 THRESHOLD = 0.005     # TOZERO threshold on the local-contrast map
@@ -151,40 +151,48 @@ def gfgfgf_torch_impl(input_source, img_resize=None, kernel_size=7, device=None)
             t = torch.from_numpy(arr).to(dev)
             return t.permute(0, 3, 1, 2).float() / 255.0  # (B, 3, H, W) BGR
 
-        # Channel selection: the channel with the largest sum in the first image
-        # is used as the single-channel guide for every image (matches CPU).
-        first = to_device(stack_ori[0:1])
-        channel_idx = int(first.sum(dim=(0, 2, 3)).argmax())
+        # Guide image for the guided filter: luminance, not a single colour
+        # channel. Detail is measured across all channels below, so structure
+        # living in one channel only is still picked up (matches CPU).
+        bgr_to_gray = torch.tensor([0.114, 0.587, 0.299], device=dev).view(1, 3, 1, 1)
 
         def guide_of(t):
-            return t[:, channel_idx:channel_idx + 1]  # (B, 1, H, W)
+            return (t * bgr_to_gray).sum(dim=1, keepdim=True)  # (B, 1, H, W)
 
         # -- Pass 1: focus measure (mean Scharr energy, 1px border ignored) ----
+        # Run per channel and keep the strongest response at each pixel.
+        kx3 = kx.expand(3, 1, 3, 3).contiguous()
+        ky3 = ky.expand(3, 1, 3, 3).contiguous()
         focus_vals = torch.empty(n, device=dev)
         for start in range(0, n, CHUNK_SIZE):
             chunk = stack_ori[start:start + CHUNK_SIZE]
-            g = guide_of(to_device(chunk))
-            gp = F.pad(g, (1, 1, 1, 1), mode='reflect')
-            gx = F.conv2d(gp, kx)
-            gy = F.conv2d(gp, ky)
+            t = to_device(chunk)
+            tp = F.pad(t, (1, 1, 1, 1), mode='reflect')
+            gx = F.conv2d(tp, kx3, groups=3)
+            gy = F.conv2d(tp, ky3, groups=3)
             energy = (gx * gx + gy * gy)[:, :, 1:-1, 1:-1]
-            focus_vals[start:start + len(chunk)] = energy.mean(dim=(1, 2, 3))
+            focus_vals[start:start + len(chunk)] = energy.amax(dim=1).mean(dim=(1, 2))
 
         max_focus = float(focus_vals.max()) if n > 0 else 1.0
         if max_focus == 0:
             max_focus = 1.0
-        active = focus_vals >= (SCALE * max_focus)  # (n,) bool
+        # Only blank/dead frames are dropped; the per-pixel argmax decides the
+        # rest, so a mostly-defocused frame can still own its one sharp region.
+        active = focus_vals > (SCALE * max_focus)  # (n,) bool
 
         # -- Pass 2: activity focus maps -> initial decision map ----------------
         afms = torch.zeros((n, h, w), device=dev)
         for start in range(0, n, CHUNK_SIZE):
             chunk = stack_ori[start:start + CHUNK_SIZE]
             b = len(chunk)
-            g = guide_of(to_device(chunk))
+            t = to_device(chunk)
+            g = guide_of(t)
 
-            src_blur = _box_filter(g, blur_radius)
-            src_diff = (g - src_blur).abs()
-            gfg_map = src_diff * (src_diff > THRESHOLD)  # THRESH_TOZERO
+            src_blur = _box_filter(t, blur_radius)
+            src_diff = (t - src_blur).abs()
+            # Collapse the per-channel local contrast by taking the strongest channel
+            activity = src_diff.amax(dim=1, keepdim=True)
+            gfg_map = activity * (activity > THRESHOLD)  # THRESH_TOZERO
             afm = _guided_filter(g, gfg_map, G_GSZ, G_EPS)
 
             # Low-focus images stay zero so they never win the argmax

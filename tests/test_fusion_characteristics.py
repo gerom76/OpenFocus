@@ -16,6 +16,7 @@ Run with:  python -m pytest tests/test_fusion_characteristics.py -v
 import os
 import sys
 
+import cv2
 import numpy as np
 import pytest
 
@@ -179,24 +180,54 @@ def test_dct_struggles_most_with_noise(results):
 
 
 # ---------------------------------------------------------------------------
-# "GFG-FGF can throw a frame away"
+# "GFG-FGF keeps every frame that wins somewhere"
 # ---------------------------------------------------------------------------
 
-def test_gfgfgf_discards_frames_it_judges_unsharp(results):
+def test_gfgfgf_keeps_globally_soft_frames(results):
     """
-    GFG-FGF scores each frame's focus globally and skips any frame below 15% of
-    the sharpest (scale = 0.15 in fusion_methods/gfg_fgf.py). A small detailed
-    subject on a plain background can push the background frame under that line,
-    and the result is then one source frame returned unchanged - no fusion.
+    GFG-FGF used to score each frame's focus globally and skip any frame below
+    15% of the sharpest, so a small detailed subject on a plain background pushed
+    the background frame under the line and the output was one source frame
+    returned unchanged. Only frames with no gradient energy at all are dropped
+    now; the per-pixel decision map picks the winner everywhere else.
     """
     _require("gfgfgf")
-    stack, _, _ = sc.build("depth_edge")
+    stack, reference, _ = sc.build("depth_edge")
     fused = reg.get("gfgfgf").run(stack)
 
     matches = [i for i, s in enumerate(stack) if np.array_equal(fused, s)]
-    assert matches, (
-        "GFG-FGF no longer returns a source frame unchanged on the depth_edge "
-        "scenario - if this is a deliberate fix, update the report's claim")
+    assert not matches, (
+        f"GFG-FGF returned source frame {matches} unchanged - the global "
+        "sharpness gate is discarding whole frames again")
+    assert fm.psnr(fused, reference) > max(fm.psnr(s, reference) for s in stack)
+
+
+def test_gfgfgf_finds_detail_in_any_colour_channel():
+    """
+    Focus used to be measured on whichever single channel was brightest in the
+    first frame, so a subject whose texture is chromatic rather than tonal - the
+    detail living in a channel that was not picked - fused no better than not
+    fusing at all. Activity is now the strongest response across all channels.
+    """
+    _require("gfgfgf")
+    size = 256
+    # Red dominates brightness; all the texture is carried in blue.
+    reference = np.zeros((size, size, 3), dtype=np.uint8)
+    reference[:, :, 2] = 200
+    rng = np.random.default_rng(11)
+    for _ in range(70):
+        c = (int(rng.integers(0, size)), int(rng.integers(0, size)))
+        cv2.circle(reference, c, int(rng.integers(3, 11)),
+                   (int(rng.integers(120, 255)), 0, 200), -1)
+
+    masks = sc._band_masks(size, size, 3)
+    stack = sc._stack_from_masks(reference, masks)
+    fused = reg.get("gfgfgf").run(stack)
+
+    best_slice = max(fm.psnr(s, reference) for s in stack)
+    assert fm.psnr(fused, reference) > best_slice + 3, (
+        "GFG-FGF gained nothing over a single frame on chromatic-only detail - "
+        "focus is being measured on one colour channel again")
 
 
 def test_gfgfgf_fuses_normally_when_frames_are_comparable(results):

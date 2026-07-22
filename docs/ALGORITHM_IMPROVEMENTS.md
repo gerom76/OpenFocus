@@ -17,8 +17,8 @@ Ranked by expected value: **impact** is how much it changes a real render,
 
 | # | Method | Category | Issue | Impact | Effort |
 |---|--------|----------|-------|--------|--------|
-| 1 | GFG-FGF | Quality | Focus measured on one colour channel; fails outright when detail is not in it | High | Low |
-| 2 | GFG-FGF | Quality | Whole frames discarded by a global 15% sharpness threshold | High | Low |
+| 1 | GFG-FGF | Quality | Focus measured on one colour channel; fails outright when detail is not in it - *fixed in 1.5.7* | High | Low |
+| 2 | GFG-FGF | Quality | Whole frames discarded by a global 15% sharpness threshold - *fixed in 1.5.7* | High | Low |
 | 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically | High | Low |
 | 4 | DCT | Quality | Result depends on the order frames are passed in | Medium | Low |
 | 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial |
@@ -32,10 +32,10 @@ Ranked by expected value: **impact** is how much it changes a real render,
 
 ## 1. GFG-FGF measures focus on a single colour channel
 
-**Category: quality. Impact: high. Effort: low.**
+**Category: quality. Impact: high. Effort: low. Fixed in 1.5.7.**
 
-`fusion_methods/gfg_fgf.py` picks one channel to work from - whichever has the
-largest sum over the first frame - and measures focus only there:
+`fusion_methods/gfg_fgf.py` picked one channel to work from - whichever had the
+largest sum over the first frame - and measured focus only there:
 
 ```python
 ch_sum = imgs_f32[0].sum(axis=(0, 1))
@@ -59,19 +59,27 @@ That fixture is deliberately harsh, but the failure mode is real for any subject
 whose texture is chromatic rather than tonal - stained biological samples,
 printed circuit boards, painted surfaces.
 
-**Fix.** Use luminance (`cv2.cvtColor(..., COLOR_BGR2GRAY)`) as every other
-method does, or take the per-pixel maximum response across the three channels.
-Cost is one extra conversion per frame; the current single-channel slice is a
-view, so the saving it buys is small.
+**Fixed in 1.5.7.** Both roles the single channel played were split apart:
+
+- The **guide** for the guided filter is now luminance
+  (`cv2.cvtColor(..., COLOR_BGR2GRAY)`), as every other method uses.
+- **Activity** - the Scharr focus score and the local-contrast map - is computed
+  on all three channels, keeping the strongest response at each pixel. A
+  structure that exists in one channel only is therefore still seen at full
+  strength rather than being diluted by two flat channels, which is what a
+  luminance-only measure would do.
+
+The same split is mirrored in the GPU path (`gfg_fgf_torch.py`), which agrees
+with the CPU result to a mean of 0.06 levels.
 
 ---
 
 ## 2. GFG-FGF discards whole frames
 
-**Category: quality. Impact: high. Effort: low.**
+**Category: quality. Impact: high. Effort: low. Fixed in 1.5.7.**
 
-Each frame gets one global sharpness score, and any frame below 15% of the best
-is dropped entirely (`scale = 0.15`, `fusion_methods/gfg_fgf.py:198`):
+Each frame got one global sharpness score, and any frame below 15% of the best
+was dropped entirely (`scale = 0.15`):
 
 ```python
 if focus_vals[i] < scale * max_focus:
@@ -80,15 +88,41 @@ if focus_vals[i] < scale * max_focus:
 
 A small detailed subject against a plain background pushes the background frame
 under the line. Measured on the `depth_edge` scenario, the background frame
-scores **12%** of the subject frame - and the output is then one source frame
+scores **12%** of the subject frame - and the output was then one source frame
 returned byte-for-byte unchanged, with no fusion performed at all.
 
-**Fix.** The intent - skip frames with nothing to contribute - is sound, but a
-single global number is the wrong test, because a frame can be locally the
-sharpest anywhere while being globally soft. Either drop the shortcut, or gate on
-whether the frame wins the local decision anywhere (`(idm_map == i).any()`),
-which is what actually matters. Covered by
-`tests/test_fusion_characteristics.py::test_gfgfgf_discards_frames_it_judges_unsharp`.
+**Fixed in 1.5.7.** The intent - skip frames with nothing to contribute - is
+sound, but a single global number is the wrong test, because a frame can be
+locally the sharpest anywhere while being globally soft. The quota is gone; a
+frame is now dropped only when it carries no gradient energy at all
+(`focus_vals[i] > 1e-6 * max_focus`, i.e. blank or dead frames), and the
+per-pixel decision map decides everything else - which is what the argmax was
+always there to do.
+
+### Measured effect of fixes 1 and 2
+
+PSNR against the sharp reference, `HEAD` versus the fix, over the six scenarios
+in `tests/fusion_scenarios.py` plus a chromatic fixture whose texture is carried
+in blue while red dominates brightness:
+
+| scenario | best single frame | before | after | delta |
+|---|---|---|---|---|
+| fine_texture | 14.69 | 32.13 | 32.10 | -0.04 |
+| sensor_noise | 23.02 | 39.80 | 40.77 | +0.96 |
+| depth_edge | 31.88 | 31.88 * | 35.95 | **+4.07** |
+| long_stack | 17.59 | 28.37 | 28.59 | +0.22 |
+| low_contrast | 45.36 | 60.82 | 61.29 | +0.47 |
+| saturated_colour | 23.85 | 29.22 | 31.88 | **+2.66** |
+| chromatic_detail | 25.77 | 25.77 * | 40.54 | **+14.77** |
+
+`*` output was a source frame returned unchanged - no fusion at all. Note that
+both failures compound on the chromatic fixture: the wrong channel is read, so
+every frame scores near zero, so the gate then fires as well.
+
+Cost is one extra colour conversion and three-channel activity instead of one:
+0.011 s to 0.015 s on a 320x320 three-frame stack. Covered by
+`tests/test_fusion_characteristics.py::test_gfgfgf_keeps_globally_soft_frames`
+and `::test_gfgfgf_finds_detail_in_any_colour_channel`.
 
 ---
 
