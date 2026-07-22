@@ -1,0 +1,343 @@
+# Focus stacking algorithms: OpenFocus against the field
+
+A capability comparison between OpenFocus 1.5.7, the improvements proposed in
+[ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) and this document, and five
+other focus stacking tools.
+
+**Evidence quality differs by column and is marked as such.** OpenFocus, focus-stack
+and Shine Stacker are open source, so their entries come from reading code or
+project documentation. Helicon Focus, Zerene Stacker and PICOLAY are closed
+source; their entries come from vendor documentation and long-standing community
+consensus, and describe *claimed* behaviour. Where a vendor is silent, the cell
+says so rather than guessing.
+
+| Tool | Licence | Basis for entries here |
+|------|---------|------------------------|
+| **OpenFocus** 1.5.7 | MIT, open | source inspection |
+| **Helicon Focus** 8 | commercial, closed | vendor docs |
+| **Zerene Stacker** | commercial, closed | vendor docs + community |
+| **focus-stack** (P. Aimonen) | GPL, open | project README |
+| **Shine Stacker** (L. Lista) | open | project docs |
+| **PICOLAY** (H. Cypionka) | freeware, closed | vendor docs |
+
+---
+
+## 1. Blending method families
+
+This is the clearest single result in the comparison.
+
+| Family | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
+|--------|-----------|---------|--------|-------------|---------------|---------|
+| **Laplacian / contrast pyramid** | ✗ | Method C | PMax | — | `PyramidStack` | — |
+| **Depth map, hard per-pixel select** | implicit only¹ | Method B | DMap | — | `DepthMapStack` (`DM_MAP_MAX`) | core method |
+| **Contrast-weighted average** | ✗ | Method A | — | — | `DepthMapStack` (`DM_MAP_AVERAGE`) | — |
+| **Complex wavelet** | DTCWT² | — | — | ✓ (Forster et al. 2004) | — | — |
+| **Block DCT** | ✓ | — | — | — | — | — |
+| **Single-scale guided filter** | GFF, GFG-FGF | — | — | — | — | — |
+| **Neural** | StackMFF V4, IFCNN | — | — | — | — | — |
+
+¹ Decision maps *are* computed — `fusion_methods/gff.py:133`, `gfg_fgf.py:241`,
+`dct.py:107` — but they are internal and discarded; there is no depth-map method
+or output.
+² Applied recursively pairwise, so the result is order-dependent
+([ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §7).
+
+### What this table says
+
+**OpenFocus is the only tool in this comparison without a multiscale pyramid
+method, and the only one without a contrast-weighted average.** Every commercial
+and open competitor ships a pyramid or a closely-related multiscale transform as
+a headline method — it is Helicon's Method C, Zerene's PMax, Shine Stacker's
+`PyramidStack`, and focus-stack's complex wavelet is the same idea in a different
+basis. DTCWT is OpenFocus's nearest equivalent, but it costs far more than a
+Laplacian pyramid and carries the order-dependence defect.
+
+Conversely, **OpenFocus is the only tool with a block-DCT method and the only one
+with neural fusion.** Those are genuine differentiators. The gap is not breadth —
+six methods is more than anyone else offers — it is that the two families the
+rest of the field considers essential are both absent.
+
+The industry pattern is also worth noting: the mature tools converge on **exactly
+two** methods, one pyramid and one depth-map, and teach users to retouch between
+them. Helicon (A/B/C) and Zerene (PMax/DMap) both do this. Shine Stacker
+replicates it. That pairing is deliberate — pyramid handles overlapping detail
+and hair, depth-map keeps colour and noise clean, and neither dominates.
+
+---
+
+## 2. Geometric alignment
+
+| Capability | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
+|------------|-----------|---------|--------|-------------|---------------|---------|
+| Translation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Rotation | ✓ (via 8-DOF) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Scale / focus breathing** | **✗** (code commented out) | ✓ magnification | ✓ default on | ✓ | ✓ | ✓ |
+| Perspective / homography | ✓ | not documented | ✓ | ✓ | not documented | not documented |
+| Feature-based (SIFT) | ✓ | not documented | not documented | — | not documented | not documented |
+| Intensity-based (ECC) | ✓ | not documented | not documented | ✓ | not documented | not documented |
+| **Reference frame** | **frame 0, chained** | not documented | not documented | **middle frame, selectable** | not documented | not documented |
+| **Direct-to-reference option** | **✗** | n/a | n/a | **✓** | n/a | n/a |
+| Non-rigid / local warp | ✗ | ✗ | ✗ (explicitly global-only) | ✗ | ✗ | ✗ |
+
+### Findings
+
+**Scale correction is universal in the field and missing here.** Every other tool
+corrects magnification change. Zerene's documentation names focus breathing
+explicitly and enables scale correction by default. OpenFocus has a complete
+`_align_zoom_impl` at `core/registration.py:39-141` — **entirely commented out**.
+The ECC docstring at `core/registration.py:452` claims focus-breathing suitability
+while the implementation is hardcoded to `MOTION_HOMOGRAPHY`
+(`core/registration.py:493`), which is an 8-DOF fit to a 4-DOF problem on frames
+that differ in blur.
+
+**focus-stack has already shipped the drift fix.** It defaults to the middle
+frame as reference and offers direct-to-reference *or* neighbour chaining. Both
+OpenFocus paths chain unconditionally from frame 0 — `H_global = H_global @
+H_local` at `core/registration.py:386` and `:592` — so error compounds
+multiplicatively across the stack. This is a solved problem in a GPL project.
+
+**Nobody does non-rigid alignment.** Zerene's documentation states its alignment
+is limited to whole-frame shift/rotate/scale. This is the one alignment axis
+where an implementation would put OpenFocus ahead of the commercial tools rather
+than level with them.
+
+---
+
+## 3. Photometric alignment
+
+| Capability | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
+|------------|-----------|---------|--------|-------------|---------------|---------|
+| **Brightness / exposure matching** | **✗** | ✓ | ✓ default on | ✓ default on | ✓ | not documented |
+| White balance matching | ✗ | not documented | not documented | ✓ default on | ✓ (colour balance) | not documented |
+| Contrast normalisation | ✗ | not documented | not documented | ✓ default on | ✓ | not documented |
+| Vignetting correction | ✗ | not documented | not documented | not documented | not documented | not documented |
+
+**Four of five competitors normalise brightness between frames before blending,
+and three of those do it by default.** Zerene's docs attribute the need to flash
+variation; focus-stack exposes it as `--no-whitebalance` / `--no-contrast`,
+meaning both are on unless disabled.
+
+OpenFocus does none of it. A grep for exposure, gain, or histogram matching
+returns only unrelated hits in `controllers/label_manager.py:306`. The
+consequence is not only visible luminance banding where the winning source frame
+changes — it is that **every focus measure in the codebase is contrast-linear**
+(Scharr in `gfg_fgf.py`, Laplacian in `gff.py:142`, DCT variance in `dct.py`), so
+a 5% brighter frame wins the argmax on identical detail. This is the single
+strongest catch-up signal in the whole comparison: cheap to implement, near-
+universal in the field, and it corrupts the input to all six existing methods.
+
+---
+
+## 4. Focus measure and decision-map regularisation
+
+| Capability | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
+|------------|-----------|---------|--------|-------------|---------------|---------|
+| Analysis radius exposed | ✓ per method¹ | ✓ Radius | ✓ Estimation Radius | ✓ | ✓ `kernel_size` | ✓ |
+| Smoothing radius exposed | partial² | ✓ Smoothing | ✓ Smoothing Radius | ✓ | ✓ | ✓ |
+| Contrast / trust threshold | ✗ | ✗ | ✓ Contrast Threshold | ✓ background threshold | ✗ | ✓ noise suppression |
+| Selectable focus operator | ✗ | ✗ | ✗ | ✗ | ✓ (Tenengrad, Laplacian, modified Laplacian, Sobel, variance) | ✗ |
+| Local consistency filter | ✓ median / majority³ | implied | implied | ✓ `--consistency` 0-2 | ✓ | ✓ |
+| **Global label optimisation (MRF / graph-cut)** | **✗** | ✗ | ✗ | ✗ | ✗ | ✗ |
+| **Noise-normalised focus measure** | **✗** | ✗ | ✗ | ✗ | ✗ | partial⁴ |
+
+¹ `KERNEL_SIZE_DEFAULT_GFF = 31`, `_DCT = 7`, `_GFG = 7` in `constants.py`. Note
+that GFF's exposed kernel was found to have little effect
+([ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §9).
+² Median kernel is exposed for DCT only; other methods use fixed smoothing.
+³ `dct.py:133`, `dtcwt_torch.py:66`, guided-filter smoothing at `gfg_fgf.py:263`.
+⁴ PICOLAY's noise-suppression parameter gates structure detection rather than
+normalising the measure.
+
+### Findings
+
+**Zerene's Contrast Threshold has no OpenFocus equivalent and is the most
+significant missing control.** DMap marks regions with too little contrast to
+judge focus reliably, and stretches its depth estimate smoothly across them
+instead of trusting noise. OpenFocus takes an unconditional argmax everywhere,
+including in sky, defocused background, and smooth surfaces where the focus
+measure is pure noise. The local median filter that follows can only make the
+resulting speckle blockier.
+
+**Global label optimisation is absent from every tool in the comparison.** All
+six regularise the decision map with local filters. An MRF / graph-cut
+formulation — data term from the focus measure, smoothness term penalising label
+changes, down-weighted at image gradients — would be a differentiator, not a
+catch-up.
+
+**Shine Stacker is alone in exposing the focus operator itself.** Five
+interchangeable energy measures is a cheap and genuinely useful feature; the
+right operator is subject-dependent and no single choice wins everywhere.
+
+---
+
+## 5. Artifact handling and noise
+
+| Capability | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
+|------------|-----------|---------|--------|-------------|---------------|---------|
+| **Retouching brush from source frame** | **✗** | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Halo mitigation | ✗ | via Radius | via Radius | not documented | ✗ | ✗ |
+| Denoising | ✗ | ✗ | ✗ | ✓ `--denoise` | ✓ non-local means | ✓ |
+| Hot / noisy pixel masking | ✗ | ✓ dust map | ✗ | ✗ | ✓ automatic | ✗ |
+| Sharpening | ✗ | ✗ | ✗ | ✗ | ✓ unsharp mask | ✓ |
+| Multi-frame SNR gain in flat regions | ✗ | ✓ Method A | ✗ | ✗ | ✓ average mode | ✗ |
+| **Depth-wise slabbing / bunching** | **✗**¹ | ✗ | ✓ slabbing | ✓ `--batchsize` | ✓ `FocusStackBunch` | ✗ |
+
+¹ OpenFocus's tiling (`TILE_BLOCK_SIZE`, `TILE_OVERLAP`) subdivides in **X/Y for
+memory**. Slabbing subdivides along the **depth axis for quality** — a different
+operation with a different purpose.
+
+### Findings
+
+**Retouching is the commercial tools' answer to every artifact they cannot
+solve algorithmically,** and Zerene's own documentation treats it as the expected
+workflow: stack twice with PMax and DMap, then paint one into the other. Neither
+open tool has it. Its absence caps how good any pure-algorithm result can be on
+hard subjects.
+
+**Depth-wise slabbing is a real gap discovered by this comparison.** Three of
+five tools subdivide the stack along depth, stack each group, then stack the
+results. It reduces artifact accumulation in deep stacks and is not what
+OpenFocus's XY tiling does. This is a cheap addition given the existing worker
+infrastructure.
+
+**Helicon Method A and Shine Stacker's average mode recover multi-frame SNR;
+OpenFocus discards it.** Where all frames are equally defocused, N frames offer a
+free √N noise reduction. Every OpenFocus method hard-selects one frame and throws
+that away.
+
+---
+
+## 6. Inputs and outputs
+
+| Capability | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
+|------------|-----------|---------|--------|-------------|---------------|---------|
+| **Bit depth** | **8-bit only**¹ | 16-bit | 16-bit | 16-bit TIFF | 16-bit | not documented |
+| RAW support | Nikon only² | broad + DNG | via DNG | ✗ | not documented | ✗ |
+| **Depth map output** | **✗**³ | ✓ (3D model) | ✓ | ✓ | ✗ | ✓ core feature |
+| 3D / stereo / anaglyph output | ✗ | ✓ | ✓ | ✓ `--3dview` | ✗ | ✓ core feature |
+| EXIF passthrough | ✗⁴ | ✓ | ✓ | not documented | not documented | not documented |
+| ICC colour management | ✗ | ✓ | ✓ | not documented | not documented | not documented |
+| Video / frame extraction input | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| GPU acceleration | ✓ CUDA/MPS | ✓ | ✗ | ✓ OpenCL | ✗ | ✗ |
+| Batch / multi-folder | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Automatic stack ordering | ✗ filename only⁵ | order-sensitive (B) | ✓ auto order detect | ✗ | ✗ | ✗ |
+| GUI | ✓ | ✓ | ✓ | ✗ CLI only | ✓ | ✓ |
+
+¹ `core/image_loader.py:53` decodes RAW with an explicit `output_bps=8`; line 56
+forces `IMREAD_COLOR`, which is 8-bit BGR.
+² `.nef` / `.nrw` at `core/image_loader.py:35`, though LibRaw handles CR2, CR3,
+ARW, RAF, DNG and ORF identically.
+³ Computed internally, then discarded — see §1 note 1.
+⁴ Read for display at `core/image_loader.py:357`, never written back;
+`cv2.imwrite` drops it.
+⁵ `core/image_loader.py:417`.
+
+### Findings
+
+**The 8-bit pipeline is the hard ceiling on everything above it.** Every other
+tool that documents bit depth works in 16-bit. For a tool aimed at photographers,
+discarding RAW's 12-14 bits before fusion means banding in smooth gradients and
+no headroom for weighted blending. This is not an algorithm, but it bounds every
+algorithm.
+
+**Depth map output is standard and OpenFocus already computes one.** Four of five
+competitors export it; for PICOLAY it is the point of the software. OpenFocus
+builds an index map in every method and throws it away. Exposing it is nearly
+free, and it is the substrate that depth-driven blending, occlusion-aware halo
+suppression, and 3D output all require.
+
+**OpenFocus leads on GPU and is alone in accepting video input.** CUDA/MPS
+acceleration across five methods is ahead of everything except focus-stack's
+OpenCL, and Zerene has no GPU support at all.
+
+---
+
+## 7. Proposed work, classified
+
+Every item from the gap analysis, tagged by whether it closes a gap the rest of
+the field has already closed, or moves ahead of it.
+
+| # | Proposal | Class | Field precedent |
+|---|----------|-------|-----------------|
+| 1 | Photometric alignment (exposure/WB) | **Catch-up** | 4 of 5 tools; default-on in 3 |
+| 2 | Scale / focus-breathing correction | **Catch-up** | 5 of 5 tools |
+| 3 | Laplacian pyramid fusion | **Catch-up** | 3 of 5 directly, 4th equivalent |
+| 4 | Global label optimisation (graph-cut) | **Differentiating** | none |
+| 5 | Halo / bleed suppression | **Parity+** | only indirect, via radius tuning |
+| 6 | Middle-reference + global alignment | **Catch-up** | focus-stack ships both |
+| 7 | Noise-aware measure + flat-region averaging | **Parity+** | averaging yes; noise-normalised measure, none |
+| 8 | 16-bit pipeline | **Catch-up** | 4 of 5 tools |
+| 9 | Non-rigid / optical-flow refinement | **Differentiating** | none; Zerene explicitly global-only |
+| 10 | Depth-map export & depth-driven blending | **Catch-up** | 4 of 5 tools |
+| 11 | Focus-based ordering + bad-frame gating | **Catch-up** | Zerene auto-order |
+| 12 | Retouching brush | **Catch-up** | both commercial tools |
+| **13** | **Contrast / trust threshold** | **Catch-up** | Zerene, focus-stack, PICOLAY |
+| **14** | **Depth-wise slabbing** | **Catch-up** | 3 of 5 tools |
+| **15** | **Selectable focus operator** | **Parity+** | Shine Stacker only |
+| **16** | **Contrast-weighted average method** | **Catch-up** | Helicon A, Shine Stacker average |
+
+Items 13-16 were identified by this comparison and were not in the original gap
+analysis.
+
+---
+
+## 8. Where OpenFocus already leads
+
+Stated plainly, because the tables above are weighted toward gaps.
+
+- **Method breadth.** Six fusion methods against two for both commercial tools.
+- **Only tool with neural fusion.** StackMFF V4 and IFCNN refinement have no
+  counterpart in any competitor here.
+- **Only tool with block-DCT fusion.**
+- **GPU acceleration across five methods** (CUDA/MPS), ahead of everything but
+  focus-stack's OpenCL. Zerene has none.
+- **Only tool accepting video input** for frame extraction.
+- **Two alignment algorithms exposed and selectable** (SIFT-homography and ECC);
+  competitors expose alignment as a set of toggles, not as choosable algorithms.
+- **Measured, published quality audit.**
+  [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) and the
+  `tests/fusion_metrics.py` harness are something no competitor in this
+  comparison publishes.
+
+---
+
+## 9. Reading of the comparison
+
+The distinctive shape of the result: OpenFocus has **more fusion algorithms than
+anyone and fewer supporting stages than anyone.**
+
+The competitors converge on two blending methods each, then spend their remaining
+effort on the pipeline around them — photometric normalisation, scale
+correction, trust thresholds, slabbing, depth-map export, retouching. OpenFocus
+inverts that, and the two families it lacks (pyramid, weighted average) are
+precisely the two the field treats as mandatory.
+
+That suggests the highest-value work is not a seventh fusion method. It is:
+
+1. **Fix the inputs** — photometric alignment (§3) and scale correction (§2).
+   These improve all six existing methods at once, and both are near-universal
+   elsewhere.
+2. **Add the one missing family** — a Laplacian pyramid (§1), which is cheap,
+   order-independent, and the default method everywhere else.
+3. **Stop discarding the depth map** (§6), which unlocks trust thresholds,
+   depth-driven blending, halo suppression and 3D output from one change.
+
+Then the differentiators — global label optimisation and non-rigid alignment —
+where there is no field precedent to catch up to.
+
+---
+
+## Sources
+
+Vendor and project documentation consulted for the closed-source and external
+open-source entries:
+
+- Helicon Focus — [Understanding the Focus Stacking Parameters](https://www.heliconsoft.com/helicon-focus-main-parameters/)
+- Zerene Stacker — [DMap tutorial](https://zerenesystems.com/cms/stacker/docs/tutorials/tutorial003), [FAQ](https://zerenesystems.com/cms/stacker/docs/faqlist)
+- Zerene Stacker — [PMax vs DMap community guide](https://macrobyraghu.com/2024/11/03/zerene-stacker-a-guide-to-pmax-and-dmap/), [alignment parameters discussion](https://photomacrography.net/forum/viewtopic.php?t=21508), [slabbing](http://extreme-macro.co.uk/zerene-slabbing/)
+- focus-stack — [PetteriAimonen/focus-stack](https://github.com/PetteriAimonen/focus-stack)
+- Shine Stacker — [documentation](https://shinestacker.readthedocs.io/en/latest/focus_stacking.html), [lucalista/shinestacker](https://github.com/lucalista/shinestacker)
+- PICOLAY — [Understanding Stacking Parameters](https://www.picolay.de/workshop/Understanding_Stacking-Parameters.pdf)
+- Forster, Van De Ville, Berent, Sage, Unser, "Complex Wavelets for Extended
+  Depth-of-Field: A New Method for the Fusion of Multichannel Microscopy Images",
+  *Microscopy Research and Technique*, 2004 — the basis of focus-stack.
