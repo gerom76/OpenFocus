@@ -10,6 +10,7 @@ from fusion_methods.pyramid import pyramid_impl
 from fusion_methods.depthmap import depthmap_impl, MODE_MAX, MODE_AVERAGE
 from fusion_methods.stackmffv4 import _stackmffv4_impl, _stackmffv4_batch_impl
 from fusion_methods.dtcwt import _dtcwt_impl
+from core.cancellation import RenderCancelled
 from utils import resource_path, bitdepth
 from utils.image_utils import read_image_any_depth
 
@@ -90,7 +91,7 @@ class MultiFocusFusion:
     def __init__(self, algorithm: str = 'guided_filter', use_gpu: bool = False,
                  tile_enabled: bool = True, tile_block_size: int = 1024,
                  tile_overlap: int = 256, tile_threshold: int = 2048,
-                 stackmffv4_batch_size: int = 2):
+                 stackmffv4_batch_size: int = 2, cancel_check=None):
         """
         Initialize the fusion engine.
 
@@ -98,10 +99,14 @@ class MultiFocusFusion:
             algorithm (str): Fusion algorithm name; one of 'guided_filter', 'dct', 'dtcwt', 'stackmffv4'
             use_gpu (bool): Whether to use GPU acceleration (CUDA/MPS), default False
             stackmffv4_batch_size (int): StackMFF V4 batch size, default 2
+            cancel_check (callable): Optional no-arg callable invoked between tiles
+                / batches; it should raise to abort a long tiled fusion early.
         """
         self._ensure_supported_algorithm(algorithm)
         self.algorithm = algorithm
         self.use_gpu = bool(use_gpu)
+        # Optional cooperative-cancellation hook (raises to abort); None = no-op.
+        self.cancel_check = cancel_check
         # Tile (tiled fusion) related instance-level settings
         # Tiled fusion is used when tile_enabled is True and the image's longest side exceeds tile_threshold
         self.tile_enabled = bool(tile_enabled)
@@ -828,13 +833,23 @@ class MultiFocusFusion:
         with concurrent.futures.ThreadPoolExecutor(max_workers=optimal_threads) as executor:
             futures = {executor.submit(process_single_tile, coords): coords
                        for coords in tile_coords}
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                x0, y0, fh, fw, fused_tile, weight2d = result
-                results[(x0, y0)] = result
-                completed_tiles += 1
-                if completed_tiles % progress_step == 0 or completed_tiles == total_tiles:
-                    print(f"  Tiled fusion progress: {completed_tiles}/{total_tiles} tiles", flush=True)
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    # Stop between tiles when the user cancels; drop the tiles that
+                    # have not started yet so the executor's shutdown only waits on
+                    # the handful currently in flight.
+                    if self.cancel_check is not None:
+                        self.cancel_check()
+                    result = future.result()
+                    x0, y0, fh, fw, fused_tile, weight2d = result
+                    results[(x0, y0)] = result
+                    completed_tiles += 1
+                    if completed_tiles % progress_step == 0 or completed_tiles == total_tiles:
+                        print(f"  Tiled fusion progress: {completed_tiles}/{total_tiles} tiles", flush=True)
+            except RenderCancelled:
+                for f in futures:
+                    f.cancel()
+                raise
 
         for x0, y0, fh, fw, fused_tile, weight2d in results.values():
             w_exp = weight2d[:, :, np.newaxis]
@@ -894,6 +909,10 @@ class MultiFocusFusion:
         
         # Process in batches
         for batch_start in range(0, total_tiles, batch_size):
+            # Stop between batches when the user cancels the render.
+            if self.cancel_check is not None:
+                self.cancel_check()
+
             batch_end = min(batch_start + batch_size, total_tiles)
             batch_coords = tile_coords[batch_start:batch_end]
             current_batch_size = len(batch_coords)

@@ -233,6 +233,7 @@ class OpenFocus(QMainWindow):
         self.right_splitter = right_panel_components.splitter
         self.btn_reset = right_panel_components.btn_reset
         self.btn_render = right_panel_components.btn_render
+        self.btn_stop = right_panel_components.btn_stop
         self.btn_method_help = right_panel_components.btn_method_help
         self.btn_reg_help = right_panel_components.btn_reg_help
         self.rb_a = right_panel_components.rb_a
@@ -1107,6 +1108,7 @@ class OpenFocus(QMainWindow):
         c.lbl_kernel.setText(trans.t('label_kernel'))
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))
+        c.btn_stop.setText(trans.t('btn_stop'))
         
         # ROI Button
         if hasattr(self, 'btn_preview_roi'):

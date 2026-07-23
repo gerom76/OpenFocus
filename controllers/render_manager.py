@@ -17,6 +17,12 @@ class RenderManager:
         self.window = window
         self.worker: Optional[RenderWorker] = None
 
+    def _set_stop_enabled(self, enabled: bool) -> None:
+        """Enable the Stop button only while a render is interruptible."""
+        btn = getattr(self.window, "btn_stop", None)
+        if btn is not None:
+            btn.setEnabled(enabled)
+
     def _set_console_progress(self, running: bool) -> None:
         """Show/hide the progress bar in the bottom status console."""
         console = getattr(self.window, "status_console", None)
@@ -54,7 +60,24 @@ class RenderManager:
         self._set_controls_enabled(True)
         self.window.btn_render.setEnabled(True)
         self.window.btn_render.setText(trans.t('btn_render'))
+        self._set_stop_enabled(False)
         self._set_console_progress(False)
+
+    def stop_render(self) -> None:
+        """Request cancellation of the running render.
+
+        The worker unwinds cooperatively at its next checkpoint (stage boundary
+        or tile/batch loop) and then emits ``cancelled_signal``, which restores
+        the UI. We disable Stop and flag the pending stop here so the button
+        cannot be clicked twice.
+        """
+        worker = self.worker
+        if worker is None or not worker.isRunning():
+            return
+
+        worker.cancel()
+        self._set_stop_enabled(False)
+        self.window.btn_render.setText(trans.t('btn_render_stopping'))
 
     def start_render(self) -> None:
         window = self.window
@@ -189,6 +212,8 @@ class RenderManager:
 
         self.worker.finished_signal.connect(self.on_render_finished)
         self.worker.error_signal.connect(self.on_render_error)
+        self.worker.cancelled_signal.connect(self.on_render_cancelled)
+        self._set_stop_enabled(True)
         self.worker.start()
 
     def on_render_finished(
@@ -342,8 +367,20 @@ class RenderManager:
 
             window.btn_render.setEnabled(True)
             window.btn_render.setText(trans.t('btn_render'))
+            self._set_stop_enabled(False)
             self._set_console_progress(False)
             self.worker = None
+
+    def on_render_cancelled(self) -> None:
+        """Restore the UI after the worker unwinds from a user-requested stop."""
+        window = self.window
+
+        self._set_controls_enabled(True)
+        window.btn_render.setEnabled(True)
+        window.btn_render.setText(trans.t('btn_render'))
+        self._set_stop_enabled(False)
+        self._set_console_progress(False)
+        self.worker = None
 
     def on_render_error(self, error_message: str) -> None:
         window = self.window
@@ -351,6 +388,7 @@ class RenderManager:
         self._set_controls_enabled(True)
         window.btn_render.setEnabled(True)
         window.btn_render.setText(trans.t('btn_render'))
+        self._set_stop_enabled(False)
         self._set_console_progress(False)
 
         show_message_box(

@@ -112,10 +112,12 @@ class TranslationManager(QObject):
                 'contrast_clahe': 'Local',
                 'btn_reset': 'Reset Default',
                 'btn_render': '▶ Start Render',
+                'btn_stop': '■ Stop',
                 'label_source_images': 'Source Images: {}',
                 'label_output': 'Output: {}',
                 'btn_roi': 'ROI',
                 'btn_render_processing': '⏳ Processing...',
+                'btn_render_stopping': '⏳ Stopping...',
                 
                 # Status Panel
                 'status_loaded': 'Loaded: {}',
@@ -571,10 +573,12 @@ class TranslationManager(QObject):
                 'contrast_clahe': '局部',
                 'btn_reset': '重置默认',
                 'btn_render': '▶ 开始渲染',
+                'btn_stop': '■ 停止',
                 'label_source_images': '源图像: {}',
                 'label_output': '输出: {}',
                 'btn_roi': '选择感兴趣区域',
                 'btn_render_processing': '⏳ 处理中...',
+                'btn_render_stopping': '⏳ 正在停止...',
                 
                 # Status Panel
                 'status_loaded': '已加载: {}',

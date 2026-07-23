@@ -291,6 +291,29 @@ QPushButton:pressed {{
 """
 
 
+# Stop button style (danger / interrupt an ongoing render)
+STOP_BUTTON_STYLE = f"""
+QPushButton {{
+    background-color: #8a2020;
+    color: white;
+    font-weight: normal;
+    font-size: 14px;
+    border: 1px solid #222;
+    border-radius: 4px;
+}}
+QPushButton:hover {{
+    background-color: #b02a2a;
+}}
+QPushButton:pressed {{
+    background-color: #6a1818;
+}}
+QPushButton:disabled {{
+    background-color: #3a2a2a;
+    color: #777;
+}}
+"""
+
+
 # Source / output list style
 SOURCE_LIST_STYLE = f"""
 QListWidget {{ background-color: #333; border: 1px solid #555; }}

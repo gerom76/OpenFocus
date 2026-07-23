@@ -26,6 +26,7 @@ from ui.styles import (
     HOVER_HIGHLIGHT_BUTTON_STYLE,
     OUTPUT_LIST_STYLE,
     SOURCE_LIST_STYLE,
+    STOP_BUTTON_STYLE,
 )
 from locales import trans
 from widgets.output_list import OutputListWidget
@@ -37,6 +38,7 @@ class RightPanelComponents:
     splitter: QSplitter
     btn_reset: QPushButton
     btn_render: QPushButton
+    btn_stop: QPushButton
     btn_method_help: QPushButton
     btn_reg_help: QPushButton
     rb_a: QRadioButton
@@ -216,8 +218,15 @@ def create_right_panel() -> RightPanelComponents:
     btn_render = QPushButton(trans.t('btn_render'))
     btn_render.setFixedHeight(40)
     btn_render.setStyleSheet(HOVER_HIGHLIGHT_BUTTON_STYLE)
+    # Stop sits next to Start Render and interrupts the running render; it is
+    # inert until a render is in progress.
+    btn_stop = QPushButton(trans.t('btn_stop'))
+    btn_stop.setFixedHeight(40)
+    btn_stop.setStyleSheet(STOP_BUTTON_STYLE)
+    btn_stop.setEnabled(False)
     button_bar.addWidget(btn_reset)
     button_bar.addWidget(btn_render)
+    button_bar.addWidget(btn_stop)
     config_layout.addLayout(button_bar)
 
     right_splitter.addWidget(config_widget)
@@ -296,6 +305,7 @@ def create_right_panel() -> RightPanelComponents:
         splitter=right_splitter,
         btn_reset=btn_reset,
         btn_render=btn_render,
+        btn_stop=btn_stop,
         btn_method_help=btn_method_help,
         btn_reg_help=btn_reg_help,
         rb_a=rb_a,
@@ -352,6 +362,7 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
     components.btn_reg_help.clicked.connect(lambda: RegistrationHelpDialog(window).exec())
 
     components.btn_render.clicked.connect(window.render_manager.start_render)
+    components.btn_stop.clicked.connect(window.render_manager.stop_render)
     components.btn_reset.clicked.connect(window.reset_to_default)
 
     components.slider_smooth.valueChanged.connect(window.handle_kernel_slider_change)

@@ -6,6 +6,7 @@ import numpy as np
 import imageio.v2 as imageio
 from core.registration import ImageRegistration
 from core.multi_focus_fusion import MultiFocusFusion
+from core.cancellation import RenderCancelled
 from core import contrast
 from fusion_methods.ifcnn import _ifcnn_refine_impl, get_ifcnn_model_path, is_ifcnn_available
 from utils import resource_path, normalize_kernel_size, write_image, bitdepth
@@ -104,6 +105,7 @@ class RenderWorker(QThread):
 
     finished_signal = pyqtSignal(object, object, bool, float, float, str)
     error_signal = pyqtSignal(str)
+    cancelled_signal = pyqtSignal()
 
     def __init__(
         self,
@@ -138,6 +140,10 @@ class RenderWorker(QThread):
         need_align_scale: bool = False,
     ):
         super().__init__()
+        # Set by cancel() from the GUI thread to request an early, cooperative
+        # stop; the run loop checks it at stage boundaries and inside the tiled
+        # fusion loops.
+        self._cancelled = False
         self.raw_images = raw_images
         self.aligned_images = aligned_images
         self.is_images_aligned = is_images_aligned
@@ -183,12 +189,28 @@ class RenderWorker(QThread):
         except Exception:
             self.thread_count = 4
 
+    def cancel(self):
+        """Request a cooperative stop of the running render (GUI thread)."""
+        self._cancelled = True
+        self.requestInterruption()
+
+    def is_cancelled(self) -> bool:
+        """True once a stop has been requested for this render."""
+        return self._cancelled or self.isInterruptionRequested()
+
+    def _raise_if_cancelled(self):
+        """Bail out of the pipeline at a checkpoint when a stop was requested."""
+        if self.is_cancelled():
+            raise RenderCancelled()
+
     def run(self):
         """Run the image-processing pipeline in the thread"""
         try:
             alignment_time = 0
             fusion_time = 0
             device_name = "CPU"
+
+            self._raise_if_cancelled()
 
             if self.raw_images:
                 h, w = self.raw_images[0].shape[:2]
@@ -225,6 +247,8 @@ class RenderWorker(QThread):
                     registration_performed = True
                     print(f"Registration completed in {alignment_time:.2f}s", flush=True)
 
+            self._raise_if_cancelled()
+
             # 2. ROI cropping stage
             cropped_images, base_full_image, roi_rect_int = self._apply_roi_cropping(processed_images)
             if roi_rect_int is not None:
@@ -241,6 +265,7 @@ class RenderWorker(QThread):
 
                 # 4. IFCNN refinement stage (repairs detail the fusion step missed)
                 if self.ifcnn_refine and fusion_result is not None:
+                    self._raise_if_cancelled()
                     refine_start_time = time.time()
                     fusion_result = self._run_ifcnn_refine(fusion_result, fusion_images)
                     print(f"IFCNN refinement completed in {time.time() - refine_start_time:.2f}s", flush=True)
@@ -252,6 +277,8 @@ class RenderWorker(QThread):
                 fusion_time = time.time() - fusion_start_time
                 print(f"Fusion completed in {fusion_time:.2f}s", flush=True)
 
+            self._raise_if_cancelled()
+
             print(f"Render finished in {alignment_time + fusion_time:.2f}s total", flush=True)
 
             self.finished_signal.emit(
@@ -262,6 +289,9 @@ class RenderWorker(QThread):
                 fusion_time,
                 device_name,
             )
+        except RenderCancelled:
+            print("Render cancelled by user.", flush=True)
+            self.cancelled_signal.emit()
         except Exception as e:
             self.error_signal.emit(str(e))
             import traceback
@@ -363,6 +393,7 @@ class RenderWorker(QThread):
             tile_overlap=(self.tile_overlap if self.tile_overlap is not None else TILE_OVERLAP),
             tile_threshold=(self.tile_threshold if self.tile_threshold is not None else TILE_THRESHOLD),
             stackmffv4_batch_size=self.stackmffv4_batch_size,
+            cancel_check=self._raise_if_cancelled,
         )
 
         info = fusion.get_info()
