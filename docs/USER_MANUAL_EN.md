@@ -27,7 +27,7 @@ OpenFocus is a professional multi-focus image fusion desktop application designe
 
 - **Multi-Focus Image Fusion**: Combine multiple images with different focus points into one fully focused image
 - **Multiple Fusion Algorithms**: Choose from Guided Filter, DCT, DTCWT, GFG-FGF, Pyramid, Depth Map (Max / Average), and StackMFF-V4 (deep learning)
-- **Image Registration**: Align misaligned image sequences using ECC or Homography methods
+- **Image Registration**: Align misaligned image sequences using Scale (focus breathing), ECC, or Homography methods
 - **Batch Processing**: Process multiple image folders simultaneously
 - **Flexible Export**: Save results as individual images, folders, or GIF animations
 - **Image Transformations**: Rotate, flip, and resize image stacks
@@ -482,7 +482,8 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 
 #### Fusion Results Look Blurry or Ghosted
 
-- Enable image registration (both ECC and Homography)
+- Enable image registration (ECC and/or Homography)
+- If the subject grows or shrinks across the stack, also enable **Scale (focus breathing)**
 - Ensure images are properly aligned before fusion
 - Try a different fusion algorithm
 - Increase kernel size for smoother results

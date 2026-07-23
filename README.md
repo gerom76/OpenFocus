@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.24**: New **Scale (focus breathing)** registration method — corrects the magnification change a lens introduces as the focus plane moves through a stack. Fits a constrained similarity (uniform scale + rotation + translation) via `estimateAffinePartial2D`/RANSAC, so it cancels size drift without the overfitting a full homography risks on blurred frames. Independent toggle that composes ahead of Homography/ECC; off by default.
+
 > 🎉 **2026.07.23**: New **Depth Map** fusion method with two modes — *Max* (hard per-pixel select, the classic depth map) and *Average* (contrast-weighted blend that recovers multi-frame SNR in flat regions). Both are fully CPU-based and driven by a single focus-measure window. This closes the last two blending families the field treats as mandatory.
 
 > 🎉 **2026.07.23**: New **Pyramid** fusion method — Laplacian-pyramid choose-max blending. Fully CPU-based with no tuning, it scores highest of all methods on our synthetic benchmark and makes a strong, dependable default for typical focus stacks.
@@ -95,8 +97,12 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **StackMFF V4**: Pretrained deep model delivering state-of-the-art focus stacking quality.
 
 ### Registration Algorithms
+
+- **Scale (focus breathing)**: Corrects the magnification change a lens introduces as the focus plane moves through a stack. Fits a constrained similarity (uniform scale + rotation + translation) via `estimateAffinePartial2D`/RANSAC on keypoint matches, so it cancels size drift without the overfitting a full homography risks on frames that differ in blur.
 - **Homography**: Performs feature-based projective alignment using keypoint matching and RANSAC to handle global perspective transformations.
 - **ECC**: Performs intensity-based alignment by maximizing the enhanced correlation coefficient for precise, sub-pixel registration.
+
+Registration stages are independent and compose in pipeline order: **Scale → Homography → ECC**.
   
 > **License Notice:** Every fusion/registration algorithm included comes from open-source research implementations. When using or redistributing them, please follow each algorithm’s original license terms in addition to the OpenFocus MIT license.
 
