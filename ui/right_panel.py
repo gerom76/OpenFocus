@@ -43,6 +43,7 @@ class RightPanelComponents:
     rb_b: QRadioButton
     rb_c: QRadioButton
     rb_gfg: QRadioButton
+    rb_pyramid: QRadioButton
     rb_d: QRadioButton
     cb_ifcnn: QCheckBox
     cb_align_homography: QCheckBox
@@ -101,6 +102,8 @@ def create_right_panel() -> RightPanelComponents:
     rb_c.setAutoExclusive(False)
     rb_gfg = QRadioButton(trans.t('radio_gfg'))
     rb_gfg.setAutoExclusive(False)
+    rb_pyramid = QRadioButton(trans.t('radio_pyramid'))
+    rb_pyramid.setAutoExclusive(False)
     rb_d = QRadioButton(trans.t('radio_stackmff'))
     rb_d.setAutoExclusive(False)
 
@@ -112,6 +115,7 @@ def create_right_panel() -> RightPanelComponents:
     cb_ifcnn.setChecked(False)
 
     method_layout.addWidget(rb_gfg)
+    method_layout.addWidget(rb_pyramid)
     method_layout.addWidget(rb_d)
     method_layout.addSpacing(6)
     method_layout.addWidget(cb_ifcnn)
@@ -286,6 +290,7 @@ def create_right_panel() -> RightPanelComponents:
         rb_b=rb_b,
         rb_c=rb_c,
         rb_gfg=rb_gfg,
+        rb_pyramid=rb_pyramid,
         rb_d=rb_d,
         cb_ifcnn=cb_ifcnn,
         cb_align_homography=cb_align_homography,
@@ -323,6 +328,7 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
     components.rb_b.clicked.connect(lambda: window.handle_method_selection(components.rb_b))
     components.rb_c.clicked.connect(lambda: window.handle_method_selection(components.rb_c))
     components.rb_gfg.clicked.connect(lambda: window.handle_method_selection(components.rb_gfg))
+    components.rb_pyramid.clicked.connect(lambda: window.handle_method_selection(components.rb_pyramid))
     components.rb_d.clicked.connect(lambda: window.handle_method_selection(components.rb_d))
 
     components.btn_method_help.clicked.connect(lambda: RenderMethodHelpDialog(window).exec())
@@ -342,6 +348,7 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
     components.rb_b.clicked.connect(window.update_slider_availability)
     components.rb_c.clicked.connect(window.update_slider_availability)
     components.rb_gfg.clicked.connect(window.update_slider_availability)
+    components.rb_pyramid.clicked.connect(window.update_slider_availability)
     components.rb_d.clicked.connect(window.update_slider_availability)
 
     components.file_list.customContextMenuRequested.connect(window.source_manager.show_source_context_menu)

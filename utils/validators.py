@@ -56,6 +56,7 @@ def get_algorithm_from_checkboxes(
     rb_c: bool,
     rb_gfg: bool,
     rb_d: bool,
+    rb_pyramid: bool = False,
     default: str = "guided_filter"
 ) -> str:
     if rb_a:
@@ -66,6 +67,8 @@ def get_algorithm_from_checkboxes(
         return "dtcwt"
     elif rb_gfg:
         return "gfgfgf"
+    elif rb_pyramid:
+        return "pyramid"
     elif rb_d:
         return "stackmffv4"
     return default

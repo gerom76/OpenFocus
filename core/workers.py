@@ -120,6 +120,7 @@ class RenderWorker(QThread):
         rb_gfg_checked,
         rb_d_checked,
         kernel_slider_value,
+        rb_pyramid_checked=False,
         tile_enabled=None,
         tile_block_size=None,
         tile_overlap=None,
@@ -153,6 +154,7 @@ class RenderWorker(QThread):
         self.rb_c_checked = rb_c_checked
         self.rb_gfg_checked = rb_gfg_checked
         self.rb_d_checked = rb_d_checked
+        self.rb_pyramid_checked = rb_pyramid_checked
         self.kernel_slider_value = kernel_slider_value
         # Optional IFCNN refinement stage, applied to the fusion result
         self.ifcnn_refine = bool(ifcnn_refine)
@@ -371,6 +373,12 @@ class RenderWorker(QThread):
                 kernel_size=kernel_size,
                 thread_count=self.thread_count,
             )
+        elif algorithm == "pyramid":
+            result = fusion.fuse(
+                input_source=images,
+                img_resize=None,
+                thread_count=self.thread_count,
+            )
         elif algorithm == "stackmffv4":
             model_path = resource_path("weights", "stackmffv4.pth")
             result = fusion.fuse(
@@ -410,6 +418,8 @@ class RenderWorker(QThread):
             return "dtcwt"
         elif self.rb_gfg_checked:
             return "gfgfgf"
+        elif self.rb_pyramid_checked:
+            return "pyramid"
         elif self.rb_d_checked:
             return "stackmffv4"
         else:
@@ -638,6 +648,12 @@ class BatchWorker(QThread):
                     input_source=aligned_images,
                     img_resize=None,
                     kernel_size=kernel_size,
+                    thread_count=self.thread_count,
+                )
+            elif fusion_method == "pyramid":
+                result = fusion.fuse(
+                    input_source=aligned_images,
+                    img_resize=None,
                     thread_count=self.thread_count,
                 )
             elif fusion_method == "stackmffv4":

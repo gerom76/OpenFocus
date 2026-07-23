@@ -347,6 +347,8 @@ class BatchProcessingDialog(QDialog):
                 fusion_method = trans.t('radio_gfg')
                 if slider_widget:
                     kernel_size_value = slider_widget.value()
+            elif getattr(self.parent_window, 'rb_pyramid', None) and self.parent_window.rb_pyramid.isChecked():
+                fusion_method = trans.t('radio_pyramid')
             elif rb_d and rb_d.isChecked():
                 fusion_method = trans.t('radio_stackmff')
         
@@ -711,6 +713,8 @@ class BatchProcessingDialog(QDialog):
             elif getattr(self.parent_window, 'rb_gfg', None) and self.parent_window.rb_gfg.isChecked():
                 fusion_method = "gfgfgf"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
+            elif getattr(self.parent_window, 'rb_pyramid', None) and self.parent_window.rb_pyramid.isChecked():
+                fusion_method = "pyramid"
             elif rb_d and rb_d.isChecked():
                 fusion_method = "stackmffv4"
         

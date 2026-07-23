@@ -92,6 +92,9 @@ class RenderMethodHelpDialog(HelpDialog):
     <p>GFG-FGF<br/>
     GFG-FGF is a multi-focus image fusion algorithm based on a generalized four-neighborhood Gaussian gradient (GFG) operator combined with a fast guided filter (FGF). Feature extraction uses the GFG operator to capture high-frequency edge and gradient information. Information enhancement leverages the FGF together with the original image texture to smooth defocused regions while emphasizing focused areas. The fusion strategy constructs a pixel-wise decision map by selecting the maximum focus measure per pixel and then refines these decisions with FGF for edge-preserving smoothing, producing a weighted fusion that favors sharp, well-focused pixels.</p>
 
+    <p>Pyramid<br/>
+    Laplacian-pyramid fusion: each frame is split into band-pass detail levels plus a low-frequency base, and for every band the coefficient carrying the most local energy across the stack wins the pixel (the classic choose-max rule). The shared low-frequency base is averaged. Collapsing the fused pyramid gives a sharp, seam-free all-in-focus image. Fully CPU-based with no tuning, it is a strong, dependable default for typical focus stacks.</p>
+
     <p>StackMFF-V4<br/>
     A neural network trained on everyday focus stacks. It generally produces the strongest results with minimal tuning. Because it is not fine-tuned for specialist domains (microphotography, microscopy, medical imaging, etc.), avoid it when domain shifts are expected. Runs fastest with GPU acceleration.</p>
 

@@ -26,7 +26,7 @@ OpenFocus is a professional multi-focus image fusion desktop application designe
 ### Key Features
 
 - **Multi-Focus Image Fusion**: Combine multiple images with different focus points into one fully focused image
-- **Multiple Fusion Algorithms**: Choose from Guided Filter, DCT, DTCWT, GFG-FGF, and StackMFF-V4 (deep learning)
+- **Multiple Fusion Algorithms**: Choose from Guided Filter, DCT, DTCWT, GFG-FGF, Pyramid, and StackMFF-V4 (deep learning)
 - **Image Registration**: Align misaligned image sequences using ECC or Homography methods
 - **Batch Processing**: Process multiple image folders simultaneously
 - **Flexible Export**: Save results as individual images, folders, or GIF animations
@@ -203,7 +203,7 @@ Access additional settings via **Settings → Registration**:
 
 ## 7. Image Fusion Methods
 
-OpenFocus offers five fusion algorithms. Each has different characteristics suitable for various image types.
+OpenFocus offers six fusion algorithms. Each has different characteristics suitable for various image types.
 
 ### Guided Filter (Default)
 
@@ -235,6 +235,13 @@ OpenFocus offers five fusion algorithms. Each has different characteristics suit
 - **Advantages**: Fast, good focus region detection
 - **Parameter**: Kernel size adjustment
 
+### Pyramid (Laplacian Pyramid)
+
+- **Algorithm**: Laplacian-pyramid choose-max fusion — keeps, band by band, the coefficient with the most local focus energy; the shared low-frequency base is averaged
+- **Best for**: A strong, dependable general-purpose default across most focus stacks
+- **Advantages**: Sharp, seam-free results; fully CPU-based; no parameters to tune
+- **Parameter**: None (decomposition depth is chosen automatically from image size)
+
 ### StackMFF-V4 (Deep Learning)
 
 - **Algorithm**: Neural network-based fusion (requires PyTorch)
@@ -258,6 +265,7 @@ OpenFocus offers five fusion algorithms. Each has different characteristics suit
 | DCT | Medium | Good | Textures |
 | DTCWT | Medium | Very Good | Complex scenes |
 | GFG-FGF | Fast | Good | Focus regions |
+| Pyramid | Fast | Very Good | Dependable default |
 | StackMFF-V4 | Slow (GPU) | Excellent | Best quality |
 
 ---
@@ -504,6 +512,10 @@ DTCWT provides multi-scale, multi-directional decomposition of images. It captur
 ### GFG-FGF
 
 This algorithm uses a Generalized Four-neighborhood Gaussian approach to measure local focus, combined with Fast Guided Filter for weight map refinement. It efficiently identifies and merges in-focus regions.
+
+### Pyramid
+
+Each frame is decomposed into a Laplacian pyramid — a series of band-pass detail levels plus a low-frequency base. For every detail band the algorithm keeps, per pixel, the coefficient carrying the most local energy across the stack (the classic choose-max rule), so the sharpest source wins at every scale. The low-frequency base, which the focus stack shares, is averaged. Collapsing the fused pyramid reconstructs a sharp, seam-free all-in-focus image. The decomposition depth adapts to the image size, so there is nothing to tune. Based on Burt and Adelson's Laplacian pyramid (1983).
 
 ### StackMFF-V4
 

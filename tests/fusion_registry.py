@@ -112,6 +112,11 @@ def _gfgfgf_torch(stack, kernel_size=7, img_resize=None, device=None):
     return gfgfgf_torch_impl(stack, img_resize, kernel_size=kernel_size, device=device)
 
 
+def _pyramid(stack, levels=None, img_resize=None, thread_count=None):
+    from fusion_methods.pyramid import pyramid_impl
+    return pyramid_impl(stack, img_resize, levels=levels, thread_count=thread_count)
+
+
 def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
     from fusion_methods.dct import dct_focus_stack_fusion
     if img_resize is not None:
@@ -216,6 +221,20 @@ METHODS = [
         ),
         deterministic=False,
         min_psnr=32.0,      # measured 38.2
+    ),
+    FusionMethod(
+        key="pyramid", label="Pyramid", fuse=_pyramid,
+        check=_needs("cv2"), params={"levels": None},
+        sweeps=(
+            ("levels", [2, 3, 4, 5, 6],
+             "How many band-pass levels the frame is split into before the "
+             "choose-max selection. Few levels decide focus on coarse blocks and "
+             "can miss fine in-focus detail; many levels separate scales finely "
+             "but cost more time. Self-limited so the coarsest band stays >= 2 px, "
+             "so the very largest values collapse to the same depth on small "
+             "images."),
+        ),
+        min_psnr=40.0,      # measured 49.6
     ),
     FusionMethod(
         key="dct", label="DCT", fuse=_dct,

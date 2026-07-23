@@ -78,6 +78,7 @@ class RenderManager:
             or window.rb_b.isChecked()
             or window.rb_c.isChecked()
             or window.rb_gfg.isChecked()
+            or window.rb_pyramid.isChecked()
             or window.rb_d.isChecked()
         )
 
@@ -162,6 +163,7 @@ class RenderManager:
             window.rb_gfg.isChecked(),
             window.rb_d.isChecked(),
             kernel_slider_value,
+            rb_pyramid_checked=window.rb_pyramid.isChecked(),
             tile_enabled=getattr(window, "tile_enabled", None),
             tile_block_size=getattr(window, "tile_block_size", None),
             tile_overlap=getattr(window, "tile_overlap", None),
@@ -268,6 +270,7 @@ class RenderManager:
                 or window.rb_b.isChecked()
                 or window.rb_c.isChecked()
                 or window.rb_gfg.isChecked()
+                or window.rb_pyramid.isChecked()
                 or window.rb_d.isChecked()
             ):
                 if window.rb_a.isChecked():
@@ -278,6 +281,8 @@ class RenderManager:
                     method_name = trans.t("radio_dtcwt")
                 elif window.rb_gfg.isChecked():
                     method_name = trans.t("radio_gfg")
+                elif window.rb_pyramid.isChecked():
+                    method_name = trans.t("radio_pyramid")
                 elif window.rb_d.isChecked():
                     method_name = trans.t("radio_stackmff")
                 else:

@@ -99,6 +99,8 @@ class ExportManager:
             fusion_method = "DTCWT"
         elif window.rb_gfg.isChecked():
             fusion_method = "GFGFGF"
+        elif window.rb_pyramid.isChecked():
+            fusion_method = "Pyramid"
         elif window.rb_d.isChecked():
             fusion_method = "StackMFFV4"
         else:

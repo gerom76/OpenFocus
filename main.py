@@ -239,6 +239,7 @@ class OpenFocus(QMainWindow):
         self.rb_b = right_panel_components.rb_b
         self.rb_c = right_panel_components.rb_c
         self.rb_gfg = right_panel_components.rb_gfg
+        self.rb_pyramid = right_panel_components.rb_pyramid
         self.rb_d = right_panel_components.rb_d
         self.cb_ifcnn = right_panel_components.cb_ifcnn
         self.cb_align_homography = right_panel_components.cb_align_homography
@@ -444,6 +445,7 @@ class OpenFocus(QMainWindow):
         self.rb_b.setChecked(False)
         self.rb_c.setChecked(False)
         self.rb_gfg.setChecked(False)
+        self.rb_pyramid.setChecked(False)
         self.rb_d.setChecked(False)
 
         # Reset the post-fusion refinement stage
@@ -529,7 +531,7 @@ class OpenFocus(QMainWindow):
         # If the clicked button is already selected, deselect it
         if selected_button.isChecked():
             # Deselect the other buttons
-            for btn in [self.rb_a, self.rb_b, self.rb_c, self.rb_gfg, self.rb_d]:
+            for btn in [self.rb_a, self.rb_b, self.rb_c, self.rb_gfg, self.rb_pyramid, self.rb_d]:
                 if btn != selected_button:
                     btn.setChecked(False)
         # If it was not selected when clicked, do nothing (already auto-deselected)
@@ -1075,6 +1077,7 @@ class OpenFocus(QMainWindow):
         c.rb_b.setText(trans.t('radio_dct'))
         c.rb_c.setText(trans.t('radio_dtcwt'))
         c.rb_gfg.setText(trans.t('radio_gfg'))
+        c.rb_pyramid.setText(trans.t('radio_pyramid'))
         c.rb_d.setText(trans.t('radio_stackmff'))
         c.cb_ifcnn.setText(trans.t('check_ifcnn_refine'))
         # Availability tooltips carry translated text, so refresh them here too

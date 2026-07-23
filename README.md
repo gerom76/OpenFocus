@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.23**: New **Pyramid** fusion method — Laplacian-pyramid choose-max blending. Fully CPU-based with no tuning, it scores highest of all methods on our synthetic benchmark and makes a strong, dependable default for typical focus stacks.
+
 > 🎉 **2026.07.23**: Optional **contrast enhancement** for fused output. Pick *Auto* (color-safe global tone curve) or *Local* (CLAHE) with a strength slider — it applies after fusion and updates the preview live, so the stored result stays untouched. Off by default.
 
 > 🎉 **2026.07.22**: End-to-end **16-bit pipeline**. Stacks whose sources carry more than 8 bits — RAW, 16-bit TIFF/PNG — are now loaded, aligned, fused and saved at full depth. Switch between Auto / 8-bit / 16-bit under *Settings → Bit Depth*.
@@ -86,6 +88,7 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **DCT Multi-Focus Fusion**: Frequency-domain technique optimized for crisp detail recovery.
 - **Dual-Tree Complex Wavelet Transform (DTCWT)**: Multi-scale representation that preserves fine texture structures.
 - **GFG-FGF**: GFG-FGF is based on a generalized four-neighborhood Gaussian gradient (GFG) operator combined with a fast guided filter (FGF). 
+- **Pyramid**: Laplacian-pyramid choose-max fusion that selects, band by band, the coefficient carrying the most local energy. CPU-based, tuning-free, and a strong general-purpose default.
 - **StackMFF V4**: Pretrained deep model delivering state-of-the-art focus stacking quality.
 
 ### Registration Algorithms
@@ -99,6 +102,7 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - M. B. A. Haghighat, A. Aghagolzadeh, and H. Seyedarabi, "Multi-focus image fusion for visual sensor networks in DCT domain," *Computers & Electrical Engineering*, vol. 37, no. 5, pp. 789-797, 2011.
 - J. J. Lewis, R. J. O'Callaghan, S. G. Nikolov, D. R. Bull, and N. Canagarajah, "Pixel- and region-based image fusion with complex wavelets," *Information Fusion*, vol. 8, no. 2, pp. 119-130, 2007.
 - S. Li, X. Kang, and J. Hu, "Image fusion with guided filtering," *IEEE Transactions on Image Processing*, vol. 22, no. 7, pp. 2864-2875, 2013.
+- P. J. Burt and E. H. Adelson, "The Laplacian pyramid as a compact image code," *IEEE Transactions on Communications*, vol. 31, no. 4, pp. 532-540, 1983.
 - 付宏语, 巩岩, 汪路涵, 等. 多聚焦显微图像融合算法[J]. Laser & Optoelectronics Progress, 2024, 61(6): 0618022-0618022-9.
 
 <a id="contribution"></a>

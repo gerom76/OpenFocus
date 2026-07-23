@@ -1,6 +1,6 @@
 # Focus stacking algorithms: OpenFocus against the field
 
-A capability comparison between OpenFocus 1.5.7, the improvements proposed in
+A capability comparison between OpenFocus 1.7.0, the improvements proposed in
 [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) and this document, and five
 other focus stacking tools.
 
@@ -13,7 +13,7 @@ says so rather than guessing.
 
 | Tool | Licence | Basis for entries here |
 |------|---------|------------------------|
-| **OpenFocus** 1.5.7 | MIT, open | source inspection |
+| **OpenFocus** 1.7.0 | MIT, open | source inspection |
 | **Helicon Focus** 8 | commercial, closed | vendor docs |
 | **Zerene Stacker** | commercial, closed | vendor docs + community |
 | **focus-stack** (P. Aimonen) | GPL, open | project README |
@@ -28,7 +28,7 @@ This is the clearest single result in the comparison.
 
 | Family | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
 |--------|-----------|---------|--------|-------------|---------------|---------|
-| **Laplacian / contrast pyramid** | ✗ | Method C | PMax | — | `PyramidStack` | — |
+| **Laplacian / contrast pyramid** | ✓ Pyramid³ | Method C | PMax | — | `PyramidStack` | — |
 | **Depth map, hard per-pixel select** | implicit only¹ | Method B | DMap | — | `DepthMapStack` (`DM_MAP_MAX`) | core method |
 | **Contrast-weighted average** | ✗ | Method A | — | — | `DepthMapStack` (`DM_MAP_AVERAGE`) | — |
 | **Complex wavelet** | DTCWT² | — | — | ✓ (Forster et al. 2004) | — | — |
@@ -41,21 +41,27 @@ This is the clearest single result in the comparison.
 or output.
 ² Applied recursively pairwise, so the result is order-dependent
 ([ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §7).
+³ Added in 1.7.0. A single choose-max over all frames' Laplacian bands, so —
+unlike DTCWT — it is order-independent (`fusion_methods/pyramid.py`).
 
 ### What this table says
 
-**OpenFocus is the only tool in this comparison without a multiscale pyramid
-method, and the only one without a contrast-weighted average.** Every commercial
-and open competitor ships a pyramid or a closely-related multiscale transform as
-a headline method — it is Helicon's Method C, Zerene's PMax, Shine Stacker's
-`PyramidStack`, and focus-stack's complex wavelet is the same idea in a different
-basis. DTCWT is OpenFocus's nearest equivalent, but it costs far more than a
-Laplacian pyramid and carries the order-dependence defect.
+**As of 1.7.0 OpenFocus ships a Laplacian pyramid (`Pyramid`), closing what this
+comparison had flagged as the field's clearest gap; the one mandatory family
+still missing is the contrast-weighted average.** Every commercial and open
+competitor makes a pyramid or a closely-related multiscale transform a headline
+method — Helicon's Method C, Zerene's PMax, Shine Stacker's `PyramidStack`, and
+focus-stack's complex wavelet is the same idea in a different basis. OpenFocus now
+has two multiscale methods: the new Laplacian pyramid and DTCWT. Unlike DTCWT,
+which fuses recursively pairwise and is therefore order-dependent, the pyramid
+does a single choose-max across all frames — order-independent and far cheaper.
 
 Conversely, **OpenFocus is the only tool with a block-DCT method and the only one
-with neural fusion.** Those are genuine differentiators. The gap is not breadth —
-six methods is more than anyone else offers — it is that the two families the
-rest of the field considers essential are both absent.
+with neural fusion.** Those are genuine differentiators. Breadth is not the issue —
+seven methods is more than anyone else offers — the one family the rest of the
+field considers essential and OpenFocus still lacks is the contrast-weighted
+average (Helicon Method A, Shine Stacker's average mode), which recovers
+multi-frame SNR in flat regions.
 
 The industry pattern is also worth noting: the mature tools converge on **exactly
 two** methods, one pyramid and one depth-map, and teach users to retouch between
@@ -121,10 +127,11 @@ OpenFocus does none of it. A grep for exposure, gain, or histogram matching
 returns only unrelated hits in `controllers/label_manager.py:306`. The
 consequence is not only visible luminance banding where the winning source frame
 changes — it is that **every focus measure in the codebase is contrast-linear**
-(Scharr in `gfg_fgf.py`, Laplacian in `gff.py:142`, DCT variance in `dct.py`), so
-a 5% brighter frame wins the argmax on identical detail. This is the single
-strongest catch-up signal in the whole comparison: cheap to implement, near-
-universal in the field, and it corrupts the input to all six existing methods.
+(Scharr in `gfg_fgf.py`, Laplacian in `gff.py:142`, DCT variance in `dct.py`,
+squared-Laplacian band energy in `pyramid.py`), so a 5% brighter frame wins the
+argmax on identical detail. This is the single strongest catch-up signal in the
+whole comparison: cheap to implement, near-universal in the field, and it
+corrupts the input to all seven existing methods.
 
 ---
 
@@ -264,7 +271,7 @@ the field has already closed, or moves ahead of it.
 |---|----------|-------|-----------------|
 | 1 | Photometric alignment (exposure/WB) | **Catch-up** | 4 of 5 tools; default-on in 3 |
 | 2 | Scale / focus-breathing correction | **Catch-up** | 5 of 5 tools |
-| 3 | Laplacian pyramid fusion | **Catch-up** | 3 of 5 directly, 4th equivalent |
+| 3 | Laplacian pyramid fusion — **done in 1.7.0** | **Catch-up** | 3 of 5 directly, 4th equivalent |
 | 4 | Global label optimisation (graph-cut) | **Differentiating** | none |
 | 5 | Halo / bleed suppression | **Parity+** | only indirect, via radius tuning |
 | 6 | Middle-reference + global alignment | **Catch-up** | focus-stack ships both |
@@ -288,7 +295,7 @@ analysis.
 
 Stated plainly, because the tables above are weighted toward gaps.
 
-- **Method breadth.** Six fusion methods against two for both commercial tools.
+- **Method breadth.** Seven fusion methods against two for both commercial tools.
 - **Only tool with neural fusion.** StackMFF V4 and IFCNN refinement have no
   counterpart in any competitor here.
 - **Only tool with block-DCT fusion.**
@@ -312,16 +319,17 @@ anyone and fewer supporting stages than anyone.**
 The competitors converge on two blending methods each, then spend their remaining
 effort on the pipeline around them — photometric normalisation, scale
 correction, trust thresholds, slabbing, depth-map export, retouching. OpenFocus
-inverts that, and the two families it lacks (pyramid, weighted average) are
-precisely the two the field treats as mandatory.
+inverts that; of the two families the field treats as mandatory it added the
+Laplacian pyramid in 1.7.0 and now lacks only the contrast-weighted average.
 
-That suggests the highest-value work is not a seventh fusion method. It is:
+With the pyramid in place, the highest-value remaining work is less another
+fusion method than the pipeline around them:
 
 1. **Fix the inputs** — photometric alignment (§3) and scale correction (§2).
-   These improve all six existing methods at once, and both are near-universal
+   These improve all seven existing methods at once, and both are near-universal
    elsewhere.
-2. **Add the one missing family** — a Laplacian pyramid (§1), which is cheap,
-   order-independent, and the default method everywhere else.
+2. **Add the last missing family** — a contrast-weighted average (§1) for the √N
+   noise gain in flat regions, the one mandatory family still absent.
 3. **Stop discarding the depth map** (§6), which unlocks trust thresholds,
    depth-driven blending, halo suppression and 3D output from one change.
 

@@ -6,6 +6,7 @@ import numpy as np
 from typing import Union, List, Tuple, Optional
 from fusion_methods.dct import dct_focus_stack_fusion
 from fusion_methods.gff import gff_impl
+from fusion_methods.pyramid import pyramid_impl
 from fusion_methods.stackmffv4 import _stackmffv4_impl, _stackmffv4_batch_impl
 from fusion_methods.dtcwt import _dtcwt_impl
 from utils import resource_path, bitdepth
@@ -82,7 +83,7 @@ class MultiFocusFusion:
     - 'stackmffv4': StackMFF-V4 neural network fusion
     """
     
-    SUPPORTED_ALGORITHMS = ['guided_filter', 'dct', 'dtcwt', 'gfgfgf', 'stackmffv4']
+    SUPPORTED_ALGORITHMS = ['guided_filter', 'dct', 'dtcwt', 'gfgfgf', 'pyramid', 'stackmffv4']
     
     def __init__(self, algorithm: str = 'guided_filter', use_gpu: bool = False,
                  tile_enabled: bool = True, tile_block_size: int = 1024,
@@ -168,6 +169,28 @@ class MultiFocusFusion:
 
         thread_count = kwargs.get('thread_count', None)
         return gfgfgf_impl(input_source, img_resize, kernel_size=kernel_size, thread_count=thread_count)
+
+    def _fuse_pyramid(self,
+                      input_source: Union[str, List[np.ndarray]],
+                      img_resize: Optional[Tuple[int, int]] = None,
+                      levels: Optional[int] = None,
+                      **kwargs) -> np.ndarray:
+        """
+        Laplacian-pyramid fusion.
+
+        Args:
+            input_source: Image source
+            img_resize: Target size
+            levels: Number of pyramid decomposition levels (None -> method default)
+
+        Returns:
+            Fused image
+        """
+        # CPU-only; there is no GPU implementation, so use_gpu is ignored here.
+        # kernel_size may arrive from the shared worker call path - the pyramid
+        # has no kernel, so it is quietly dropped along with any other extras.
+        thread_count = kwargs.get('thread_count', None)
+        return pyramid_impl(input_source, img_resize, levels=levels, thread_count=thread_count)
 
     def _validate_dct_environment(self) -> None:
         """Validate DCT fusion dependencies."""
@@ -352,6 +375,8 @@ class MultiFocusFusion:
             return self._fuse_dtcwt(input_source, img_resize, **kwargs)
         elif self.algorithm == 'gfgfgf':
             return self._fuse_gfgfgf(input_source, img_resize, **kwargs)
+        elif self.algorithm == 'pyramid':
+            return self._fuse_pyramid(input_source, img_resize, **kwargs)
         elif self.algorithm == 'stackmffv4':
             return self._fuse_stackmffv4(input_source, img_resize, **kwargs)
     
@@ -726,6 +751,8 @@ class MultiFocusFusion:
                 return self._fuse_dtcwt(crops, img_resize, **kwargs)
             elif algorithm == 'gfgfgf':
                 return self._fuse_gfgfgf(crops, img_resize, **kwargs)
+            elif algorithm == 'pyramid':
+                return self._fuse_pyramid(crops, img_resize, **kwargs)
             else:
                 method_name = f"_fuse_{algorithm}"
                 method = getattr(self, method_name, None)
