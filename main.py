@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QUrl, QEvent
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
-from PyQt6.QtGui import QFont, QIcon, QDragEnterEvent, QDropEvent, QImage, QPixmap
+from PyQt6.QtGui import QFont, QIcon, QDragEnterEvent, QDropEvent
 from core import ImageStackLoader
 from core.app import OpenFocusApplication, process_command_line_args
 from core.workers import ROIAlignmentWorker
@@ -39,6 +39,8 @@ from utils import (
     show_success_box,
     show_custom_message_box,
     resource_path,
+    bitdepth,
+    cv2_to_pixmap,
 )
 from ui.image_panels import create_source_panel, create_result_panel
 from widgets import StatusConsole
@@ -109,6 +111,10 @@ class OpenFocus(QMainWindow):
         self.thread_count = DEFAULT_THREAD_COUNT
         # StackMFF V4 batch-size setting, default 2 (can be changed in Settings)
         self.stackmffv4_batch_size = STACKMFFV4_BATCH_SIZE
+        # Processing bit depth: 'auto' follows the source files, '8'/'16' force one.
+        # Held on the window only so it can be saved and restored; the pipeline
+        # reads it from utils.bitdepth, which is set below.
+        self.bit_depth_mode = bitdepth.get_mode()
         
         self.render_manager = RenderManager(self)
         self.output_manager = OutputManager(self)
@@ -783,12 +789,7 @@ class OpenFocus(QMainWindow):
         
         try:
             image = self.roi_aligned_images[index]
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            height, width, _channels = rgb_image.shape
-            bytes_per_line = 3 * width
-            
-            q_image = QImage(rgb_image.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_image)
+            pixmap = cv2_to_pixmap(image)
             
             self.lbl_result_img.set_display_pixmap(pixmap)
             self.lbl_result_info.setText(f"{index + 1} / {len(self.roi_aligned_images)}")
@@ -978,6 +979,31 @@ class OpenFocus(QMainWindow):
     def set_language(self, lang_code: str) -> None:
         """Switch application language."""
         trans.set_language(lang_code)
+
+    def set_bit_depth_mode(self, mode: str) -> None:
+        """Switch the processing bit depth.
+
+        The mode governs how frames are *decoded*, so it takes effect on the
+        next load. Reloading is left to the user rather than done automatically:
+        a stack can be large and slow to read, and a mode change mid-session is
+        often made before opening the next stack rather than to redo the current
+        one.
+        """
+        if mode == bitdepth.get_mode():
+            return
+        bitdepth.set_mode(mode)
+        self.bit_depth_mode = mode
+        print(f"[Depth] Mode set to '{mode}'", flush=True)
+
+        if self.raw_images:
+            show_message_box(
+                self,
+                trans.t("msg_depth_mode_changed_title"),
+                trans.t("msg_depth_mode_changed_text").format(
+                    mode=trans.t(f"depth_mode_{mode}")),
+                trans.t("msg_depth_mode_changed_info"),
+                QMessageBox.Icon.Information,
+            )
 
     def update_ui_text(self) -> None:
         """Update all UI strings based on current language."""

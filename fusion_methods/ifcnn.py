@@ -22,7 +22,7 @@ import os
 import numpy as np
 import cv2
 
-from utils import resource_path
+from utils import resource_path, bitdepth
 
 # ImageNet statistics; IFCNN was trained on inputs normalized this way
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -126,12 +126,16 @@ def _get_model_and_device(model_path, use_gpu):
 
 
 def _to_rgb(bgr_image):
-    """BGR uint8 -> float RGB in [0, 1]."""
-    return cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    """BGR uint8/uint16 -> float RGB in [0, 1].
+
+    Normalised by the frame's own full scale, so the network sees the same range
+    at either depth.
+    """
+    return bitdepth.to_float01(cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB))
 
 
 def _to_tensor(bgr_image, device):
-    """BGR uint8 -> normalized RGB tensor of shape [1, 3, H, W]."""
+    """BGR uint8/uint16 -> normalized RGB tensor of shape [1, 3, H, W]."""
     rgb = (_to_rgb(bgr_image) - _IMAGENET_MEAN) / _IMAGENET_STD
     tensor = torch.from_numpy(np.ascontiguousarray(rgb.transpose(2, 0, 1)))
     return tensor.unsqueeze(0).to(device)
@@ -147,12 +151,14 @@ def _from_tensor(tensor):
     return rgb * _IMAGENET_STD + _IMAGENET_MEAN
 
 
-def _to_bgr(rgb):
-    """Float RGB in [0, 1] -> BGR uint8 image."""
-    rgb = np.clip(rgb, 0.0, 1.0) * 255.0
-    # Round, do not truncate: a bare cast drops half a level from every pixel,
-    # which shows up as a systematic darkening of the refined image.
-    return cv2.cvtColor(np.rint(rgb).astype(np.uint8), cv2.COLOR_RGB2BGR)
+def _to_bgr(rgb, out_dtype=np.uint8):
+    """Float RGB in [0, 1] -> BGR image at `out_dtype`.
+
+    from_float01 rounds rather than truncating: a bare cast drops half a level
+    from every pixel, which shows up as a systematic darkening of the refined
+    image.
+    """
+    return cv2.cvtColor(bitdepth.from_float01(rgb, out_dtype), cv2.COLOR_RGB2BGR)
 
 
 def _refine_block(model, device, block_images):
@@ -170,6 +176,7 @@ def _refine_block(model, device, block_images):
     the sources contributed. Where IFCNN found nothing to add, the candidate
     comes back untouched instead of drifting.
     """
+    out_dtype = block_images[0].dtype
     if len(block_images) < 2:
         # Nothing to merge, so the round trip could only cost colour
         return block_images[0].copy()
@@ -186,7 +193,7 @@ def _refine_block(model, device, block_images):
         merged = _from_tensor(model.decode(fused))
         round_trip = _from_tensor(model.decode(lead_features))
 
-    return _to_bgr(_to_rgb(block_images[0]) + (merged - round_trip))
+    return _to_bgr(_to_rgb(block_images[0]) + (merged - round_trip), out_dtype)
 
 
 def _feather_weights(x0, y0, x1, y1, w, h, overlap):
@@ -213,6 +220,8 @@ def _feather_weights(x0, y0, x1, y1, w, h, overlap):
 def _refine_tiled(model, device, images, block_size, overlap):
     """Refine a large image tile by tile, blending the overlaps."""
     h, w = images[0].shape[:2]
+    out_dtype = images[0].dtype
+    full_scale = bitdepth.max_value(out_dtype)
     step = max(1, block_size - overlap)
 
     accumulator = np.zeros((h, w, 3), dtype=np.float32)
@@ -236,7 +245,9 @@ def _refine_tiled(model, device, images, block_size, overlap):
             break
 
     weight_sum = np.maximum(weight_sum, 1e-6)
-    return np.rint(np.clip(accumulator / weight_sum, 0, 255)).astype(np.uint8)
+    # The accumulator holds levels, not normalised values, so it is clipped
+    # against the stack's own full scale.
+    return np.rint(np.clip(accumulator / weight_sum, 0, full_scale)).astype(out_dtype)
 
 
 def _ifcnn_refine_impl(fusion_result, source_images, model_path, use_gpu,

@@ -9,6 +9,9 @@ import cv2
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
+
 # -----------------------------------------------------------------------------
 # Global helpers and core algorithm implementation
 # -----------------------------------------------------------------------------
@@ -103,7 +106,8 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
         except Exception:
             img_paths.sort()
 
-        stack_ori = [cv2.imread(p) for p in img_paths]
+        stack_ori = [read_image_any_depth(p) for p in img_paths]
+        stack_ori = [img for img in stack_ori if img is not None]
     else:
         # List input
         stack_ori = input_source
@@ -124,20 +128,26 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
     num_imgs = len(stack_ori)
     h, w = stack_ori[0].shape[:2]
 
+    # The result is written back at the depth the stack arrived in, so a 16-bit
+    # stack stays 16-bit end to end.
+    out_dtype = bitdepth.stack_dtype(stack_ori)
+
     # imgs_f32: (N, H, W, 3) range [0, 1]
     # Store in a list to avoid allocating one huge numpy array and running out of memory
     imgs_f32 = []
     for img in stack_ori:
-        if img.dtype == np.uint8:
-            imgs_f32.append(img.astype(np.float32) / 255.0)
-        else:
-            # Assume it is already float in the range 0-1 or 0-255; handle it safely here
+        if img.dtype.kind == "f":
+            # Already float: taken as normalised, unless it is plainly in
+            # display units, in which case fall back to the 8-bit scale.
             temp = img.astype(np.float32)
             if temp.max() > 1.0:
                 temp /= 255.0
             imgs_f32.append(temp)
-    
-    # The original uint8 data is no longer needed; release the reference (if not held externally)
+        else:
+            # uint8 or uint16, each normalised by its own full scale
+            imgs_f32.append(bitdepth.to_float01(img))
+
+    # The original integer data is no longer needed; release the reference (if not held externally)
     del stack_ori
 
     # Guide image for the guided filter: luminance, not a single colour channel.
@@ -303,17 +313,18 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
     # Boolean indexing may create temporary copies for large arrays, but is faster than iterating
     # For memory efficiency, process channel by channel
     
-    out = np.zeros((h, w, 3), dtype=np.uint8)
-    
+    out = np.zeros((h, w, 3), dtype=out_dtype)
+    full_scale = bitdepth.max_value(out_dtype)
+
     for c in range(3):
         # Extract the channel
         ch_data = imfu_result[:, :, c]
         # Division
         # Use np.divide's out parameter
         np.divide(ch_data, sum_fdms, out=ch_data, where=nonzero_mask)
-        # Clip and convert to uint8
-        np.clip(ch_data * 255.0, 0, 255, out=ch_data)
-        out[:, :, c] = np.rint(ch_data).astype(np.uint8)
+        # Clip and convert to the stack's own depth
+        np.clip(ch_data * full_scale, 0, full_scale, out=ch_data)
+        out[:, :, c] = np.rint(ch_data).astype(out_dtype)
 
     return out
 

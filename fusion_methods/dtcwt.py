@@ -8,6 +8,9 @@ import numpy as np
 from typing import Union, List, Tuple, Optional
 import cv2
 
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
+
 # NumPy 2.0 compatibility shims
 if not hasattr(np, "asfarray"):
     def _asfarray_compat(arr, dtype=None):
@@ -60,11 +63,14 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
     if len(images) < 2:
         raise ValueError("At least two images are required for fusion.")
 
+    # The result is written back at the depth the stack arrived in.
+    out_dtype = bitdepth.stack_dtype(images)
+
     # Convert to float32 RGB [0, 1]
-    # Processing images as a batch is not easily possible with standard dtcwt library 
+    # Processing images as a batch is not easily possible with standard dtcwt library
     # (which expects 2D inputs), so we prepare them for channel-wise processing.
     images_rgb = [
-        cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        bitdepth.to_float01(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         for img in images
     ]
 
@@ -161,8 +167,8 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
     # 4. Reconstruct Final Image
     fused_img = np.stack(fused_channels, axis=-1)
     
-    # Clip and Convert
-    fused_img = np.rint(np.clip(fused_img * 255.0, 0, 255)).astype(np.uint8)
+    # Clip and convert back to the stack's own depth
+    fused_img = bitdepth.from_float01(fused_img, out_dtype)
     fused_img = cv2.cvtColor(fused_img, cv2.COLOR_RGB2BGR)
 
     # dtcwt duplicates the bottom row and rightmost column of an odd-sized image
@@ -201,7 +207,7 @@ def _load_images(input_source: Union[str, List[np.ndarray]], img_resize: Optiona
         img_paths.sort(key=sort_key)
 
         for p in img_paths:
-            img = cv2.imread(p)
+            img = read_image_any_depth(p)
             if img is not None:
                 if img_resize:
                     img = cv2.resize(img, img_resize)

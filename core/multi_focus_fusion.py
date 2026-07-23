@@ -8,7 +8,8 @@ from fusion_methods.dct import dct_focus_stack_fusion
 from fusion_methods.gff import gff_impl
 from fusion_methods.stackmffv4 import _stackmffv4_impl, _stackmffv4_batch_impl
 from fusion_methods.dtcwt import _dtcwt_impl
-from utils import resource_path
+from utils import resource_path, bitdepth
+from utils.image_utils import read_image_any_depth
 
 
 # Tile parameters are now instance attributes of MultiFocusFusion; see the
@@ -663,22 +664,19 @@ class MultiFocusFusion:
                 raise ValueError("_fuse_tiled requires a non-empty list of numpy arrays as input_source")
             h, w = imgs[0].shape[:2]
             channels = imgs[0].shape[2] if imgs[0].ndim == 3 else 1
+            out_dtype = bitdepth.stack_dtype(imgs)
         elif isinstance(input_source, str):
             img_dir = input_source
-            try:
-                import cv2
-            except Exception as exc:
-                raise RuntimeError("OpenCV is required to read image files for tiled fusion. Install with: pip install opencv-python") from exc
-
             exts = ('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp')
             files = [f for f in sorted(os.listdir(img_dir)) if f.lower().endswith(exts)]
             if len(files) == 0:
                 raise ValueError(f"No image files found in directory: {img_dir}")
-            first_img = cv2.imread(os.path.join(img_dir, files[0]), cv2.IMREAD_UNCHANGED)
+            first_img = read_image_any_depth(os.path.join(img_dir, files[0]))
             if first_img is None:
                 raise RuntimeError(f"Unable to read image: {os.path.join(img_dir, files[0])}")
             h, w = first_img.shape[:2]
             channels = first_img.shape[2] if first_img.ndim == 3 else 1
+            out_dtype = first_img.dtype
         else:
             raise ValueError("_fuse_tiled input_source must be a list of arrays or a directory path string")
 
@@ -704,7 +702,7 @@ class MultiFocusFusion:
         if algorithm == 'stackmffv4':
             return self._fuse_tiled_stackmffv4_batched(
                 imgs, img_dir, tile_coords, h, w, channels,
-                block_size, overlap, **kwargs
+                block_size, overlap, out_dtype, **kwargs
             )
 
         # Other algorithms use the original multi-threaded processing
@@ -744,7 +742,7 @@ class MultiFocusFusion:
                 crops = []
                 for fname in files:
                     fp = os.path.join(img_dir, fname)
-                    full = cv2.imread(fp, cv2.IMREAD_UNCHANGED)
+                    full = read_image_any_depth(fp)
                     if full is None:
                         raise RuntimeError(f"Unable to read image: {fp}")
                     crops.append(full[y0:y1, x0:x1].copy())
@@ -784,11 +782,20 @@ class MultiFocusFusion:
 
         weight[weight == 0] = 1.0
         fused = acc / weight
-        fused = np.rint(np.clip(fused, 0, 255)).astype(np.uint8)
+        # The accumulator holds pixel levels, not normalised values, so it is
+        # clipped against the stack's own full scale. Clipping at 255 here would
+        # drive every 16-bit level above 255 to white.
+        fused = self._finish_tile_accumulator(fused, out_dtype)
 
         if channels == 1:
             return fused[:, :, 0]
         return fused
+
+    @staticmethod
+    def _finish_tile_accumulator(fused: np.ndarray, out_dtype) -> np.ndarray:
+        """Round and clip a feathered tile accumulator to the stack's depth."""
+        full_scale = bitdepth.max_value(out_dtype)
+        return np.rint(np.clip(fused, 0, full_scale)).astype(out_dtype)
 
     def _fuse_tiled_stackmffv4_batched(self,
                                         imgs: Optional[List[np.ndarray]],
@@ -796,14 +803,13 @@ class MultiFocusFusion:
                                         tile_coords: List[Tuple[int, int, int, int]],
                                         h: int, w: int, channels: int,
                                         block_size: int, overlap: int,
+                                        out_dtype,
                                         **kwargs) -> np.ndarray:
         """
         Tiled StackMFF V4 fusion with batched processing.
 
         Packs multiple tiles into one batch for GPU inference to improve efficiency.
         """
-        import cv2
-        
         batch_size = self.stackmffv4_batch_size
         total_tiles = len(tile_coords)
         
@@ -842,7 +848,7 @@ class MultiFocusFusion:
                     crops = []
                     for fname in files:
                         fp = os.path.join(img_dir, fname)
-                        full = cv2.imread(fp, cv2.IMREAD_UNCHANGED)
+                        full = read_image_any_depth(fp)
                         if full is None:
                             raise RuntimeError(f"Unable to read image: {fp}")
                         crops.append(full[y0:y1, x0:x1].copy())
@@ -869,8 +875,8 @@ class MultiFocusFusion:
         
         weight[weight == 0] = 1.0
         fused = acc / weight
-        fused = np.rint(np.clip(fused, 0, 255)).astype(np.uint8)
-        
+        fused = self._finish_tile_accumulator(fused, out_dtype)
+
         if channels == 1:
             return fused[:, :, 0]
         return fused

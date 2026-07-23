@@ -3,10 +3,10 @@ from typing import Any
 
 import cv2
 from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtGui import QAction, QIcon, QPixmap, QImage
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox
 
-from utils import get_imwrite_params
+from utils import write_image, cv2_to_pixmap
 from utils import show_error_box, show_message_box, show_success_box, show_warning_box
 from locales import trans
 
@@ -36,11 +36,7 @@ class OutputManager:
 
         if window.fusion_result is not None:
             try:
-                rgb_image = cv2.cvtColor(window.fusion_result.copy(), cv2.COLOR_BGR2RGB)
-                h, w = rgb_image.shape[:2]
-                bytes_per_line = 3 * w
-                q_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-                pixmap = QPixmap.fromImage(q_image)
+                pixmap = cv2_to_pixmap(window.fusion_result)
                 icon = QIcon(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                 item.setIcon(icon)
             except Exception:
@@ -129,9 +125,7 @@ class OutputManager:
                     "registered", window.fusion_results[row], 0
                 )
 
-                ext = os.path.splitext(file_path)[1].lower()
-                params = get_imwrite_params(ext)
-                success = cv2.imwrite(file_path, image_to_save, params)
+                success = write_image(file_path, image_to_save, announce=True)
                 if success:
                     show_success_box(
                         window,
@@ -151,9 +145,7 @@ class OutputManager:
                     "registered", window.fusion_result, 0
                 )
 
-                ext = os.path.splitext(file_path)[1].lower()
-                params = get_imwrite_params(ext)
-                success = cv2.imwrite(file_path, image_to_save, params)
+                success = write_image(file_path, image_to_save, announce=True)
                 if success:
                     show_success_box(
                         window,
@@ -229,12 +221,7 @@ class OutputManager:
 
         try:
             display_image = window.label_manager.prepare_bgr_image("registered", fusion_image, 0)
-            rgb_image = cv2.cvtColor(display_image, cv2.COLOR_BGR2RGB)
-            height, width, _channels = rgb_image.shape
-            bytes_per_line = 3 * width
-
-            q_image = QImage(rgb_image.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_image)
+            pixmap = cv2_to_pixmap(display_image)
 
             window.lbl_result_img.set_display_pixmap(pixmap)
             window.result_control_bar.setVisible(False)
@@ -282,12 +269,7 @@ class OutputManager:
             image = window.registration_results[index]
             image = window.label_manager.apply_labels_to_registered_image(image, index)
 
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            height, width, channel = rgb_image.shape
-            bytes_per_line = 3 * width
-
-            q_image = QImage(rgb_image.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_image)
+            pixmap = cv2_to_pixmap(image)
 
             window.lbl_result_img.set_display_pixmap(pixmap)
             window.lbl_result_info.setText(f"{index + 1} / {len(window.registration_results)}")

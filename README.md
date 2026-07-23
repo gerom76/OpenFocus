@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.22**: End-to-end **16-bit pipeline**. Stacks whose sources carry more than 8 bits — RAW, 16-bit TIFF/PNG — are now loaded, aligned, fused and saved at full depth. Switch between Auto / 8-bit / 16-bit under *Settings → Bit Depth*.
+
 > 🎉 **2026.07.21**: GFG-FGF fusion now runs on GPU (CUDA/MPS via PyTorch) with automatic CPU fallback — ~7x faster on large stacks.
 
 > 🎉 **2026.07.20**: DTCWT fusion now runs on GPU (CUDA/MPS via pytorch_wavelets) with automatic CPU fallback — over 100x faster on large stacks.
@@ -71,6 +73,7 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **Batch Automation**: Kick off batch jobs across multiple folders with live progress, cancellation, and automatic output organization.
 - **Annotation & Export Toolkit**: Overlay labels, export GIF animations, and save processed stacks in JPG/PNG/BMP/TIFF with consistent metadata handling.
 - **AI-Assisted Fusion**: Ship with StackMFF V4 to unlock deep-learning-quality fusion alongside classic signal-processing methods.
+- **16-bit Processing**: RAW and 16-bit TIFF/PNG stacks stay at full depth from load through alignment, fusion and export — no banding in smooth gradients, and headroom left for blending. Auto-engages on >8-bit sources, or force 8/16-bit from *Settings → Bit Depth*.
 
 <a id="fusion--registration-methods"></a>
 ## 🧪 Algorithms

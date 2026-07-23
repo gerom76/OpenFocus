@@ -3,7 +3,7 @@ import os
 import sys
 from typing import Any
 
-from utils import show_error_box, show_success_box
+from utils import show_error_box, show_success_box, bitdepth
 from locales import trans
 
 CONFIG_FILENAME = "openfocus.cfg.json"
@@ -162,6 +162,7 @@ class SettingsManager:
             "ecc_parallel": window.ecc_parallel,
             "thread_count": window.thread_count,
             "stackmffv4_batch_size": window.stackmffv4_batch_size,
+            "bit_depth_mode": bitdepth.get_mode(),
             "fusion_method": self._selected_fusion_method(),
             "ifcnn_refine": window.cb_ifcnn.isChecked(),
             "align_homography": window.cb_align_homography.isChecked(),
@@ -278,6 +279,17 @@ class SettingsManager:
         refresh = getattr(window, "refresh_recent_menus", None)
         if callable(refresh):
             refresh()
+
+        # Processing bit depth. Applied to utils.bitdepth as well as the window,
+        # since the pipeline reads the module and not the attribute. An
+        # unrecognised value falls back to the default rather than raising.
+        depth_mode = data.get("bit_depth_mode")
+        if depth_mode in bitdepth.VALID_MODES:
+            bitdepth.set_mode(depth_mode)
+            window.bit_depth_mode = depth_mode
+            action = getattr(window, "ui_objs", {}).get(f"action_depth_{depth_mode}")
+            if action is not None:
+                action.setChecked(True)
 
         # Language
         lang = data.get("language")

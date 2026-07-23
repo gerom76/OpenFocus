@@ -65,6 +65,13 @@ class TranslationManager(QObject):
                 'action_reg_settings': 'Registration Settings',
                 'action_tile_settings': 'Tile Settings',
                 'action_stackmffv4_batch_settings': 'StackMFF V4 Batch Size',
+                'menu_bit_depth': 'Bit Depth',
+                'action_depth_auto': 'Auto (follow source)',
+                'action_depth_8': '8-bit',
+                'action_depth_16': '16-bit',
+                'depth_mode_auto': 'Auto (follow source)',
+                'depth_mode_8': '8-bit',
+                'depth_mode_16': '16-bit',
                 
                 # Menu View
                 'menu_view': 'View',
@@ -438,6 +445,9 @@ class TranslationManager(QObject):
                 'msg_settings_saved_title': 'Settings Saved',
                 'msg_settings_saved_text': 'All settings saved successfully!',
                 'msg_settings_saved_info': 'Settings saved to:\n{path}',
+                'msg_depth_mode_changed_title': 'Bit Depth Changed',
+                'msg_depth_mode_changed_text': 'Processing bit depth set to {mode}.',
+                'msg_depth_mode_changed_info': 'The new depth applies when images are decoded, so reload the current stack for it to take effect.',
                 'msg_settings_save_failed_text': 'Failed to save settings.',
                 
                 'msg_no_reg_labels': 'No Labels',
@@ -507,6 +517,13 @@ class TranslationManager(QObject):
                 'action_reg_settings': '配准设置',
                 'action_tile_settings': '分块设置',
                 'action_stackmffv4_batch_settings': 'StackMFF V4 批量大小',
+                'menu_bit_depth': '位深度',
+                'action_depth_auto': '自动（跟随源文件）',
+                'action_depth_8': '8 位',
+                'action_depth_16': '16 位',
+                'depth_mode_auto': '自动（跟随源文件）',
+                'depth_mode_8': '8 位',
+                'depth_mode_16': '16 位',
                 
                 # Menu View
                 'menu_view': '视图',
@@ -784,6 +801,9 @@ class TranslationManager(QObject):
                 'msg_settings_saved_title': '设置已保存',
                 'msg_settings_saved_text': '所有设置保存成功！',
                 'msg_settings_saved_info': '设置已保存到:\n{path}',
+                'msg_depth_mode_changed_title': '位深度已更改',
+                'msg_depth_mode_changed_text': '处理位深度已设置为 {mode}。',
+                'msg_depth_mode_changed_info': '新的位深度在解码图像时生效，请重新加载当前图像栈。',
                 'msg_settings_save_failed_text': '保存设置失败。',
                 
                 'msg_no_reg_labels': '无标签',

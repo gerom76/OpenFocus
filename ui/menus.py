@@ -1,6 +1,7 @@
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QMenu, QMainWindow
 from locales import trans
+from utils import bitdepth
 
 
 def setup_menus(window: QMainWindow) -> None:
@@ -220,6 +221,30 @@ def setup_menus(window: QMainWindow) -> None:
     lang_group.addAction(lang_zh)
     lang_menu.addAction(lang_zh)
     window.ui_objs['action_lang_zh'] = lang_zh
+
+    # Bit-depth Submenu. A menu rather than a dialog because switching depth is
+    # a per-stack decision made often, not a setting configured once.
+    depth_menu = QMenu(trans.t('menu_bit_depth'), window)
+    settings_menu.addMenu(depth_menu)
+    window.ui_objs['menu_bit_depth'] = depth_menu
+
+    depth_group = QActionGroup(window)
+    depth_group.setExclusive(True)
+
+    current_depth_mode = getattr(window, 'bit_depth_mode', bitdepth.MODE_AUTO)
+    for mode, key in (
+        (bitdepth.MODE_AUTO, 'action_depth_auto'),
+        (bitdepth.MODE_8, 'action_depth_8'),
+        (bitdepth.MODE_16, 'action_depth_16'),
+    ):
+        action = QAction(trans.t(key), window)
+        action.setCheckable(True)
+        action.setChecked(current_depth_mode == mode)
+        # Default-arg binding, or every lambda would close over the last mode
+        action.triggered.connect(lambda _checked=False, m=mode: window.set_bit_depth_mode(m))
+        depth_group.addAction(action)
+        depth_menu.addAction(action)
+        window.ui_objs[key] = action
 
     tile_action = QAction(trans.t('action_tile_settings'), window)
     # Open the tile settings dialog

@@ -28,12 +28,26 @@ import numpy as np
 import os
 import glob
 import sys
-import io
 from typing import Union, List, Optional
 
-# Set standard output encoding to utf-8 when a console stream exists
-if sys.stdout is not None and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
+
+# Set standard output encoding to utf-8 when a console stream exists.
+#
+# Reconfigure in place rather than assigning a fresh TextIOWrapper around
+# sys.stdout.buffer. A replacement wrapper owns the buffer it was handed, so
+# when the wrapper is garbage collected it closes that buffer - which, if
+# anything else is holding the original stream (pytest's output capture does
+# exactly this), leaves it closed underneath its owner and every later write
+# fails with "I/O operation on closed file".
+if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        # Already detached, or a stream that cannot be reconfigured - the
+        # encoding is cosmetic, so carry on rather than failing the import.
+        pass
 
 
 # # ========== Scale-alignment algorithm implementation (linear) ==========
@@ -285,7 +299,8 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         )
         # Note: for memory reasons, commercial software usually does not read all large images at once
         # But to keep the interface consistent, we read them all in here. A better approach would be to build a generator.
-        images = [cv2.imread(path) for path in img_paths]
+        images = [read_image_any_depth(path) for path in img_paths]
+        images = [img for img in images if img is not None]
         img_filenames = [os.path.basename(path) for path in img_paths]
     else:
         images = input_source
@@ -328,7 +343,11 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
             img_small = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
         else:
             img_small = img
-        kps, des = local_detector.detectAndCompute(img_small, None)
+        # SIFT only accepts 8-bit input. This measures a transform which is then
+        # applied to the full-depth frame, so narrowing here costs nothing in
+        # the output - keypoint positions do not get more accurate with more
+        # bits, and the frames are already downscaled for detection anyway.
+        kps, des = local_detector.detectAndCompute(bitdepth.to_analysis8(img_small), None)
         return kps, des, scale
 
     # Use a thread pool to extract features in parallel
@@ -438,7 +457,8 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         print("  - Saving results...")
         for idx, img in enumerate(aligned_images):
             fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
-            cv2.imwrite(os.path.join(output_path, fname), img)
+            cv2.imwrite(os.path.join(output_path, fname),
+                        bitdepth.prepare_for_write(img, os.path.splitext(fname)[1]))
 
     return aligned_images
 
@@ -463,7 +483,8 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
              if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tif'}),
             key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
         )
-        images = [cv2.imread(path) for path in img_paths]
+        images = [read_image_any_depth(path) for path in img_paths]
+        images = [img for img in images if img is not None]
         img_filenames = [os.path.basename(path) for path in img_paths]
     else:
         images = input_source
@@ -508,7 +529,13 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         
         gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
-        return gray, scale
+        # findTransformECC takes 8-bit or float32 only. 8-bit is used here for
+        # the same reason as SIFT above: this measures a transform that is then
+        # applied to the full-depth frame, and the image it measures on has
+        # already been downscaled and Gaussian-blurred, so the extra bits carry
+        # no alignment information. Narrowing also keeps the 8-bit path
+        # bit-identical to previous releases.
+        return bitdepth.to_analysis8(gray), scale
 
     print(f"Aligning {len(images)} images using ECC (Parallel Optimized)...")
 
@@ -698,8 +725,8 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
             
             aligned_img_gpu = cp.stack(channels, axis=2)
             
-            # Transfer back to the CPU
-            aligned_img = cp.asnumpy(aligned_img_gpu).astype(np.uint8)
+            # Transfer back to the CPU, at the depth the frame came in as
+            aligned_img = cp.asnumpy(aligned_img_gpu).astype(img.dtype)
             
         else:
             # CPU version (OpenCV)
@@ -714,7 +741,8 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         # If an output path is provided, save directly in the thread
         if output_path:
             fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
-            cv2.imwrite(os.path.join(output_path, fname), aligned_img)
+            cv2.imwrite(os.path.join(output_path, fname),
+                        bitdepth.prepare_for_write(aligned_img, os.path.splitext(fname)[1]))
             
         return aligned_img
 
@@ -757,7 +785,8 @@ def _stabilisation_impl(input_source, output_path=None, filenames=None):
              if os.path.splitext(file)[1].lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tif']],
             key=lambda x: int(re.findall(r"\d+", os.path.basename(x))[-1])
         )
-        images = [cv2.imread(path) for path in img_paths]
+        images = [read_image_any_depth(path) for path in img_paths]
+        images = [img for img in images if img is not None]
         # Store original filenames with extensions
         img_filenames = [os.path.basename(path) for path in img_paths]
     else:

@@ -21,6 +21,8 @@ import torch
 import torch.nn.functional as F
 
 from fusion_methods.dct import _collect_images_from_folder, _normalize_image_stack
+from fusion_methods import torch_depth
+from utils import bitdepth
 
 # Number of stack images processed per GPU batch (bounds peak memory)
 CHUNK_SIZE = 4
@@ -79,12 +81,28 @@ def dct_torch_impl(
     n = len(normalized_images)
     dev = torch.device(device)
 
+    # Output pixels are copied verbatim from the source frames, so the result
+    # keeps the depth the stack arrived in. torch has no uint16, so 16-bit
+    # levels are carried through the composition pass as int32 and narrowed back
+    # on the host at the end.
+    out_dtype = bitdepth.stack_dtype(normalized_images)
+    compose_dtype = torch.uint8 if out_dtype == bitdepth.UINT8 else torch.int32
+
     with torch.no_grad():
-        def to_device_u8(chunk, trim=True):
+        def to_device_levels(chunk, trim=True):
+            """Raw pixel levels on the device, for verbatim copying."""
             if trim:
                 chunk = [img[:h_trim, :w_trim] for img in chunk]
             arr = np.stack([np.ascontiguousarray(img) for img in chunk])
-            return torch.from_numpy(arr).to(dev).permute(0, 3, 1, 2)  # (B, 3, H, W) uint8 BGR
+            if arr.dtype != np.uint8:
+                arr = arr.astype(np.int32)
+            return torch.from_numpy(arr).to(dev).permute(0, 3, 1, 2)  # (B, 3, H, W) BGR
+
+        def to_device_float01(chunk, trim=True):
+            """Normalised [0, 1] copy on the device, for the variance measure."""
+            if trim:
+                chunk = [img[:h_trim, :w_trim] for img in chunk]
+            return torch_depth.stack_to_float01(chunk, dev)
 
         # Pass 1: per-block variance via Var(X) = E[X^2] - E[X]^2, running max
         max_variance = torch.full((map_h, map_w), -1.0, device=dev)
@@ -92,7 +110,10 @@ def dct_torch_impl(
 
         for start in range(0, n, CHUNK_SIZE):
             chunk = normalized_images[start:start + CHUNK_SIZE]
-            t = to_device_u8(chunk).float()
+            # Normalised before squaring: at 16 bits, squaring raw levels lands
+            # near float32's precision limit and the E[X^2] - E[X]^2 difference
+            # cancels away small variances (see the note in dct.py).
+            t = to_device_float01(chunk)
             gray = (0.114 * t[:, 0:1] + 0.587 * t[:, 1:2] + 0.299 * t[:, 2:3])
             mean_sq = F.avg_pool2d(gray * gray, block_size)
             sq_mean = F.avg_pool2d(gray, block_size) ** 2
@@ -123,15 +144,18 @@ def dct_torch_impl(
             full_index = torch.cat(
                 [full_index, full_index[:, -1:].expand(-1, w - w_trim)], dim=1)
 
-        fused = torch.zeros((3, h, w), dtype=torch.uint8, device=dev)
+        fused = torch.zeros((3, h, w), dtype=compose_dtype, device=dev)
 
         used = torch.unique(final_index).tolist()
         for start in range(0, n, CHUNK_SIZE):
             chunk_ids = [k for k in range(start, min(start + CHUNK_SIZE, n)) if k in used]
             if not chunk_ids:
                 continue
-            t = to_device_u8([normalized_images[k] for k in chunk_ids], trim=False)
+            t = to_device_levels([normalized_images[k] for k in chunk_ids], trim=False)
             for j, k in enumerate(chunk_ids):
                 fused = torch.where(full_index == k, t[j], fused)
 
-        return fused.permute(1, 2, 0).cpu().numpy()  # (H, W, 3) BGR uint8
+        # (H, W, 3) BGR at the stack's own depth. The int32 carrier holds exact
+        # source levels, so narrowing back to uint16 here is lossless.
+        result = fused.permute(1, 2, 0).cpu().numpy()
+        return result if result.dtype == out_dtype else result.astype(out_dtype)

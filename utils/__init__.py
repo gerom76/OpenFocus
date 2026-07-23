@@ -3,6 +3,7 @@ Utility modules for OpenFocus.
 
 Modules:
 - image_utils: Image conversion functions (pixmap <-> cv2)
+- bitdepth: 8/16-bit depth policy and conversion
 - ui_utils: UI-related functions (message boxes, dialogs)
 - validators: Validation and utility functions
 - platform_utils: Cross-platform utilities (font detection, OS detection)
@@ -12,6 +13,34 @@ from utils.image_utils import (
     pixmap_to_cv2,
     cv2_to_pixmap,
     get_imwrite_params,
+    ensure_bgr,
+    read_image_any_depth,
+    write_image,
+)
+
+from utils import bitdepth
+from utils.bitdepth import (
+    MODE_AUTO,
+    MODE_8,
+    MODE_16,
+    VALID_MODES,
+    apply_load_mode,
+    bits_for,
+    convert,
+    describe,
+    from_float01,
+    get_mode,
+    is_high_depth,
+    max_value,
+    prepare_for_write,
+    set_mode,
+    stack_dtype,
+    stack_summary,
+    supports_16bit,
+    to_analysis8,
+    to_display8,
+    to_float01,
+    unify,
 )
 
 from utils.ui_utils import (
@@ -55,6 +84,32 @@ __all__ = [
     'pixmap_to_cv2',
     'cv2_to_pixmap',
     'get_imwrite_params',
+    'ensure_bgr',
+    'read_image_any_depth',
+    'write_image',
+    # bitdepth
+    'bitdepth',
+    'MODE_AUTO',
+    'MODE_8',
+    'MODE_16',
+    'VALID_MODES',
+    'apply_load_mode',
+    'bits_for',
+    'convert',
+    'describe',
+    'from_float01',
+    'get_mode',
+    'is_high_depth',
+    'max_value',
+    'prepare_for_write',
+    'set_mode',
+    'stack_dtype',
+    'stack_summary',
+    'supports_16bit',
+    'to_analysis8',
+    'to_display8',
+    'to_float01',
+    'unify',
     # ui_utils
     'log_message_box',
     'exec_message_box',

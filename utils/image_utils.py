@@ -1,8 +1,46 @@
+import os
+
 import cv2
 import numpy as np
 from typing import Optional
 
 from PyQt6.QtGui import QPixmap, QImage
+
+from utils import bitdepth
+
+
+def ensure_bgr(img: np.ndarray) -> np.ndarray:
+    """Force a decoded frame to 3-channel BGR without changing its bit depth.
+
+    IMREAD_UNCHANGED preserves depth but also preserves channel count, so
+    greyscale and alpha have to be normalised here. IMREAD_COLOR used to do this
+    implicitly, at the cost of forcing everything down to 8-bit.
+    """
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.ndim == 3:
+        if img.shape[2] == 4:
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        if img.shape[2] == 1:
+            return cv2.cvtColor(img[:, :, 0], cv2.COLOR_GRAY2BGR)
+        if img.shape[2] == 3:
+            return img
+    raise ValueError(f"Unsupported image shape: {img.shape}")
+
+
+def read_image_any_depth(path: str, apply_mode: bool = True) -> Optional[np.ndarray]:
+    """Read an image file as BGR, keeping 16-bit sources at 16 bits.
+
+    Used by the folder-input paths of the fusion methods, which would otherwise
+    silently narrow a 16-bit stack the moment it was passed as a directory
+    rather than as preloaded arrays. Returns None if the file cannot be decoded.
+    """
+    data = np.fromfile(path, dtype=np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    img = ensure_bgr(img)
+    return bitdepth.apply_load_mode(img) if apply_mode else img
 
 
 def get_imwrite_params(extension: str) -> list:
@@ -33,6 +71,23 @@ def get_imwrite_params(extension: str) -> list:
         return []
 
 
+def write_image(file_path: str, image: np.ndarray, announce: bool = False) -> bool:
+    """Write an image, narrowing it first if the container cannot hold its depth.
+
+    PNG and TIFF store 16 bits per channel; JPEG and BMP do not. Handing 16-bit
+    data to a JPEG encoder does not produce a 16-bit JPEG, so the narrowing has
+    to be explicit. `announce` prints one line when it happens, which the
+    single-image save paths use so the loss is never silent; stack exports log
+    once around the loop instead of once per frame.
+    """
+    ext = os.path.splitext(file_path)[1]
+    if announce and bitdepth.is_high_depth(image) and not bitdepth.supports_16bit(ext):
+        print(f"[Depth] {ext or 'this format'} cannot store 16-bit; saving 8-bit. "
+              f"Use PNG or TIFF to keep the full depth.", flush=True)
+    image = bitdepth.prepare_for_write(image, ext)
+    return cv2.imwrite(file_path, image, get_imwrite_params(ext))
+
+
 def pixmap_to_cv2(pixmap: QPixmap) -> Optional[np.ndarray]:
     try:
         qimage = pixmap.toImage()
@@ -55,6 +110,9 @@ def pixmap_to_cv2(pixmap: QPixmap) -> Optional[np.ndarray]:
 
 def cv2_to_pixmap(cv2_img: np.ndarray) -> QPixmap:
     try:
+        # Qt has no 16-bit-per-channel RGB format, so anything headed for the
+        # screen is narrowed here. Processing buffers keep their full depth.
+        cv2_img = bitdepth.to_display8(cv2_img)
         if len(cv2_img.shape) == 3 and cv2_img.shape[2] == 3:
             rgb_image = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
         else:

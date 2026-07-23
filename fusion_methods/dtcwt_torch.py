@@ -18,11 +18,12 @@ fusion with complex wavelets[J]. Information Fusion, 2007, 8(2): 119-130.
 
 import sys
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
 from fusion_methods.dtcwt import _load_images
+from fusion_methods import torch_depth
+from utils import bitdepth
 
 # pytorch_wavelets 1.3.0 imports pkg_resources, which setuptools >= 81 no longer
 # provides. Install a minimal in-process shim exposing the one function it uses.
@@ -106,6 +107,9 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
     h_orig, w_orig = images[0].shape[:2]
     dev = torch.device(device)
 
+    # The result is written back at the depth the stack arrived in.
+    out_dtype = bitdepth.stack_dtype(images)
+
     # Same filter banks as the CPU dtcwt package defaults
     xfm = DTCWTForward(J=N, biort='near_sym_a', qshift='qshift_a').to(dev)
     ifm = DTCWTInverse(biort='near_sym_a', qshift='qshift_a').to(dev)
@@ -116,8 +120,8 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
 
         # Channels are processed independently, so BGR order can be kept as-is
         for img in images:
-            t = torch.from_numpy(np.ascontiguousarray(img)).to(dev)
-            t = t.permute(2, 0, 1).unsqueeze(0).float() / 255.0  # (1, 3, H, W)
+            # (1, 3, H, W) in [0, 1], from uint8 or uint16 alike
+            t = torch_depth.image_to_float01(img, dev)
 
             yl, yh = xfm(t)  # yl: (1, 3, h', w'); yh: list of (1, 3, 6, h, w, 2)
             yl = yl[0]
@@ -137,5 +141,5 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
         # The inverse transform may return a padded size for odd dimensions
         out = out[:, :h_orig, :w_orig]
 
-        out = (out * 255.0).clamp_(0, 255).to(torch.uint8)
-        return out.permute(1, 2, 0).cpu().numpy()  # (H, W, 3) BGR
+        # (H, W, 3) BGR, back at the depth the stack arrived in
+        return torch_depth.from_float01(out.permute(1, 2, 0), out_dtype)

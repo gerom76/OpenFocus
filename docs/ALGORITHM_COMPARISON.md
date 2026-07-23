@@ -211,7 +211,7 @@ that away.
 
 | Capability | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
 |------------|-----------|---------|--------|-------------|---------------|---------|
-| **Bit depth** | **8-bit only**¹ | 16-bit | 16-bit | 16-bit TIFF | 16-bit | not documented |
+| **Bit depth** | ✓ 16-bit¹ | 16-bit | 16-bit | 16-bit TIFF | 16-bit | not documented |
 | RAW support | Nikon only² | broad + DNG | via DNG | ✗ | not documented | ✗ |
 | **Depth map output** | **✗**³ | ✓ (3D model) | ✓ | ✓ | ✗ | ✓ core feature |
 | 3D / stereo / anaglyph output | ✗ | ✓ | ✓ | ✓ `--3dview` | ✗ | ✓ core feature |
@@ -223,8 +223,10 @@ that away.
 | Automatic stack ordering | ✗ filename only⁵ | order-sensitive (B) | ✓ auto order detect | ✗ | ✗ | ✗ |
 | GUI | ✓ | ✓ | ✓ | ✗ CLI only | ✓ | ✓ |
 
-¹ `core/image_loader.py:53` decodes RAW with an explicit `output_bps=8`; line 56
-forces `IMREAD_COLOR`, which is 8-bit BGR.
+¹ **Closed in 1.6.0.** Frames are decoded at native depth (`IMREAD_UNCHANGED`,
+RAW at `output_bps=16`) and every stage is dtype-preserving, so a 16-bit stack
+stays 16-bit through alignment, fusion and export. Mode selectable under
+*Settings → Bit Depth*; see `utils/bitdepth.py`.
 ² `.nef` / `.nrw` at `core/image_loader.py:35`, though LibRaw handles CR2, CR3,
 ARW, RAF, DNG and ORF identically.
 ³ Computed internally, then discarded — see §1 note 1.
@@ -234,11 +236,12 @@ ARW, RAF, DNG and ORF identically.
 
 ### Findings
 
-**The 8-bit pipeline is the hard ceiling on everything above it.** Every other
-tool that documents bit depth works in 16-bit. For a tool aimed at photographers,
-discarding RAW's 12-14 bits before fusion means banding in smooth gradients and
-no headroom for weighted blending. This is not an algorithm, but it bounds every
-algorithm.
+**The 8-bit pipeline was the hard ceiling on everything above it — closed in
+1.6.0.** Every other tool that documents bit depth works in 16-bit. Discarding
+RAW's 12-14 bits before fusion meant banding in smooth gradients and no headroom
+for weighted blending; it was not an algorithm, but it bounded every algorithm.
+The pipeline now decodes at native depth and preserves it end to end, with the
+depth mode selectable rather than implicit.
 
 **Depth map output is standard and OpenFocus already computes one.** Four of five
 competitors export it; for PICOLAY it is the point of the software. OpenFocus
@@ -266,7 +269,7 @@ the field has already closed, or moves ahead of it.
 | 5 | Halo / bleed suppression | **Parity+** | only indirect, via radius tuning |
 | 6 | Middle-reference + global alignment | **Catch-up** | focus-stack ships both |
 | 7 | Noise-aware measure + flat-region averaging | **Parity+** | averaging yes; noise-normalised measure, none |
-| 8 | 16-bit pipeline | **Catch-up** | 4 of 5 tools |
+| 8 | 16-bit pipeline — **done in 1.6.0** | **Catch-up** | 4 of 5 tools |
 | 9 | Non-rigid / optical-flow refinement | **Differentiating** | none; Zerene explicitly global-only |
 | 10 | Depth-map export & depth-driven blending | **Catch-up** | 4 of 5 tools |
 | 11 | Focus-based ordering + bad-frame gating | **Catch-up** | Zerene auto-order |

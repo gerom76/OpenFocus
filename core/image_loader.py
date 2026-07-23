@@ -28,6 +28,9 @@ except ImportError:
 
 from PyQt6.QtGui import QPixmap, QImage
 
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
+
 
 class ImageStackLoader:
     """Image stack loader"""
@@ -43,17 +46,30 @@ class ImageStackLoader:
 
     @classmethod
     def read_image_bgr(cls, full_path: str) -> Optional[np.ndarray]:
-        """Read an image as a BGR uint8 array; RAW formats are decoded via rawpy, others via cv2. Returns None on failure."""
+        """Read an image as a BGR array, then bring it to the active depth mode.
+
+        The decode itself is always done at the source's native depth - RAW at
+        16 bits, and IMREAD_UNCHANGED for everything else so a 16-bit PNG or
+        TIFF arrives intact. bitdepth.apply_load_mode then narrows or widens the
+        result according to the mode, so in the default auto mode a >8-bit file
+        keeps its extra bits and an 8-bit file stays 8-bit.
+
+        Returns None on failure.
+        """
         ext = os.path.splitext(full_path)[1].lower()
         if ext in cls.RAW_FORMATS:
             if not RAWPY_AVAILABLE:
                 return None
+            # 8-bit output is only ever requested when the mode forces it; the
+            # RAW postprocess is where the extra bits would be lost for good.
+            output_bps = 8 if bitdepth.get_mode() == bitdepth.MODE_8 else 16
             # Pass a file object to support paths with non-ASCII characters
             with open(full_path, 'rb') as f:
                 with rawpy.imread(f) as raw:
-                    rgb = raw.postprocess(use_camera_wb=True, output_bps=8)
-            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        return cv2.imdecode(np.fromfile(full_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
+            return bitdepth.apply_load_mode(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+
+        return read_image_any_depth(full_path)
 
     def _load_files_parallel(
         self,
@@ -125,6 +141,27 @@ class ImageStackLoader:
         return results
 
     @staticmethod
+    def _unify_stack_depth(images: List[np.ndarray]) -> List[np.ndarray]:
+        """Bring every frame in a stack to one depth, and say so on the console.
+
+        A folder can legitimately hold mixed depths - 16-bit TIFFs beside
+        JPEGs - and the fusion methods all assume a single full scale across the
+        stack, so the odd ones out are promoted rather than left to skew the
+        focus measures.
+        """
+        if not images:
+            return images
+        target = bitdepth.stack_dtype(images)
+        mixed = any(np.dtype(img.dtype) != target for img in images)
+        if mixed:
+            print(f"[Depth] Mixed-depth stack, promoting all frames to "
+                  f"{bitdepth.describe(target)}", flush=True)
+            images = bitdepth.unify(images, target)
+        print(f"[Depth] {bitdepth.stack_summary(images)} "
+              f"(mode: {bitdepth.get_mode()})", flush=True)
+        return images
+
+    @staticmethod
     def _format_load_stats(loaded: int, failed: int, elapsed: float) -> str:
         """One-line summary: how many images, how long it took, and the mean rate."""
         rate = loaded / elapsed if elapsed > 0 else 0.0
@@ -170,6 +207,8 @@ class ImageStackLoader:
 
         if not loaded_images:
             return False, "Could not load any image files", [], []
+
+        loaded_images = self._unify_stack_depth(loaded_images)
 
         self.images = loaded_images
         self.image_paths = loaded_paths
@@ -217,7 +256,9 @@ class ImageStackLoader:
                     height = int(frame.shape[0] * scale_factor)
                     frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
 
-                loaded_images.append(frame)
+                # Video frames always decode as 8-bit; honour a forced 16-bit
+                # mode so a video stack matches the rest of the pipeline.
+                loaded_images.append(bitdepth.apply_load_mode(frame))
                 filenames.append(f"{video_name}_frame_{frame_index:04d}.png")
                 frame_index += 1
 
@@ -280,6 +321,8 @@ class ImageStackLoader:
         if not loaded_images:
             return False, "Could not load any image files", [], []
 
+        loaded_images = self._unify_stack_depth(loaded_images)
+
         self.images = loaded_images
         self.image_paths = loaded_paths
 
@@ -312,7 +355,10 @@ class ImageStackLoader:
         return thumbnails
 
     def _cv_to_pixmap(self, cv_img: np.ndarray, max_size: Optional[Tuple[int, int]] = None) -> QPixmap:
-        rgb_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        # Qt has no 16-bit-per-channel RGB format, so previews are always shown
+        # from an 8-bit copy. Only the display path is narrowed; the frame kept
+        # for processing keeps its full depth.
+        rgb_img = cv2.cvtColor(bitdepth.to_display8(cv_img), cv2.COLOR_BGR2RGB)
 
         if max_size is not None:
             h, w = rgb_img.shape[:2]
@@ -324,6 +370,11 @@ class ImageStackLoader:
                 new_h = int(h * scale)
                 rgb_img = cv2.resize(rgb_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
+        # QImage reads the raw buffer against the stride it is given, so it has
+        # to be handed 8-bit interleaved data in contiguous memory. It cannot
+        # detect a mismatch: a wrong depth or layout renders as scrambled colour
+        # over torn geometry rather than raising.
+        rgb_img = np.ascontiguousarray(rgb_img)
         h, w, ch = rgb_img.shape
         bytes_per_line = ch * w
 

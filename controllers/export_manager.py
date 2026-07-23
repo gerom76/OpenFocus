@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 from dialogs import DurationDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
-    get_imwrite_params,
+    write_image,
     show_error_box,
     show_message_box,
     show_success_box,
@@ -183,9 +183,7 @@ class ExportManager:
             if index < 0:
                 index = 0
             image_to_save = window.label_manager.prepare_bgr_image("registered", result_to_save, index)
-            ext = os.path.splitext(file_path)[1].lower()
-            params = get_imwrite_params(ext)
-            if cv2.imwrite(file_path, image_to_save, params):
+            if write_image(file_path, image_to_save, announce=True):
                 show_message_box(
                     window,
                     trans.t("msg_success"),
@@ -248,9 +246,7 @@ class ExportManager:
                     filename = f"registered_{index + 1:04d}{DEFAULT_EXPORT_EXTENSION}"
                 file_path = os.path.join(folder_path, filename)
                 file_path = self.normalize_export_path(file_path)
-                ext = os.path.splitext(file_path)[1].lower()
-                params = get_imwrite_params(ext)
-                if cv2.imwrite(file_path, image_to_save, params):
+                if write_image(file_path, image_to_save):
                     saved_count += 1
 
             show_message_box(
@@ -390,9 +386,7 @@ class ExportManager:
                     filename = f"processed_{index + 1:04d}{DEFAULT_EXPORT_EXTENSION}"
                 file_path = os.path.join(folder_path, filename)
                 file_path = self.normalize_export_path(file_path)
-                ext = os.path.splitext(file_path)[1].lower()
-                params = get_imwrite_params(ext)
-                if cv2.imwrite(file_path, image_to_save, params):
+                if write_image(file_path, image_to_save):
                     saved_count += 1
 
             show_success_box(

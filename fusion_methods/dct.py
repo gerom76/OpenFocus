@@ -8,6 +8,9 @@ from typing import List, Sequence, Tuple, Union
 import cv2
 import numpy as np
 
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
+
 ArraySource = Sequence[np.ndarray]
 
 def _ensure_color_image(image: np.ndarray) -> np.ndarray:
@@ -31,7 +34,7 @@ def _collect_images_from_folder(source_folder: str) -> Tuple[List[np.ndarray], L
     
     images = []
     for path in img_paths:
-        img = cv2.imread(path, cv2.IMREAD_COLOR)
+        img = read_image_any_depth(path)
         if img is not None:
             images.append(img)
     return images, img_paths
@@ -110,8 +113,14 @@ def dct_focus_stack_fusion(
         # Crop the edges to match the block tiling
         img_trim = bgr_img[:h_trim, :w_trim]
         
-        # Convert to grayscale and to float32 to prevent squaring overflow
-        gray = cv2.cvtColor(img_trim, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        # Grayscale, normalised to [0, 1] before squaring. Normalising is what
+        # makes the variance measure usable at 16 bits: squaring raw 16-bit
+        # levels reaches 4.3e9, where float32's 24-bit mantissa has a ULP of
+        # ~256, so the E[X^2] - E[X]^2 subtraction below would cancel away any
+        # variance smaller than that. Working in [0, 1] gives both depths the
+        # same headroom. Fusion decisions are unaffected: scaling every frame's
+        # variance by the same constant leaves the per-block argmax unchanged.
+        gray = bitdepth.to_float01(cv2.cvtColor(img_trim, cv2.COLOR_BGR2GRAY))
         
         # 1. Compute E[X^2] (mean of squares)
         # cv2.resize with INTER_AREA effectively does block averaging, which is very fast
@@ -165,8 +174,10 @@ def dct_focus_stack_fusion(
             cv2.BORDER_REPLICATE
         )
 
-    fused_image = np.zeros((h, w, 3), dtype=np.uint8)
-    
+    # Output pixels are copied verbatim from the source frames, so the result
+    # only has to be allocated at the stack's own depth to stay lossless.
+    fused_image = np.zeros((h, w, 3), dtype=bitdepth.stack_dtype(normalized_images))
+
     # Iterate only over the source-image indices that are used, to fill in
     unique_indices = np.unique(final_index_map)
     

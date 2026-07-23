@@ -7,11 +7,26 @@ import imageio.v2 as imageio
 from core.registration import ImageRegistration
 from core.multi_focus_fusion import MultiFocusFusion
 from fusion_methods.ifcnn import _ifcnn_refine_impl, get_ifcnn_model_path, is_ifcnn_available
-from utils import resource_path, normalize_kernel_size, get_imwrite_params
+from utils import resource_path, normalize_kernel_size, write_image, bitdepth
 from constants import (
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
     DEFAULT_THREAD_COUNT
 )
+
+
+def _warn_if_depth_lost(image, extension):
+    """Log once when a batch is about to be written to a container that cannot
+    hold its depth.
+
+    write_image narrows silently by design, so batch jobs - which never show a
+    dialog - say it here, once per output group rather than once per frame.
+    """
+    if image is None or not bitdepth.is_high_depth(image):
+        return
+    if not bitdepth.supports_16bit(extension):
+        print(f"[Depth] Output format '{extension}' cannot store 16-bit; "
+              f"results will be written as 8-bit. Use png or tif to keep the "
+              f"full depth.", flush=True)
 
 
 def refine_with_ifcnn(fusion_result, source_images, tile_enabled=None, tile_block_size=None,
@@ -646,17 +661,17 @@ class BatchWorker(QThread):
                 )
 
             output_format = self.processing_settings.get('format', 'jpg')
-            imwrite_params = get_imwrite_params(output_format)
+            _warn_if_depth_lost(result, output_format)
 
             if result is not None:
                 output_path = os.path.join(output_dir, f"{stack_name}.{output_format}")
-                cv2.imwrite(output_path, result, imwrite_params)
+                write_image(output_path, result)
 
             if self.processing_settings.get('save_aligned'):
                 for idx, img in enumerate(aligned_images):
                     aligned_filename = f"{stack_name}_aligned_{idx + 1:03d}.{output_format}"
                     aligned_path = os.path.join(output_dir, aligned_filename)
-                    cv2.imwrite(aligned_path, img, imwrite_params)
+                    write_image(aligned_path, img)
     
     def process_single_folder(self, folder_path):
         """Process a single folder"""
@@ -771,7 +786,8 @@ class BatchWorker(QThread):
         output_path = os.path.join(output_dir, filename)
 
         # Save the image
-        cv2.imwrite(output_path, fusion_result, get_imwrite_params(extension))
+        _warn_if_depth_lost(fusion_result, extension)
+        write_image(output_path, fusion_result)
     
     def save_registered_stack(self, folder_path, images, filenames):
         """Save the registered image stack"""
@@ -786,7 +802,7 @@ class BatchWorker(QThread):
         
         # Save each image
         extension = self.processing_settings.get('format', 'png')
-        imwrite_params = get_imwrite_params(extension)
+        _warn_if_depth_lost(images[0] if images else None, extension)
 
         for i, image in enumerate(images):
             if i < len(filenames):
@@ -801,7 +817,7 @@ class BatchWorker(QThread):
                 filename = f"registered_{i+1:04d}.{extension}"
             
             output_path = os.path.join(output_dir, filename)
-            cv2.imwrite(output_path, image, imwrite_params)
+            write_image(output_path, image)
 
     def _get_output_path_for_single_folder(self, source_folder_path):
         """Get the output path in single-folder mode"""
@@ -858,7 +874,10 @@ class GifSaverWorker(QThread):
                 elif len(img_copy.shape) == 3 and img_copy.shape[2] == 3:
                     img_copy = cv2.cvtColor(img_copy, cv2.COLOR_BGR2RGB)
                 
-                # Ensure the image is in uint8 format
+                # GIF is an 8-bit format. A 16-bit frame has to be rescaled,
+                # not clipped: clipping to 0-255 would blow out everything above
+                # level 255, which is almost the whole frame.
+                img_copy = bitdepth.to_display8(img_copy)
                 if img_copy.dtype != np.uint8:
                     img_copy = np.rint(np.clip(img_copy, 0, 255)).astype(np.uint8)
                 

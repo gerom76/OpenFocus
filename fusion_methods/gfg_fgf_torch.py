@@ -18,9 +18,12 @@ algorithm[J]. Laser & Optoelectronics Progress, 2024, 61(6): 0618022.
 import os
 import re
 import cv2
-import numpy as np
 import torch
 import torch.nn.functional as F
+
+from fusion_methods import torch_depth
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
 
 # Parameters matching the CPU implementation in gfg_fgf.py
 SCALE = 1e-6          # skip only frames with essentially no gradient energy
@@ -54,7 +57,7 @@ def _load_stack(input_source):
     except Exception:
         img_paths.sort()
 
-    return [cv2.imread(p) for p in img_paths]
+    return [img for img in (read_image_any_depth(p) for p in img_paths) if img is not None]
 
 
 def _box_filter(x, radius):
@@ -125,6 +128,9 @@ def gfgfgf_torch_impl(input_source, img_resize=None, kernel_size=7, device=None)
         if (stack_ori[0].shape[1], stack_ori[0].shape[0]) != img_resize:
             stack_ori = [cv2.resize(img, img_resize) for img in stack_ori]
 
+    # The result is written back at the depth the stack arrived in.
+    out_dtype = bitdepth.stack_dtype(stack_ori)
+
     n = len(stack_ori)
     h, w = stack_ori[0].shape[:2]
 
@@ -147,9 +153,8 @@ def gfgfgf_torch_impl(input_source, img_resize=None, kernel_size=7, device=None)
         ).view(1, 1, 3, 3)
 
         def to_device(chunk):
-            arr = np.stack([np.ascontiguousarray(img) for img in chunk])
-            t = torch.from_numpy(arr).to(dev)
-            return t.permute(0, 3, 1, 2).float() / 255.0  # (B, 3, H, W) BGR
+            # (B, 3, H, W) BGR in [0, 1], from uint8 or uint16 alike
+            return torch_depth.stack_to_float01(chunk, dev)
 
         # Guide image for the guided filter: luminance, not a single colour
         # channel. Detail is measured across all channels below, so structure
@@ -222,6 +227,6 @@ def gfgfgf_torch_impl(input_source, img_resize=None, kernel_size=7, device=None)
 
         den.clamp_(min=1e-6)
         fused = num / den.unsqueeze(0)
-        fused = (fused * 255.0).clamp_(0, 255).to(torch.uint8)
 
-        return fused.permute(1, 2, 0).cpu().numpy()  # (H, W, 3) BGR
+        # (H, W, 3) BGR, back at the depth the stack arrived in
+        return torch_depth.from_float01(fused.permute(1, 2, 0), out_dtype)

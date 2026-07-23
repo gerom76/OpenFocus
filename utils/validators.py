@@ -1,6 +1,46 @@
-from typing import List, Tuple, Any, Optional, Dict
+from typing import List, Tuple, Any, Dict
 import cv2
 import numpy as np
+
+from utils import bitdepth
+
+
+def _scale_colour(colour, dtype):
+    """Map an 0-255 BGR colour onto the full scale of `dtype`.
+
+    Overlay colours are authored in 8-bit units throughout the UI; a 16-bit
+    frame needs them scaled or every overlay renders near-black.
+    """
+    if colour is None:
+        return colour
+    scale = bitdepth.max_value(dtype) / 255.0
+    if scale == 1.0:
+        return colour
+    return tuple(float(c) * scale for c in colour)
+
+
+def _put_text_any_depth(image, text, org, font, font_scale, colour, thickness):
+    """Draw text on an image of any supported depth.
+
+    cv2.putText asserts CV_8U, so it cannot write to a 16-bit frame at all -
+    unlike cv2.rectangle, which handles both. For 16-bit the glyphs are rendered
+    into an 8-bit coverage mask and composited at full depth, which also keeps
+    the edge shading the mask carries.
+
+    The 8-bit path is left as a direct putText call so existing renders stay
+    byte-identical.
+    """
+    if image.dtype == np.uint8:
+        cv2.putText(image, text, org, font, font_scale, colour, thickness)
+        return image
+
+    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    cv2.putText(mask, text, org, font, font_scale, 255, thickness)
+    alpha = (mask.astype(np.float32) / 255.0)[:, :, None]
+    colour_layer = np.asarray(colour[:image.shape[2]], dtype=np.float32).reshape(1, 1, -1)
+    blended = image.astype(np.float32) * (1.0 - alpha) + colour_layer * alpha
+    np.copyto(image, np.rint(blended).astype(image.dtype))
+    return image
 
 
 def normalize_kernel_size(value: int) -> int:
@@ -144,6 +184,12 @@ class LabelAdder:
             else:
                 label_text = text
 
+            # Label colours are authored as 0-255 BGR. Drawing them onto a
+            # 16-bit frame unscaled would put "white" at level 255 out of 65535,
+            # i.e. all but black, so they are scaled to the frame's full scale.
+            bg_color = _scale_colour(bg_color, image.dtype)
+            font_color = _scale_colour(font_color, image.dtype)
+
             font = self.font_mapping.get(font_family, cv2.FONT_HERSHEY_SIMPLEX)
 
             font_scale = font_size / 30.0
@@ -160,7 +206,7 @@ class LabelAdder:
                     -1
                 )
 
-            cv2.putText(
+            _put_text_any_depth(
                 image,
                 label_text,
                 (x_location + 5, y_location),

@@ -12,6 +12,9 @@ import glob
 import numpy as np
 import cv2
 
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
+
 # ================= Global cache variables =================
 _GLOBAL_MODEL = None
 _GLOBAL_DEVICE = None
@@ -155,7 +158,9 @@ def _stackmffv4_batch_impl(tiles_list, model_path, use_gpu):
         for img in bgr_images:
             color_images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            gray_tensor = torch.from_numpy(gray_img.astype(np.float32) / 255.0)
+            # Normalised by the frame's own full scale, so the network sees the
+            # same [0, 1] range whether the stack is 8- or 16-bit.
+            gray_tensor = torch.from_numpy(bitdepth.to_float01(gray_img))
             gray_tensors.append(gray_tensor)
         
         all_color_images.append(color_images)
@@ -199,8 +204,11 @@ def _stackmffv4_batch_impl(tiles_list, model_path, use_gpu):
         
         color_images = all_color_images[tile_idx]
         color_array = np.stack(color_images, axis=0)
+        # Output pixels are gathered verbatim from the source frames, so the
+        # stack's own depth carries through untouched.
         fused_color = color_array[focus_map, np.arange(orig_h)[:, None], np.arange(orig_w)]
-        fused_color_bgr = cv2.cvtColor(fused_color.astype(np.uint8), cv2.COLOR_RGB2BGR)
+        fused_color_bgr = cv2.cvtColor(
+            np.ascontiguousarray(fused_color, dtype=color_array.dtype), cv2.COLOR_RGB2BGR)
         results.append(fused_color_bgr)
     
     return results
@@ -248,14 +256,14 @@ def _stackmffv4_impl(input_source, img_resize, model_path, use_gpu):
             key=lambda x: int(str(re.findall(r"\d+", x.split(os.sep)[-1])[-1])))
 
         for img_path in img_stack_path_list:
-            bgr_img = cv2.imread(img_path)
+            bgr_img = read_image_any_depth(img_path)
             if bgr_img is None:
                 raise ValueError(f"Failed to read image: {img_path}")
             if img_resize:
                 bgr_img = cv2.resize(bgr_img, img_resize)
             color_images.append(cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB))
             gray_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
-            gray_tensor = torch.from_numpy(gray_img.astype(np.float32) / 255.0)
+            gray_tensor = torch.from_numpy(bitdepth.to_float01(gray_img))
             gray_tensors.append(gray_tensor)
     else:
         bgr_images = list(input_source)
@@ -266,7 +274,9 @@ def _stackmffv4_impl(input_source, img_resize, model_path, use_gpu):
         for img in bgr_images:
             color_images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            gray_tensor = torch.from_numpy(gray_img.astype(np.float32) / 255.0)
+            # Normalised by the frame's own full scale, so the network sees the
+            # same [0, 1] range whether the stack is 8- or 16-bit.
+            gray_tensor = torch.from_numpy(bitdepth.to_float01(gray_img))
             gray_tensors.append(gray_tensor)
     
     num_images = len(color_images)
@@ -298,7 +308,10 @@ def _stackmffv4_impl(input_source, img_resize, model_path, use_gpu):
 
     focus_map = np.clip(focus_map, 0, num_images - 1)
     color_array = np.stack(color_images, axis=0)
+    # Output pixels are gathered verbatim from the source frames, so the stack's
+    # own depth carries through untouched.
     fused_color = color_array[focus_map, np.arange(h)[:, None], np.arange(w)]
-    fused_color_bgr = cv2.cvtColor(fused_color.astype(np.uint8), cv2.COLOR_RGB2BGR)
+    fused_color_bgr = cv2.cvtColor(
+        np.ascontiguousarray(fused_color, dtype=color_array.dtype), cv2.COLOR_RGB2BGR)
 
     return fused_color_bgr

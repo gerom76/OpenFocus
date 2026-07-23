@@ -6,6 +6,9 @@ import numpy as np
 import concurrent.futures
 from collections import deque
 
+from utils import bitdepth
+from utils.image_utils import read_image_any_depth
+
 # Reference:
 # https://github.com/RCharradi/Image-fusion-with-guided-filtering
 # Li S, Kang X, Hu J. Image fusion with guided filtering[J]. IEEE Transactions on Image processing, 2013, 22(7): 2864-2875.
@@ -104,12 +107,17 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
         except IndexError:
             img_stack_path_list.sort() # fall back to lexicographic order
 
-        stack_ori = [cv2.imread(img_path) for img_path in img_stack_path_list]
+        stack_ori = [read_image_any_depth(img_path) for img_path in img_stack_path_list]
+        stack_ori = [img for img in stack_ori if img is not None]
     else:
         stack_ori = input_source
 
     if not stack_ori:
         raise ValueError("No image data was loaded")
+
+    # The result is written back at the depth the stack arrived in, so a 16-bit
+    # stack stays 16-bit end to end.
+    out_dtype = bitdepth.stack_dtype(stack_ori)
 
     num_images = len(stack_ori)
     if img_resize:
@@ -126,7 +134,9 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
         img = stack_ori[k]
         if img_resize and (img.shape[1], img.shape[0]) != (cols, rows):
             img = cv2.resize(img, (cols, rows))
-        return img.astype(np.float32) / 255.0
+        # Normalised against the frame's own full scale, so 8- and 16-bit input
+        # both land in [0, 1] and the algorithm below is depth-agnostic.
+        return bitdepth.to_float01(img)
 
     # ========== Core algorithm implementation ==========
 
@@ -240,5 +250,5 @@ def gff_impl(input_source, img_resize, kernel_size=31, thread_count: int = None)
 
     fused_img = fused_base + fused_detail
 
-    # Clip and convert back to uint8
-    return np.rint(np.clip(fused_img * 255, 0, 255)).astype(np.uint8)
+    # Clip and convert back to the stack's own depth
+    return bitdepth.from_float01(fused_img, out_dtype)
