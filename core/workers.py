@@ -6,6 +6,7 @@ import numpy as np
 import imageio.v2 as imageio
 from core.registration import ImageRegistration
 from core.multi_focus_fusion import MultiFocusFusion
+from core import contrast
 from fusion_methods.ifcnn import _ifcnn_refine_impl, get_ifcnn_model_path, is_ifcnn_available
 from utils import resource_path, normalize_kernel_size, write_image, bitdepth
 from constants import (
@@ -664,6 +665,9 @@ class BatchWorker(QThread):
             _warn_if_depth_lost(result, output_format)
 
             if result is not None:
+                # Contrast applies to the fused output only, never the aligned
+                # stack saved below.
+                result = self._apply_batch_contrast(result)
                 output_path = os.path.join(output_dir, f"{stack_name}.{output_format}")
                 write_image(output_path, result)
 
@@ -767,6 +771,19 @@ class BatchWorker(QThread):
         if save_aligned:
             self.save_registered_stack(folder_path, aligned_images, filenames)
     
+    def _apply_batch_contrast(self, image):
+        """Apply the batch's contrast setting to a fused result.
+
+        Reads the same contrast_method / contrast_strength the main window uses,
+        passed through processing_settings, so batch output matches the preview.
+        A no-op when contrast is off.
+        """
+        return contrast.apply_contrast(
+            image,
+            self.processing_settings.get('contrast_method', contrast.METHOD_OFF),
+            self.processing_settings.get('contrast_strength', 0) / 100.0,
+        )
+
     def save_fusion_result(self, folder_path, fusion_result):
         """Save the fusion result"""
         # Determine the output path
@@ -786,6 +803,7 @@ class BatchWorker(QThread):
         output_path = os.path.join(output_dir, filename)
 
         # Save the image
+        fusion_result = self._apply_batch_contrast(fusion_result)
         _warn_if_depth_lost(fusion_result, extension)
         write_image(output_path, fusion_result)
     

@@ -6,6 +6,7 @@ import cv2
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 
+from core import contrast
 from dialogs import DurationDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
@@ -109,6 +110,14 @@ class ExportManager:
         if getattr(window, "cb_ifcnn", None) is not None and window.cb_ifcnn.isChecked():
             fusion_method += "+IFCNN"
 
+        # Contrast is a post-fusion output step, so it reads as a further addition
+        contrast_tag = contrast.describe(
+            getattr(window, "contrast_method", contrast.METHOD_OFF),
+            getattr(window, "contrast_strength", 0) / 100.0,
+        )
+        if contrast_tag:
+            fusion_method += "+" + contrast_tag
+
         return fusion_method
 
     def _registration_suffix(self) -> str:
@@ -182,7 +191,13 @@ class ExportManager:
             index = 0 if window.fusion_result is not None else window.current_result_index
             if index < 0:
                 index = 0
-            image_to_save = window.label_manager.prepare_bgr_image("registered", result_to_save, index)
+            # Contrast is a fusion-output setting, so it applies only when the
+            # thing being saved is the fused result - a bare registration result
+            # (no fusion run) is saved as aligned.
+            content = result_to_save
+            if window.fusion_result is not None:
+                content = window.apply_output_contrast(result_to_save)
+            image_to_save = window.label_manager.prepare_bgr_image("registered", content, index)
             if write_image(file_path, image_to_save, announce=True):
                 show_message_box(
                     window,

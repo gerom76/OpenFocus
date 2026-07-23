@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.23**: Optional **contrast enhancement** for fused output. Pick *Auto* (color-safe global tone curve) or *Local* (CLAHE) with a strength slider — it applies after fusion and updates the preview live, so the stored result stays untouched. Off by default.
+
 > 🎉 **2026.07.22**: End-to-end **16-bit pipeline**. Stacks whose sources carry more than 8 bits — RAW, 16-bit TIFF/PNG — are now loaded, aligned, fused and saved at full depth. Switch between Auto / 8-bit / 16-bit under *Settings → Bit Depth*.
 
 > 🎉 **2026.07.21**: GFG-FGF fusion now runs on GPU (CUDA/MPS via PyTorch) with automatic CPU fallback — ~7x faster on large stacks.
@@ -74,6 +76,7 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **Annotation & Export Toolkit**: Overlay labels, export GIF animations, and save processed stacks in JPG/PNG/BMP/TIFF with consistent metadata handling.
 - **AI-Assisted Fusion**: Ship with StackMFF V4 to unlock deep-learning-quality fusion alongside classic signal-processing methods.
 - **16-bit Processing**: RAW and 16-bit TIFF/PNG stacks stay at full depth from load through alignment, fusion and export — no banding in smooth gradients, and headroom left for blending. Auto-engages on >8-bit sources, or force 8/16-bit from *Settings → Bit Depth*.
+- **Contrast Enhancement**: Optional post-fusion tone control — *Auto* (color-safe global curve) or *Local* (CLAHE) with a strength slider. Applies after fusion and previews live without re-rendering, so it never alters the stored result. Color-safe and depth-aware.
 
 <a id="fusion--registration-methods"></a>
 ## 🧪 Algorithms

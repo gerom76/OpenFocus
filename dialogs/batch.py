@@ -737,7 +737,11 @@ class BatchProcessingDialog(QDialog):
             "fusion_params": fusion_params,
             "reg_methods": reg_methods,
             "ifcnn_refine": bool(fusion_method) and bool(cb_ifcnn and cb_ifcnn.isChecked()),
-            "save_aligned": self.save_aligned_cb.isChecked()  # Whether to save the aligned image stack
+            "save_aligned": self.save_aligned_cb.isChecked(),  # Whether to save the aligned image stack
+            # Post-fusion contrast, inherited from the main window so batch output
+            # matches what the single-folder preview shows.
+            "contrast_method": getattr(self.parent_window, "contrast_method", "off"),
+            "contrast_strength": getattr(self.parent_window, "contrast_strength", 50),
         }
 
     def preload_single_folder(self, folder_path: str, scale_factor: float = 1.0) -> None:

@@ -5,6 +5,7 @@ from PyQt6.QtGui import QKeySequence, QShortcut, QFont
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -49,7 +50,11 @@ class RightPanelComponents:
     slider_smooth: QSlider
     smooth_value_label: QLabel
     smooth_widget: QWidget
-    
+    combo_contrast: QComboBox
+    slider_contrast: QSlider
+    contrast_value_label: QLabel
+    lbl_contrast: QLabel
+
     # Groups
     method_group: QGroupBox
     registration_group: QGroupBox
@@ -163,6 +168,32 @@ def create_right_panel() -> RightPanelComponents:
     smooth_layout.addWidget(slider_smooth)
     config_layout.addWidget(smooth_widget)
 
+    # Contrast (post-fusion output enhancement) --------------
+    contrast_widget = QWidget()
+    contrast_layout = QVBoxLayout(contrast_widget)
+    contrast_layout.setContentsMargins(0, 5, 0, 5)
+    contrast_top = QHBoxLayout()
+    lbl_contrast = QLabel(trans.t('label_contrast'))
+    contrast_top.addWidget(lbl_contrast)
+    combo_contrast = QComboBox()
+    # userData carries the stable method key; the label is translated.
+    combo_contrast.addItem(trans.t('contrast_off'), 'off')
+    combo_contrast.addItem(trans.t('contrast_auto'), 'auto')
+    combo_contrast.addItem(trans.t('contrast_clahe'), 'clahe')
+    contrast_top.addWidget(combo_contrast)
+    contrast_top.addStretch()
+    contrast_value_label = QLabel("50%")
+    contrast_top.addWidget(contrast_value_label)
+    slider_contrast = QSlider(Qt.Orientation.Horizontal)
+    slider_contrast.setRange(0, 100)
+    slider_contrast.setSingleStep(5)
+    slider_contrast.setPageStep(10)
+    slider_contrast.setValue(50)
+    slider_contrast.setEnabled(False)  # off by default, so strength is inert
+    contrast_layout.addLayout(contrast_top)
+    contrast_layout.addWidget(slider_contrast)
+    config_layout.addWidget(contrast_widget)
+
     button_bar = QHBoxLayout()
     btn_reset = QPushButton(trans.t('btn_reset'))
     btn_reset.setStyleSheet(HOVER_HIGHLIGHT_BUTTON_STYLE)
@@ -262,7 +293,11 @@ def create_right_panel() -> RightPanelComponents:
         slider_smooth=slider_smooth,
         smooth_value_label=lbl_smooth_value,
         smooth_widget=smooth_widget,
-        
+        combo_contrast=combo_contrast,
+        slider_contrast=slider_contrast,
+        contrast_value_label=contrast_value_label,
+        lbl_contrast=lbl_contrast,
+
         method_group=method_group,
         registration_group=registration_group,
         lbl_kernel=lbl_kernel,
@@ -297,6 +332,11 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
     components.btn_reset.clicked.connect(window.reset_to_default)
 
     components.slider_smooth.valueChanged.connect(window.handle_kernel_slider_change)
+
+    # Contrast is a post-fusion output step, so both controls just re-apply it
+    # to the already-rendered result via handle_contrast_change - no re-render.
+    components.combo_contrast.currentIndexChanged.connect(window.handle_contrast_change)
+    components.slider_contrast.valueChanged.connect(window.handle_contrast_change)
 
     components.rb_a.clicked.connect(window.update_slider_availability)
     components.rb_b.clicked.connect(window.update_slider_availability)

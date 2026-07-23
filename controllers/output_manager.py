@@ -36,7 +36,7 @@ class OutputManager:
 
         if window.fusion_result is not None:
             try:
-                pixmap = cv2_to_pixmap(window.fusion_result)
+                pixmap = cv2_to_pixmap(window.apply_output_contrast(window.fusion_result))
                 icon = QIcon(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                 item.setIcon(icon)
             except Exception:
@@ -122,7 +122,7 @@ class OutputManager:
         try:
             if row < len(window.fusion_results):
                 image_to_save = window.label_manager.prepare_bgr_image(
-                    "registered", window.fusion_results[row], 0
+                    "registered", window.apply_output_contrast(window.fusion_results[row]), 0
                 )
 
                 success = write_image(file_path, image_to_save, announce=True)
@@ -142,7 +142,7 @@ class OutputManager:
                     )
             elif window.fusion_result is not None and row == 0:
                 image_to_save = window.label_manager.prepare_bgr_image(
-                    "registered", window.fusion_result, 0
+                    "registered", window.apply_output_contrast(window.fusion_result), 0
                 )
 
                 success = write_image(file_path, image_to_save, announce=True)
@@ -218,9 +218,15 @@ class OutputManager:
             return
 
         window = self.window
+        # Remember the pristine result so the contrast slider can re-show it
+        # without re-rendering (see OpenFocus.refresh_result_display).
+        window._displayed_fusion_result = fusion_image
 
         try:
-            display_image = window.label_manager.prepare_bgr_image("registered", fusion_image, 0)
+            # Contrast is applied to the image content first, then labels are
+            # drawn on top at full strength so the text is never dimmed by it.
+            adjusted = window.apply_output_contrast(fusion_image)
+            display_image = window.label_manager.prepare_bgr_image("registered", adjusted, 0)
             pixmap = cv2_to_pixmap(display_image)
 
             window.lbl_result_img.set_display_pixmap(pixmap)

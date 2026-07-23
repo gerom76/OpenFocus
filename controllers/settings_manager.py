@@ -163,6 +163,8 @@ class SettingsManager:
             "thread_count": window.thread_count,
             "stackmffv4_batch_size": window.stackmffv4_batch_size,
             "bit_depth_mode": bitdepth.get_mode(),
+            "contrast_method": getattr(window, "contrast_method", "off"),
+            "contrast_strength": getattr(window, "contrast_strength", 50),
             "fusion_method": self._selected_fusion_method(),
             "ifcnn_refine": window.cb_ifcnn.isChecked(),
             "align_homography": window.cb_align_homography.isChecked(),
@@ -290,6 +292,19 @@ class SettingsManager:
             action = getattr(window, "ui_objs", {}).get(f"action_depth_{depth_mode}")
             if action is not None:
                 action.setChecked(True)
+
+        # Post-fusion contrast. Driving the widgets is enough: their signals set
+        # the window attributes and refresh the preview through the same path a
+        # user interaction takes.
+        combo = getattr(window, "combo_contrast", None)
+        slider = getattr(window, "slider_contrast", None)
+        if combo is not None and slider is not None:
+            strength = data.get("contrast_strength")
+            if isinstance(strength, (int, float)):
+                slider.setValue(int(max(0, min(100, strength))))
+            method = data.get("contrast_method", "off")
+            index = combo.findData(method)
+            combo.setCurrentIndex(index if index >= 0 else 0)
 
         # Language
         lang = data.get("language")

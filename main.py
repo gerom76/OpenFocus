@@ -21,14 +21,13 @@ from locales import trans
 from dialogs import (
     EnvironmentInfoDialog,
     ContactInfoDialog,
-    BatchProcessingDialog,
+
     TileSettingsDialog,
-    ThreadSettingsDialog,
+
     StackMFFV4BatchSettingsDialog,
-    ROIRenderOptionsDialog,
+
 )
-from dialogs.help import RenderMethodHelpDialog
-from dialogs.settings import RegistrationSettingsDialog
+
 from utils import (
     get_ui_font_family,
     get_monospace_font_family,
@@ -36,12 +35,11 @@ from utils import (
     show_message_box,
     show_warning_box,
     show_error_box,
-    show_success_box,
-    show_custom_message_box,
     resource_path,
     bitdepth,
     cv2_to_pixmap,
 )
+from core import contrast
 from ui.image_panels import create_source_panel, create_result_panel
 from widgets import StatusConsole
 from ui.menus import setup_menus
@@ -115,6 +113,12 @@ class OpenFocus(QMainWindow):
         # Held on the window only so it can be saved and restored; the pipeline
         # reads it from utils.bitdepth, which is set below.
         self.bit_depth_mode = bitdepth.get_mode()
+        # Post-fusion contrast enhancement. 'off' by default so existing results
+        # are byte-identical; applied at display and save time only, so the
+        # stored fusion result stays pristine and the strength can be changed
+        # without re-rendering.
+        self.contrast_method = contrast.METHOD_OFF
+        self.contrast_strength = 50  # 0-100, only applies when method != 'off'
         
         self.render_manager = RenderManager(self)
         self.output_manager = OutputManager(self)
@@ -242,6 +246,9 @@ class OpenFocus(QMainWindow):
         self.slider_smooth = right_panel_components.slider_smooth
         self.lbl_smooth_value = right_panel_components.smooth_value_label
         self.smooth_widget = right_panel_components.smooth_widget
+        self.combo_contrast = right_panel_components.combo_contrast
+        self.slider_contrast = right_panel_components.slider_contrast
+        self.lbl_contrast_value = right_panel_components.contrast_value_label
         self.source_images_label = right_panel_components.source_images_label
         self.file_list = right_panel_components.file_list
         self.output_label = right_panel_components.output_label
@@ -448,7 +455,11 @@ class OpenFocus(QMainWindow):
         
         # Reset the slider value to the default
         self.slider_smooth.setValue(31)
-        
+
+        # Reset contrast to off (strength back to the 50% default)
+        self.combo_contrast.setCurrentIndex(0)
+        self.slider_contrast.setValue(50)
+
         # Update slider availability
         self.update_slider_availability()
 
@@ -979,6 +990,37 @@ class OpenFocus(QMainWindow):
     def set_language(self, lang_code: str) -> None:
         """Switch application language."""
         trans.set_language(lang_code)
+
+    def apply_output_contrast(self, image):
+        """Apply the current contrast setting to a fused output image.
+
+        A no-op (returns the input unchanged) when contrast is off, so callers
+        can route every fused output through it unconditionally. Only fused
+        results go through here - registered and input stacks are saved raw.
+        """
+        return contrast.apply_contrast(
+            image, self.contrast_method, self.contrast_strength / 100.0)
+
+    def refresh_result_display(self) -> None:
+        """Re-show whatever fused result is on screen, picking up contrast.
+
+        The contrast controls apply post-fusion, so moving the slider only has
+        to re-run this cheap pixel step against the pristine stored result - no
+        re-rendering.
+        """
+        displayed = getattr(self, "_displayed_fusion_result", None)
+        if displayed is not None:
+            self.output_manager.display_specific_fusion_result(displayed)
+
+    def handle_contrast_change(self) -> None:
+        """Read the contrast controls back onto the window and refresh preview."""
+        method_data = self.combo_contrast.currentData()
+        self.contrast_method = method_data or contrast.METHOD_OFF
+        self.contrast_strength = self.slider_contrast.value()
+        self.lbl_contrast_value.setText(f"{self.contrast_strength}%")
+        # The strength slider is meaningless while the method is Off.
+        self.slider_contrast.setEnabled(self.contrast_method != contrast.METHOD_OFF)
+        self.refresh_result_display()
 
     def set_bit_depth_mode(self, mode: str) -> None:
         """Switch the processing bit depth.
