@@ -115,14 +115,17 @@ class RegistrationHelpDialog(HelpDialog):
 
     def __init__(self, parent=None):
         help_text = """<h3>Registration Methods</h3>
-        
+
+    <p>Scale (focus breathing)<br/>
+    Corrects the magnification change a lens introduces as the focus plane moves through a stack&mdash;"focus breathing". Fits a constrained similarity (uniform scale plus a small rotation and recentring) from SIFT matches, so it cancels the size drift without the overfitting a full homography risks on blurred frames. Enable it when frames grow or shrink slightly from first to last.</p>
+
     <p>Align (Homography)<br/>
     Uses feature-based homography transformation to align images. Detects SIFT features between consecutive frames and computes perspective transformation matrices. Ideal for most focus stacks that need global geometric correction.</p>
 
     <p>Align (ECC)<br/>
     Enhanced Correlation Coefficient alignment refines alignment at the sub-pixel level. Works well for fine adjustments or whenever feature detection is unreliable.</p>
 
-    <p>Both options are independent—enable either one individually or turn on both to apply homography alignment first and then refine with ECC.</p>"""
+    <p>All options are independent. When several are enabled they run in order&mdash;Scale first as a coarse magnification correction, then Homography, then ECC to refine the residual translation and rotation.</p>"""
         
         super().__init__(trans.t("help_registration_title"), help_text, parent)
 

@@ -135,6 +135,7 @@ class RenderWorker(QThread):
         roi_base_index=0,
         ecc_parallel: bool = True,
         ifcnn_refine: bool = False,
+        need_align_scale: bool = False,
     ):
         super().__init__()
         self.raw_images = raw_images
@@ -146,6 +147,9 @@ class RenderWorker(QThread):
         self.roi_base_index = roi_base_index
 
         # Registration options
+        # Scale runs first as a coarse focus-breathing (magnification) correction,
+        # then homography/ECC refine the residual translation and rotation.
+        self.need_align_scale = bool(need_align_scale)
         self.need_align_homography = need_align_homography
         self.need_align_ecc = need_align_ecc
 
@@ -191,11 +195,13 @@ class RenderWorker(QThread):
                 print(f"Render started: {len(self.raw_images)} images ({w}x{h})", flush=True)
 
             current_alignment_options = (
+                self.need_align_scale,
                 self.need_align_homography,
                 self.need_align_ecc,
             )
             need_registration = (
-                self.need_align_homography
+                self.need_align_scale
+                or self.need_align_homography
                 or self.need_align_ecc
             )
             can_reuse_aligned_images = (
@@ -261,10 +267,31 @@ class RenderWorker(QThread):
             import traceback
             traceback.print_exc()
 
+    def _make_registration(self, mode):
+        """Build an ImageRegistration for one stage, honouring the UI downscale width."""
+        if self.reg_downscale_width is not None:
+            return ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
+                                     ecc_parallel=self.ecc_parallel)
+        return ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
+
     def _run_registration(self, images):
-        """Perform image registration"""
+        """Perform image registration.
+
+        The selected stages run in sequence, each fed the previous stage's output:
+        scale (focus-breathing) first as a coarse magnification correction, then
+        homography and/or ECC to refine the residual translation and rotation.
+        """
         alignment_start_time = time.time()
 
+        processed = images
+
+        # Stage 1: scale / focus-breathing correction (similarity transform)
+        if self.need_align_scale:
+            print(f"Registration started: mode=scale, {len(processed)} images", flush=True)
+            processed = self._make_registration("scale").process(
+                processed, output_path=None, thread_count=self.thread_count)
+
+        # Stage 2: homography and/or ECC refinement
         if self.need_align_homography and self.need_align_ecc:
             mode = "both"
         elif self.need_align_homography:
@@ -272,17 +299,13 @@ class RenderWorker(QThread):
         elif self.need_align_ecc:
             mode = "ecc"
         else:
-            return images, 0
+            mode = None
 
-        print(f"Registration started: mode={mode}, {len(images)} images", flush=True)
+        if mode is not None:
+            print(f"Registration started: mode={mode}, {len(processed)} images", flush=True)
+            processed = self._make_registration(mode).process(
+                processed, output_path=None, thread_count=self.thread_count)
 
-        if self.reg_downscale_width is not None:
-            registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
-                                             ecc_parallel=self.ecc_parallel)
-        else:
-            registration = ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
-
-        processed = registration.process(images, output_path=None, thread_count=self.thread_count)
         alignment_time = time.time() - alignment_start_time
 
         return processed, alignment_time
@@ -497,7 +520,48 @@ class BatchWorker(QThread):
             self.thread_count = max(1, int(thread_count))
         except Exception:
             self.thread_count = 4
-    
+
+    def _register_batch_stack(self, images, reg_methods):
+        """Apply the selected registration stages in pipeline order.
+
+        Scale (focus-breathing) runs first as a coarse magnification correction,
+        then homography and/or ECC refine the residual translation and rotation.
+        Returns the original stack unchanged when nothing is selected.
+        """
+        if not reg_methods:
+            return images.copy()
+
+        from core.registration import ImageRegistration
+
+        def make(mode):
+            if getattr(self, 'reg_downscale_width', None) is not None:
+                return ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
+                                         ecc_parallel=self.ecc_parallel)
+            return ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
+
+        processed = images
+
+        # Stage 1: scale / focus-breathing correction
+        if "scale" in reg_methods:
+            processed = make("scale").process(processed, output_path=None, thread_count=self.thread_count)
+
+        # Stage 2: homography and/or ECC refinement
+        align_homography = "homography" in reg_methods
+        align_ecc = "ecc" in reg_methods
+        if align_homography and align_ecc:
+            mode = "both"
+        elif align_homography:
+            mode = "homography"
+        elif align_ecc:
+            mode = "ecc"
+        else:
+            mode = None
+
+        if mode:
+            processed = make(mode).process(processed, output_path=None, thread_count=self.thread_count)
+
+        return processed.copy() if processed is images else processed
+
     def run(self):
         """Run batch processing"""
         try:
@@ -588,30 +652,8 @@ class BatchWorker(QThread):
         images = [item[1] for item in stack_images_with_times]
         original_paths = [item[0] for item in stack_images_with_times]
 
-        aligned_images = images.copy()
         reg_methods = self.processing_settings.get('reg_methods', [])
-
-        if reg_methods:
-            align_homography = "homography" in reg_methods
-            align_ecc = "ecc" in reg_methods
-
-            if align_homography and align_ecc:
-                mode = "both"
-            elif align_homography:
-                mode = "homography"
-            elif align_ecc:
-                mode = "ecc"
-            else:
-                mode = None
-
-            if mode:
-                from core.registration import ImageRegistration
-                if self.reg_downscale_width is not None:
-                    registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
-                                                     ecc_parallel=self.ecc_parallel)
-                else:
-                    registration = ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
-                aligned_images = registration.process(images, output_path=None, thread_count=self.thread_count)
+        aligned_images = self._register_batch_stack(images, reg_methods)
 
         fusion_method = self.processing_settings.get('fusion_method')
         if fusion_method:
@@ -726,38 +768,9 @@ class BatchWorker(QThread):
             raise Exception(f"Failed to load images: {message}")
         
         # 2. Image registration (if needed)
-        aligned_images = images.copy()
         reg_methods = self.processing_settings.get('reg_methods', [])
-        
-        if reg_methods:
-            # Registration options
-            align_homography = "homography" in reg_methods
-            align_ecc = "ecc" in reg_methods
-            
-            # Perform registration
-            aligned_images = []
-            
-            # Determine the registration mode
-            if align_homography and align_ecc:
-                mode = "both"
-            elif align_homography:
-                mode = "homography"
-            elif align_ecc:
-                mode = "ecc"
-            else:
-                mode = None
+        aligned_images = self._register_batch_stack(images, reg_methods)
 
-            if mode:
-                if getattr(self, 'reg_downscale_width', None) is not None:
-                    registration = ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
-                                                     ecc_parallel=self.ecc_parallel)
-                else:
-                    registration = ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
-                aligned_images = registration.process(images, output_path=None, thread_count=self.thread_count)
-            else:
-                # If no registration method is selected, use the original images directly
-                aligned_images = images.copy()
-        
         # 3. Image fusion
         fusion_method = self.processing_settings.get('fusion_method')
         if fusion_method:

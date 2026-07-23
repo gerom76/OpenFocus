@@ -82,7 +82,7 @@ and hair, depth-map keeps colour and noise clean, and neither dominates.
 |------------|-----------|---------|--------|-------------|---------------|---------|
 | Translation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Rotation | ✓ (via 8-DOF) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Scale / focus breathing** | **✗** (code commented out) | ✓ magnification | ✓ default on | ✓ | ✓ | ✓ |
+| **Scale / focus breathing** | **✓** (similarity, 1.9.0) | ✓ magnification | ✓ default on | ✓ | ✓ | ✓ |
 | Perspective / homography | ✓ | not documented | ✓ | ✓ | not documented | not documented |
 | Feature-based (SIFT) | ✓ | not documented | not documented | — | not documented | not documented |
 | Intensity-based (ECC) | ✓ | not documented | not documented | ✓ | not documented | not documented |
@@ -92,14 +92,20 @@ and hair, depth-map keeps colour and noise clean, and neither dominates.
 
 ### Findings
 
-**Scale correction is universal in the field and missing here.** Every other tool
-corrects magnification change. Zerene's documentation names focus breathing
-explicitly and enables scale correction by default. OpenFocus has a complete
-`_align_zoom_impl` at `core/registration.py:39-141` — **entirely commented out**.
-The ECC docstring at `core/registration.py:452` claims focus-breathing suitability
-while the implementation is hardcoded to `MOTION_HOMOGRAPHY`
-(`core/registration.py:493`), which is an 8-DOF fit to a 4-DOF problem on frames
-that differ in blur.
+**Scale correction shipped in 1.9.0** as a dedicated `scale` registration method
+(`_align_scale_impl` in `core/registration.py`), closing the one alignment gap
+the whole field had already closed. Focus breathing is a 4-DOF similarity — a
+uniform magnification about the optical axis plus a small rotation and recentring
+— so the method fits exactly that with `cv2.estimateAffinePartial2D` under RANSAC
+from SIFT matches, chained back to the first frame and cropped to the common
+valid region like the other methods. Fitting a constrained similarity avoids the
+overfitting an 8-DOF homography risks on frames that differ in blur. It is exposed
+as its own "Scale (focus breathing)" toggle and composes ahead of Homography/ECC,
+which then refine the residual translation and rotation. The earlier dead
+`_align_zoom_impl` (a two-point SIFT scale ratio, linearly interpolated) is
+removed, and the ECC docstring no longer over-claims focus-breathing suitability.
+Unlike Zerene it is opt-in rather than default-on, to keep existing results
+reproducible.
 
 **focus-stack has already shipped the drift fix.** It defaults to the middle
 frame as reference and offers direct-to-reference *or* neighbour chaining. Both
@@ -280,7 +286,7 @@ the field has already closed, or moves ahead of it.
 | # | Proposal | Class | Field precedent |
 |---|----------|-------|-----------------|
 | 1 | Photometric alignment (exposure/WB) | **Catch-up** | 4 of 5 tools; default-on in 3 |
-| 2 | Scale / focus-breathing correction | **Catch-up** | 5 of 5 tools |
+| 2 | Scale / focus-breathing correction — **done in 1.9.0** | **Catch-up** | 5 of 5 tools |
 | 3 | Laplacian pyramid fusion — **done in 1.7.0** | **Catch-up** | 3 of 5 directly, 4th equivalent |
 | 4 | Global label optimisation (graph-cut) | **Differentiating** | none |
 | 5 | Halo / bleed suppression | **Parity+** | only indirect, via radius tuning |
@@ -313,8 +319,9 @@ Stated plainly, because the tables above are weighted toward gaps.
 - **GPU acceleration across five methods** (CUDA/MPS), ahead of everything but
   focus-stack's OpenCL. Zerene has none.
 - **Only tool accepting video input** for frame extraction.
-- **Two alignment algorithms exposed and selectable** (SIFT-homography and ECC);
-  competitors expose alignment as a set of toggles, not as choosable algorithms.
+- **Three alignment algorithms exposed and selectable** (SIFT-homography, ECC, and
+  the 1.9.0 similarity-based scale / focus-breathing correction); competitors
+  expose alignment as a set of toggles, not as choosable algorithms.
 - **Measured, published quality audit.**
   [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) and the
   `tests/fusion_metrics.py` harness are something no competitor in this
@@ -337,9 +344,9 @@ every mandatory blending family is now present.
 With both mandatory families in place, the highest-value remaining work is no
 longer another fusion method but the pipeline around them:
 
-1. **Fix the inputs** — photometric alignment (§3) and scale correction (§2).
-   These improve all nine existing methods at once, and both are near-universal
-   elsewhere.
+1. **Fix the inputs** — scale correction (§2) shipped in 1.9.0; photometric
+   alignment (§3) is the remaining near-universal input fix. Both improve all nine
+   existing methods at once.
 2. **Finish the depth map** (§6) — the `Depth Map` method (1.8.0) turned the
    internal map into depth-driven blending; still open are *exporting* it as a
    file and the trust thresholds, halo suppression and 3D output it feeds.

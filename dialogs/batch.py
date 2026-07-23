@@ -363,6 +363,8 @@ class BatchProcessingDialog(QDialog):
         # Get the currently selected registration method
         reg_methods = []
         if self.parent_window:
+            if getattr(self.parent_window, 'cb_align_scale', None) and self.parent_window.cb_align_scale.isChecked():
+                reg_methods.append(trans.t('check_align_scale'))
             if self.parent_window.cb_align_homography.isChecked():
                 reg_methods.append(trans.t('check_align_homography'))
             if self.parent_window.cb_align_ecc.isChecked():
@@ -738,6 +740,8 @@ class BatchProcessingDialog(QDialog):
         # Get the registration-method settings
         reg_methods = []
         if self.parent_window:
+            if getattr(self.parent_window, 'cb_align_scale', None) and self.parent_window.cb_align_scale.isChecked():
+                reg_methods.append("scale")
             if self.parent_window.cb_align_homography.isChecked():
                 reg_methods.append("homography")
             if self.parent_window.cb_align_ecc.isChecked():

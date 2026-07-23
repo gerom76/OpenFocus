@@ -244,6 +244,7 @@ class OpenFocus(QMainWindow):
         self.rb_dmap_avg = right_panel_components.rb_dmap_avg
         self.rb_d = right_panel_components.rb_d
         self.cb_ifcnn = right_panel_components.cb_ifcnn
+        self.cb_align_scale = right_panel_components.cb_align_scale
         self.cb_align_homography = right_panel_components.cb_align_homography
         self.cb_align_ecc = right_panel_components.cb_align_ecc
         self.slider_smooth = right_panel_components.slider_smooth
@@ -455,7 +456,8 @@ class OpenFocus(QMainWindow):
         # Reset the post-fusion refinement stage
         self.cb_ifcnn.setChecked(False)
 
-        # Reset the registration options - ECC selected by default, Homography unselected
+        # Reset the registration options - ECC selected by default, Scale and Homography unselected
+        self.cb_align_scale.setChecked(False)
         self.cb_align_homography.setChecked(False)
         self.cb_align_ecc.setChecked(True)
         
@@ -1098,6 +1100,7 @@ class OpenFocus(QMainWindow):
         self._configure_fusion_method_availability()
 
         c.registration_group.setTitle(trans.t('group_registration'))
+        c.cb_align_scale.setText(trans.t('check_align_scale'))
         c.cb_align_ecc.setText(trans.t('check_align_ecc'))
         c.cb_align_homography.setText(trans.t('check_align_homography'))
         

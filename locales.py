@@ -102,6 +102,7 @@ class TranslationManager(QObject):
                 'tip_ifcnn_refine': 'Refine the fused image with IFCNN, recovering detail from the '
                                     'source stack where the fusion step left gaps.',
                 'group_registration': 'Registration',
+                'check_align_scale': 'Scale (focus breathing)',
                 'check_align_ecc': 'ECC',
                 'check_align_homography': 'Homography',
                 'label_kernel': 'Kernel:',
@@ -560,6 +561,7 @@ class TranslationManager(QObject):
                 'check_ifcnn_refine': '+ IFCNN 精修',
                 'tip_ifcnn_refine': '使用 IFCNN 对融合结果进行精修，从原始图像栈中找回融合阶段遗漏的细节。',
                 'group_registration': '图像配准',
+                'check_align_scale': '缩放校正 (焦点呼吸)',
                 'check_align_ecc': 'ECC',
                 'check_align_homography': 'Homography',
                 'label_kernel': '核大小:',

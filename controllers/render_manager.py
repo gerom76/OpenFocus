@@ -35,7 +35,7 @@ class RenderManager:
             "rb_a", "rb_b", "rb_c", "rb_gfg", "rb_pyramid",
             "rb_dmap_max", "rb_dmap_avg", "rb_d",
             "cb_ifcnn",
-            "cb_align_homography", "cb_align_ecc",
+            "cb_align_scale", "cb_align_homography", "cb_align_ecc",
             "btn_reset",
         ):
             widget = getattr(window, attr, None)
@@ -71,6 +71,7 @@ class RenderManager:
         # Disable UI controls that should not be modified during processing
         self._set_controls_enabled(False)
 
+        need_align_scale = window.cb_align_scale.isChecked()
         need_align_homography = window.cb_align_homography.isChecked()
         need_align_ecc = window.cb_align_ecc.isChecked()
 
@@ -138,14 +139,16 @@ class RenderManager:
             # In ROI mode, use the already-aligned image stack and skip the extra registration
             source_images = window.roi_aligned_images
             # In ROI mode, the images are already aligned and do not need to be registered again
+            effective_need_align_scale = False
             effective_need_align_homography = False
             effective_need_align_ecc = False
             # Tell the Worker that the images are already aligned
             effective_aligned_images = window.roi_aligned_images
             effective_is_aligned = True
-            effective_last_alignment_options = (False, True)  # indicates ECC is done
+            effective_last_alignment_options = (False, False, True)  # indicates ECC is done
         else:
             source_images = window.raw_images
+            effective_need_align_scale = need_align_scale
             effective_need_align_homography = need_align_homography
             effective_need_align_ecc = need_align_ecc
             effective_aligned_images = window.aligned_images
@@ -181,6 +184,7 @@ class RenderManager:
             roi_base_index=roi_base_index,
             ecc_parallel=getattr(window, "ecc_parallel", True),
             ifcnn_refine=ifcnn_refine,
+            need_align_scale=effective_need_align_scale,
         )
 
         self.worker.finished_signal.connect(self.on_render_finished)
@@ -249,6 +253,7 @@ class RenderManager:
                 window.aligned_images = processed_images
                 window.is_images_aligned = True
                 window.last_alignment_options = (
+                    worker.need_align_scale,
                     worker.need_align_homography,
                     worker.need_align_ecc,
                 )
@@ -259,10 +264,12 @@ class RenderManager:
 
             if registration_performed:
                 align_methods = []
-                if window.cb_align_homography.isChecked():
-                    align_methods.append(trans.t("check_align_homography"))
+                if window.cb_align_scale.isChecked():
+                    align_methods.append(trans.t("check_align_scale"))
                 if window.cb_align_ecc.isChecked():
                     align_methods.append(trans.t("check_align_ecc"))
+                if window.cb_align_homography.isChecked():
+                    align_methods.append(trans.t("check_align_homography"))
                 align_method_str = ", ".join(align_methods) if align_methods else trans.t("val_none")
                 info_lines.append(trans.t("info_align_method").format(align_method_str))
                 info_lines.append(trans.t("info_align_time").format(alignment_time))

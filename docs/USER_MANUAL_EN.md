@@ -164,6 +164,17 @@ Image registration corrects spatial misalignment between frames in your image st
 
 ### Registration Methods
 
+#### Scale (focus breathing)
+
+- Corrects the magnification change a lens introduces as the focus plane moves
+  through the stack — the effect known as *focus breathing*
+- Fits a similarity transform (uniform scale + small rotation + recentring) from
+  feature matches, so it cancels size drift without the overfitting a full
+  homography risks on frames that differ in blur
+- Runs first, as a coarse magnification correction, and composes with ECC and
+  Homography
+- Use it when frames grow or shrink slightly from the first shot to the last
+
 #### ECC (Enhanced Correlation Coefficient)
 
 - Uses optimization to find the best alignment based on correlation
@@ -181,15 +192,18 @@ Image registration corrects spatial misalignment between frames in your image st
 ### Enabling Registration
 
 1. In the right panel, locate the **Registration** group
-2. Check **Align (ECC)** to enable ECC alignment
-3. Check **Align (Homography)** to enable Homography alignment
-4. Both methods can be used together for better results
+2. Check **Scale (focus breathing)** to correct magnification drift
+3. Check **Align (ECC)** to enable ECC alignment
+4. Check **Align (Homography)** to enable Homography alignment
+5. Methods are independent; when several are on they run in order (Scale →
+   Homography → ECC)
 
 ### When to Use Registration
 
 - Your images have visible misalignment
 - Images were captured handheld
 - The scene has parallax (closer objects shift between frames)
+- Frames change in magnification between the first and last shot (focus breathing)
 - Results show ghosting or doubling artifacts
 
 ### Registration Settings

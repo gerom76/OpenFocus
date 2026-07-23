@@ -132,6 +132,8 @@ class ExportManager:
         """Describe the registration stages in the name."""
         window = self.window
         reg_methods = []
+        if getattr(window, "cb_align_scale", None) and window.cb_align_scale.isChecked():
+            reg_methods.append("Scale")
         if window.cb_align_homography.isChecked():
             reg_methods.append("Homography")
         if window.cb_align_ecc.isChecked():

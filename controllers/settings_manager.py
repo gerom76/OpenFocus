@@ -167,6 +167,7 @@ class SettingsManager:
             "contrast_strength": getattr(window, "contrast_strength", 50),
             "fusion_method": self._selected_fusion_method(),
             "ifcnn_refine": window.cb_ifcnn.isChecked(),
+            "align_scale": window.cb_align_scale.isChecked(),
             "align_homography": window.cb_align_homography.isChecked(),
             "align_ecc": window.cb_align_ecc.isChecked(),
             "smooth_kernel": window.slider_smooth.value(),
@@ -240,7 +241,7 @@ class SettingsManager:
                 button.setChecked(False)
 
         # Registration option and refinement stage checkboxes -> unchecked
-        for attr in ("cb_align_homography", "cb_align_ecc", "cb_ifcnn"):
+        for attr in ("cb_align_scale", "cb_align_homography", "cb_align_ecc", "cb_ifcnn"):
             checkbox = getattr(window, attr, None)
             if checkbox is not None:
                 checkbox.setChecked(False)
@@ -312,6 +313,8 @@ class SettingsManager:
             trans.set_language(lang)
 
         # Registration checkboxes
+        if "align_scale" in data:
+            window.cb_align_scale.setChecked(bool(data["align_scale"]))
         if "align_homography" in data:
             window.cb_align_homography.setChecked(bool(data["align_homography"]))
         if "align_ecc" in data:

@@ -18,6 +18,7 @@ class ROIMode(Enum):
 
 @dataclass
 class RegistrationOptions:
+    need_scale: bool = False
     need_homography: bool = False
     need_ecc: bool = False
     downscale_width: Optional[int] = None
@@ -51,4 +52,4 @@ class RenderOptions:
     fusion_options: FusionOptions
     roi_options: ROIOptions
     thread_count: int = 4
-    last_alignment_options: Optional[Tuple[bool, bool]] = None
+    last_alignment_options: Optional[Tuple[bool, bool, bool]] = None

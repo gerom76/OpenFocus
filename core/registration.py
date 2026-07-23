@@ -1,12 +1,16 @@
 """
 Unified interface for image-sequence registration
 
-Provides a unified calling interface for three registration methods:
-1. Homography (homography alignment)
-2. ECC (ECC alignment)
-3. Both (combined registration: Homography + ECC)
+Provides a unified calling interface for four registration methods:
+1. Scale (focus-breathing / magnification correction, similarity transform)
+2. Homography (homography alignment)
+3. ECC (ECC alignment)
+4. Both (combined registration: Homography + ECC)
 
 All algorithm implementations are contained in this script, with no external dependencies
+
+# Scale / focus-breathing correction only
+python Registration.py --mode scale
 
 # Homography alignment only
 python Registration.py --mode homography
@@ -50,109 +54,184 @@ if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
         pass
 
 
-# # ========== Scale-alignment algorithm implementation (linear) ==========
+# ========== Scale / focus-breathing correction (similarity) ==========
 
+def _align_scale_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4):
+    """
+    Focus-breathing (magnification) correction via a similarity transform.
 
+    Focus stacking changes the optical magnification slightly from frame to frame
+    as the focus plane moves - the effect photographers call "focus breathing".
+    Geometrically it is a similarity: a uniform scale about the optical axis plus
+    a small rotation and recentring translation (4 DOF). Fitting a full 8-DOF
+    homography to it - as the other methods here do - overfits on frames that
+    differ in blur, so this stage estimates a constrained similarity instead.
 
-# def _align_zoom_impl(input_source, output_path=None, img_filenames=None):
-#     """
-#     Align images from directory path or image list
-#     Args:
-#         input_source: string (directory path) or list of images
-#         output_path: string, directory path to save results (optional, None means no saving)
-#     Returns:
-#         list of aligned images (always returns processed images regardless of output_path)
-#     """
-#     # Process input source
-#     if img_filenames is None and isinstance(input_source, str):
-#         # Pre-compile regular expression
-#         num_pattern = re.compile(r"\d+")
-#         # Use generator expression and list comprehension for optimized file filtering and sorting
-#         img_paths = sorted(
-#             (os.path.join(input_source, f) for f in os.listdir(input_source)
-#              if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tif'}),
-#             key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1])
-#         )
-#         # Use list comprehension to read all images at once
-#         images = [cv2.imread(path) for path in img_paths]
-#         # Store original filenames with extensions
-#         img_filenames = [os.path.basename(path) for path in img_paths]
-#     else:
-#         images = input_source
+    For each consecutive pair the transform is recovered from SIFT matches with
+    cv2.estimateAffinePartial2D under RANSAC, which yields exactly a scaled
+    rotation plus translation and no shear or perspective. The pairwise transforms
+    are chained back to the first frame; every frame is then warped into that
+    shared frame and cropped to the common valid region, matching the homography
+    and ECC methods so the stages compose cleanly.
 
-#     # Cache image dimensions and feature detector
-#     img_first = images[0]
-#     img_last = images[-1]
-#     h_first, w_first = img_first.shape[:2]
-#     h_last, w_last = img_last.shape[:2]
+    Args:
+        input_source: directory path or a preloaded list of images
+        output_path: optional directory to save results (None = return only)
+        img_filenames: optional filenames matching a preloaded image list
+        downscale_width: width the frames are downsampled to for feature detection
+        thread_count: worker threads for feature extraction and warping
 
-#     # SIFT feature detection and matching
-#     sift = cv2.SIFT_create()
-#     kp1, des1 = sift.detectAndCompute(img_first, None)
-#     kp2, des2 = sift.detectAndCompute(img_last, None)
+    Returns:
+        list of aligned images
+    """
+    import concurrent.futures
 
-#     # Use BFMatcher for feature matching (SIFT uses L2 norm)
-#     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-#     matches = sorted(bf.match(des1, des2), key=lambda x: x.distance)
+    # --- 1. Data loading (mirrors the other methods) ---
+    if img_filenames is None and isinstance(input_source, str):
+        num_pattern = re.compile(r"\d+")
+        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+        img_paths = sorted(
+            (os.path.join(input_source, f) for f in os.listdir(input_source)
+             if os.path.splitext(f)[1].lower() in valid_exts),
+            key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
+        )
+        images = [read_image_any_depth(path) for path in img_paths]
+        images = [img for img in images if img is not None]
+        img_filenames = [os.path.basename(path) for path in img_paths]
+    else:
+        images = input_source
 
-#     # Find valid matching points
-#     min_distance_threshold = w_first / 2
-#     p1 = p2 = q1 = q2 = None
+    num_images = len(images)
+    if num_images < 2:
+        return images
 
-#     # Use numpy array operations to optimize distance calculation
-#     for i in range(len(matches) - 1):
-#         p1 = np.array(kp1[matches[i].queryIdx].pt)
-#         p2 = np.array(kp1[matches[i + 1].queryIdx].pt)
-#         q1 = np.array(kp2[matches[i].trainIdx].pt)
-#         q2 = np.array(kp2[matches[i + 1].trainIdx].pt)
+    # --- 2. Initialization ---
+    h_orig, w_orig = images[0].shape[:2]
+    # Match the other methods: cap the detection resolution for very large frames.
+    max_dim = max(h_orig, w_orig)
+    if max_dim >= 2048:
+        prev_down = downscale_width
+        downscale_width = 1024
+        print(f"[Registration][Scale] Large image detected ({h_orig}x{w_orig}), setting downscale_width {prev_down} -> {downscale_width}")
 
-#         if np.linalg.norm(p1 - p2) > min_distance_threshold:
-#             break
-#     else:
-#         raise ValueError("Unable to find matching point pairs that meet the criteria")
+    # Global accumulated matrix maps the current frame back to frame 0.
+    H_global = np.eye(3, dtype=np.float32)
+    # Collect all forward transforms (frame -> frame 0) for precise cropping.
+    H_matrices = [np.eye(3, dtype=np.float32)]  # frame 0 is the reference
 
-#     # Calculate scaling factor
-#     dist = np.linalg.norm(p1 - p2)
-#     dist2 = np.linalg.norm(q1 - q2)
-#     c = max(dist2 / dist, dist / dist2)
+    print(f"Aligning {num_images} images using Scale / focus-breathing correction (similarity)...")
 
-#     # Pre-calculate all scaling factors
-#     aug_list = np.linspace(1, c, len(images))
-#     is_forward = dist2 / dist > 1
-#     target_shape = (h_last, w_last) if is_forward else (h_first, w_first)
-#     aug_factors = aug_list[::-1] if is_forward else aug_list
+    # --- 3. Parallel feature extraction (SIFT on 8-bit downscaled frames) ---
+    def get_features_task(img):
+        # An independent detector per thread keeps this thread-safe.
+        local_detector = cv2.SIFT_create()
+        h, w = img.shape[:2]
+        scale = downscale_width / float(w) if w > downscale_width else 1.0
+        if scale < 1.0:
+            img_small = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+        else:
+            img_small = img
+        # SIFT only accepts 8-bit input; this only measures a transform that is
+        # then applied to the full-depth frame, so narrowing costs nothing here.
+        kps, des = local_detector.detectAndCompute(bitdepth.to_analysis8(img_small), None)
+        return kps, des, scale
 
-#     # Pre-create output directory
-#     if output_path:
-#         os.makedirs(output_path, exist_ok=True)
+    try:
+        max_workers = max(1, int(thread_count))
+    except Exception:
+        max_workers = min(8, os.cpu_count() or 1)
 
-#     # Process images
-#     aligned_images = []
-#     target_h, target_w = target_shape
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        features_list = list(executor.map(get_features_task, images))
 
-#     for idx, (img, aug_factor) in enumerate(zip(images, aug_factors)):
-#         # Use cv2.INTER_AREA for scaling
-#         img_resized = cv2.resize(img, None, fx=aug_factor, fy=aug_factor, interpolation=cv2.INTER_AREA)
+    # --- 4. Sequential similarity estimation (chain must stay serial) ---
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    last_kps, last_des, last_scale = features_list[0]
 
-#         # Calculate crop position
-#         h, w = img_resized.shape[:2]
-#         x = (w - target_w) // 2
-#         y = (h - target_h) // 2
+    for idx in range(1, num_images):
+        curr_kps, curr_des, curr_scale = features_list[idx]
 
-#         # Crop image
-#         img_crop = img_resized[y:y + target_h, x:x + target_w]
-#         aligned_images.append(img_crop)
+        # Not enough features to fit anything - keep the running trajectory.
+        if curr_des is None or len(curr_kps) < 4 or last_des is None:
+            print(f"Warning: Frame {idx} features insufficient. Keeping original position.")
+            H_matrices.append(H_global.copy())
+            continue
 
-#         # Save results
-#         if output_path:
-#             # Use original filename if available, otherwise use default naming
-#             if img_filenames:
-#                 output_file = os.path.join(output_path, img_filenames[idx])
-#             else:
-#                 output_file = os.path.join(output_path, f'frame_{idx:04d}.png')
-#             cv2.imwrite(output_file, img_crop)
+        matches = bf.knnMatch(curr_des, last_des, k=2)
+        good_matches = []
+        for match_pair in matches:
+            if len(match_pair) == 2:
+                m, n = match_pair
+                if m.distance < 0.70 * n.distance:
+                    good_matches.append(m)
 
-#     return aligned_images
+        if len(good_matches) < 6:
+            print(f"Warning: Frame {idx} poor matches ({len(good_matches)}). Keeping previous trajectory.")
+            H_matrices.append(H_global.copy())
+            continue
+
+        # Bring the matched points back to full resolution before fitting.
+        pts_curr = np.float32([curr_kps[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2) / curr_scale
+        pts_last = np.float32([last_kps[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2) / last_scale
+
+        # Partial affine == similarity: uniform scale + rotation + translation,
+        # no shear or perspective. This is the focus-breathing model.
+        M_local, _mask = cv2.estimateAffinePartial2D(
+            pts_curr, pts_last, method=cv2.RANSAC, ransacReprojThreshold=5.0
+        )
+
+        if M_local is None:
+            print(f"Frame {idx} scale alignment failed. Assuming no breathing.")
+            H_local = np.eye(3, dtype=np.float32)
+        else:
+            # Lift the 2x3 similarity to a 3x3 homogeneous matrix for chaining.
+            H_local = np.vstack([M_local, [0.0, 0.0, 1.0]]).astype(np.float32)
+
+        # Chain: current -> previous -> ... -> frame 0.
+        H_global = np.matmul(H_global, H_local)
+        H_matrices.append(H_global.copy())
+
+        last_kps = curr_kps
+        last_des = curr_des
+        last_scale = curr_scale
+
+    # --- 5. Warp into the shared frame and crop to the common valid region ---
+    top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
+
+    do_crop = True
+    if top >= bottom or left >= right:
+        print("Warning: Invalid crop region, skipping crop.")
+        do_crop = False
+        target_w, target_h = w_orig, h_orig
+        offset_x, offset_y = 0, 0
+    else:
+        target_w = right - left
+        target_h = bottom - top
+        offset_x = -left
+        offset_y = -top
+
+    # Build the crop translation and fold it into each warp.
+    T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
+
+    def warp_task(args):
+        img, H = args
+        H_final = T_crop @ H if do_crop else H
+        return cv2.warpPerspective(img, H_final, (target_w, target_h),
+                                   flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT)
+
+    warp_args = list(zip(images, H_matrices))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        aligned_images = list(executor.map(warp_task, warp_args))
+
+    if output_path:
+        os.makedirs(output_path, exist_ok=True)
+        for idx, img in enumerate(aligned_images):
+            fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
+            cv2.imwrite(os.path.join(output_path, fname),
+                        bitdepth.prepare_for_write(img, os.path.splitext(fname)[1]))
+
+    return aligned_images
+
 
 
 # ========== Precise cropping function based on transform matrices ==========
@@ -469,9 +548,14 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
                     parallel_ecc: bool = True):
     """
     High-precision image-stack alignment algorithm based on ECC (Enhanced Correlation Coefficient)
-    Suitable for: image stacks with focus-breathing in microscopy and macro photography
-    Advantages: sub-pixel precision, automatically handles scaling-center offset, does not rely on feature points
+    Suitable for: fine, sub-pixel refinement of global drift when feature detection is unreliable
+    Advantages: sub-pixel precision, does not rely on feature points
     Optimizations: parallel preprocessing, parallel warping, merged cropping operation
+
+    Note: this stage fits an 8-DOF homography. For focus-breathing (magnification
+    change) specifically, prefer the dedicated 'scale' method (_align_scale_impl),
+    which fits a constrained 4-DOF similarity and does not overfit on frames that
+    differ in blur.
     """
     import concurrent.futures
 
@@ -924,11 +1008,17 @@ class ImageRegistration:
     Unified interface class for image-sequence registration
     
     Supported methods:
+    - 'scale': scale / focus-breathing correction (similarity: uniform scale +
+      rotation + translation)
     - 'homography': homography alignment registration (non-linear)
     - 'ecc': ECC alignment registration (high precision, sub-pixel level)
     - 'both': combined registration (Homography first, then ECC)
-    
+
     Example:
+        # Correct focus breathing (magnification change)
+        registration = ImageRegistration(method='scale')
+        result = registration.process('./images', './output')
+
         # Use homography alignment
         registration = ImageRegistration(method='homography')
         result = registration.process('./images', './output')
@@ -942,14 +1032,14 @@ class ImageRegistration:
         result = registration.process(image_list, './output')
     """
     
-    SUPPORTED_METHODS = ['homography', 'ecc', 'both']
-    
+    SUPPORTED_METHODS = ['scale', 'homography', 'ecc', 'both']
+
     def __init__(self, method: str = 'homography', downscale_width: int = 1024, ecc_parallel: bool = True):
         """
         Initialize the registrar
 
         Args:
-            method (str): registration method name, one of 'homography', 'ecc', 'both'
+            method (str): registration method name, one of 'scale', 'homography', 'ecc', 'both'
             ecc_parallel (bool): Compute ECC pair matrices concurrently (identical results, faster)
         """
         if method not in self.SUPPORTED_METHODS:
@@ -979,7 +1069,9 @@ class ImageRegistration:
         Returns:
             list: list of registered images (always returned, whether or not saved to disk)
         """
-        if self.method == 'homography':
+        if self.method == 'scale':
+            return self._process_scale(input_source, output_path, thread_count=thread_count)
+        elif self.method == 'homography':
             return self._process_homography(input_source, output_path, thread_count=thread_count)
         elif self.method == 'ecc':
             return self._process_ecc(input_source, output_path, thread_count=thread_count)
@@ -994,8 +1086,28 @@ class ImageRegistration:
             # Step 2: ECC (save the final result)
             return self._process_ecc(homography_result, output_path, thread_count=thread_count)
     
-    def _process_homography(self, 
-                           input_source: Union[str, List[np.ndarray]], 
+    def _process_scale(self,
+                       input_source: Union[str, List[np.ndarray]],
+                       output_path: Optional[str] = None,
+                       thread_count: int = 4) -> List[np.ndarray]:
+        """
+        Scale / focus-breathing correction (similarity transform)
+
+        Estimates a per-frame uniform scale + rotation + translation and warps
+        every frame into the first frame, cancelling the magnification change
+        that focus stacking introduces as the focus plane moves.
+
+        Args:
+            input_source: image source
+            output_path: output path
+
+        Returns:
+            list of registered images
+        """
+        return _align_scale_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count)
+
+    def _process_homography(self,
+                           input_source: Union[str, List[np.ndarray]],
                            output_path: Optional[str] = None,
                            thread_count: int = 4) -> List[np.ndarray]:
         """
@@ -1068,7 +1180,7 @@ def register_images(input_source: Union[str, List[np.ndarray]],
     
     Args:
         input_source: image source (directory path or list of images)
-        method: registration method ('homography', 'ecc', 'both')
+        method: registration method ('scale', 'homography', 'ecc', 'both')
         output_path: output path (optional, None means return the list only without saving)
     
     Returns:
@@ -1113,8 +1225,8 @@ def main():
     parser = argparse.ArgumentParser(description='Image Stack Registration Tool')
     parser.add_argument('--input_path', default='./coral_best_zoom', help='Input image directory path')
     parser.add_argument('--output', default=r'E:\FinishedProjects\XuChuang\regi_test', help='Output directory path')
-    parser.add_argument('--mode', default='homography', choices=['homography', 'ecc', 'both'],
-                        help='Processing mode: homography, ecc, both (homography + ecc)')
+    parser.add_argument('--mode', default='homography', choices=['scale', 'homography', 'ecc', 'both'],
+                        help='Processing mode: scale (focus breathing), homography, ecc, both (homography + ecc)')
     
     args = parser.parse_args()
     

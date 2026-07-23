@@ -48,6 +48,7 @@ class RightPanelComponents:
     rb_dmap_avg: QRadioButton
     rb_d: QRadioButton
     cb_ifcnn: QCheckBox
+    cb_align_scale: QCheckBox
     cb_align_homography: QCheckBox
     cb_align_ecc: QCheckBox
     slider_smooth: QSlider
@@ -140,11 +141,14 @@ def create_right_panel() -> RightPanelComponents:
 
     registration_group = QGroupBox(trans.t('group_registration'))
     registration_layout = QVBoxLayout(registration_group)
+    cb_align_scale = QCheckBox(trans.t('check_align_scale'))
+    cb_align_scale.setChecked(False)
     cb_align_ecc = QCheckBox(trans.t('check_align_ecc'))
     cb_align_ecc.setChecked(True)
     cb_align_homography = QCheckBox(trans.t('check_align_homography'))
     cb_align_homography.setChecked(False)
 
+    registration_layout.addWidget(cb_align_scale)
     registration_layout.addWidget(cb_align_ecc)
     registration_layout.addWidget(cb_align_homography)
     registration_layout.addStretch()
@@ -303,6 +307,7 @@ def create_right_panel() -> RightPanelComponents:
         rb_dmap_avg=rb_dmap_avg,
         rb_d=rb_d,
         cb_ifcnn=cb_ifcnn,
+        cb_align_scale=cb_align_scale,
         cb_align_homography=cb_align_homography,
         cb_align_ecc=cb_align_ecc,
         slider_smooth=slider_smooth,
@@ -383,5 +388,6 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
 
     window.update_slider_availability()
 
+    components.cb_align_scale.installEventFilter(window)
     components.cb_align_ecc.installEventFilter(window)
     components.cb_align_homography.installEventFilter(window)
