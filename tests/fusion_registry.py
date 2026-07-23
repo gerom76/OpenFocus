@@ -117,6 +117,18 @@ def _pyramid(stack, levels=None, img_resize=None, thread_count=None):
     return pyramid_impl(stack, img_resize, levels=levels, thread_count=thread_count)
 
 
+def _depthmap_max(stack, kernel_size=9, img_resize=None, thread_count=None):
+    from fusion_methods.depthmap import depthmap_impl, MODE_MAX
+    return depthmap_impl(stack, img_resize, mode=MODE_MAX,
+                         kernel_size=kernel_size, thread_count=thread_count)
+
+
+def _depthmap_average(stack, kernel_size=9, img_resize=None, thread_count=None):
+    from fusion_methods.depthmap import depthmap_impl, MODE_AVERAGE
+    return depthmap_impl(stack, img_resize, mode=MODE_AVERAGE,
+                         kernel_size=kernel_size, thread_count=thread_count)
+
+
 def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
     from fusion_methods.dct import dct_focus_stack_fusion
     if img_resize is not None:
@@ -235,6 +247,31 @@ METHODS = [
              "images."),
         ),
         min_psnr=40.0,      # measured 49.6
+    ),
+    FusionMethod(
+        key="depthmap_max", label="Depth Map (Max)", fuse=_depthmap_max,
+        check=_needs("cv2"), params={"kernel_size": 9},
+        sweeps=(
+            ("kernel_size", [3, 7, 9, 15, 31],
+             "Window the per-pixel Laplacian focus energy is pooled over before "
+             "the hard per-pixel select. Small follows fine detail but speckles "
+             "on noise; large is steadier but rounds off narrow in-focus "
+             "regions."),
+        ),
+        min_psnr=36.0,      # measured 44.6
+    ),
+    FusionMethod(
+        key="depthmap_average", label="Depth Map (Average)", fuse=_depthmap_average,
+        check=_needs("cv2"), params={"kernel_size": 9},
+        sweeps=(
+            ("kernel_size", [3, 7, 9, 15, 31],
+             "Window the focus energy is pooled over before the contrast-weighted "
+             "blend, which also sets how sharply the blend favours the in-focus "
+             "frame. The average blends rather than selects, so it trails Max on "
+             "a clean synthetic reference but recovers SNR in flat regions."),
+        ),
+        min_psnr=30.0,      # measured 39.6; blends rather than selects, so it
+                            # trails Max but recovers SNR in flat regions
     ),
     FusionMethod(
         key="dct", label="DCT", fuse=_dct,

@@ -95,6 +95,12 @@ class RenderMethodHelpDialog(HelpDialog):
     <p>Pyramid<br/>
     Laplacian-pyramid fusion: each frame is split into band-pass detail levels plus a low-frequency base, and for every band the coefficient carrying the most local energy across the stack wins the pixel (the classic choose-max rule). The shared low-frequency base is averaged. Collapsing the fused pyramid gives a sharp, seam-free all-in-focus image. Fully CPU-based with no tuning, it is a strong, dependable default for typical focus stacks.</p>
 
+    <p>Depth Map (Max)<br/>
+    Classic hard depth-map fusion: a local Laplacian-energy focus measure is computed per frame, and each pixel is taken whole from the frame where that measure is highest. The decision is an order-independent per-pixel argmax, so colour and noise stay clean within a slice and never blend across sources. The kernel slider sets the window the focus measure is pooled over - larger is steadier on noise, smaller follows finer detail. Fully CPU-based.</p>
+
+    <p>Depth Map (Average)<br/>
+    Contrast-weighted average: frames are blended in proportion to the same local focus measure rather than hard-selected. Sharp detail is still dominated by the frame that holds it, but a flat region - where every frame is equally focused - collapses to the plain mean, recovering the stack's multi-frame signal-to-noise (a free sqrt(N) noise reduction). Use it on stacks with large smooth areas where Max would chase sensor noise. The kernel slider sets the focus-measure window. Fully CPU-based.</p>
+
     <p>StackMFF-V4<br/>
     A neural network trained on everyday focus stacks. It generally produces the strongest results with minimal tuning. Because it is not fine-tuned for specialist domains (microphotography, microscopy, medical imaging, etc.), avoid it when domain shifts are expected. Runs fastest with GPU acceleration.</p>
 

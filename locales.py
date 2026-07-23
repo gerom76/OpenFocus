@@ -95,6 +95,8 @@ class TranslationManager(QObject):
                 'radio_dtcwt': 'DTCWT',
                 'radio_gfg': 'GFG-FGF',
                 'radio_pyramid': 'Pyramid',
+                'radio_depthmap_max': 'Depth Map (Max)',
+                'radio_depthmap_avg': 'Depth Map (Average)',
                 'radio_stackmff': 'StackMFF-V4',
                 'check_ifcnn_refine': '+ IFCNN Refine',
                 'tip_ifcnn_refine': 'Refine the fused image with IFCNN, recovering detail from the '
@@ -552,6 +554,8 @@ class TranslationManager(QObject):
                 'radio_dtcwt': '双数复小波变换',
                 'radio_gfg': '引导滤波2',
                 'radio_pyramid': '拉普拉斯金字塔',
+                'radio_depthmap_max': '深度图（最大值）',
+                'radio_depthmap_avg': '深度图（加权平均）',
                 'radio_stackmff': 'StackMFF-V4',
                 'check_ifcnn_refine': '+ IFCNN 精修',
                 'tip_ifcnn_refine': '使用 IFCNN 对融合结果进行精修，从原始图像栈中找回融合阶段遗漏的细节。',

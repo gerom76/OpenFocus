@@ -26,7 +26,7 @@ OpenFocus is a professional multi-focus image fusion desktop application designe
 ### Key Features
 
 - **Multi-Focus Image Fusion**: Combine multiple images with different focus points into one fully focused image
-- **Multiple Fusion Algorithms**: Choose from Guided Filter, DCT, DTCWT, GFG-FGF, Pyramid, and StackMFF-V4 (deep learning)
+- **Multiple Fusion Algorithms**: Choose from Guided Filter, DCT, DTCWT, GFG-FGF, Pyramid, Depth Map (Max / Average), and StackMFF-V4 (deep learning)
 - **Image Registration**: Align misaligned image sequences using ECC or Homography methods
 - **Batch Processing**: Process multiple image folders simultaneously
 - **Flexible Export**: Save results as individual images, folders, or GIF animations
@@ -203,7 +203,7 @@ Access additional settings via **Settings → Registration**:
 
 ## 7. Image Fusion Methods
 
-OpenFocus offers six fusion algorithms. Each has different characteristics suitable for various image types.
+OpenFocus offers eight fusion algorithms. Each has different characteristics suitable for various image types.
 
 ### Guided Filter (Default)
 
@@ -242,6 +242,15 @@ OpenFocus offers six fusion algorithms. Each has different characteristics suita
 - **Advantages**: Sharp, seam-free results; fully CPU-based; no parameters to tune
 - **Parameter**: None (decomposition depth is chosen automatically from image size)
 
+### Depth Map (Max / Average)
+
+- **Algorithm**: Per-pixel depth-map fusion from a local Laplacian focus measure, in two modes
+  - **Max**: takes each pixel whole from the frame with the highest focus measure — the classic hard depth map, an order-independent per-pixel select that keeps colour and noise clean within a slice
+  - **Average**: blends frames in proportion to their focus measure, so flat regions collapse to the plain mean and recover the stack's multi-frame SNR (a free √N noise reduction), while sharp detail still follows the frame that holds it
+- **Best for**: *Max* — clean, artifact-free selection on well-defined subjects; *Average* — stacks with large smooth areas where a hard select would chase sensor noise
+- **Advantages**: Fully CPU-based; no colour splitting across sources; order-independent
+- **Parameter**: Kernel size sets the window the focus measure is pooled over (larger is steadier on noise, smaller follows finer detail)
+
 ### StackMFF-V4 (Deep Learning)
 
 - **Algorithm**: Neural network-based fusion (requires PyTorch)
@@ -266,6 +275,8 @@ OpenFocus offers six fusion algorithms. Each has different characteristics suita
 | DTCWT | Medium | Very Good | Complex scenes |
 | GFG-FGF | Fast | Good | Focus regions |
 | Pyramid | Fast | Very Good | Dependable default |
+| Depth Map (Max) | Fast | Very Good | Clean hard select |
+| Depth Map (Average) | Fast | Good | Smooth/noisy stacks (SNR) |
 | StackMFF-V4 | Slow (GPU) | Excellent | Best quality |
 
 ---
@@ -516,6 +527,10 @@ This algorithm uses a Generalized Four-neighborhood Gaussian approach to measure
 ### Pyramid
 
 Each frame is decomposed into a Laplacian pyramid — a series of band-pass detail levels plus a low-frequency base. For every detail band the algorithm keeps, per pixel, the coefficient carrying the most local energy across the stack (the classic choose-max rule), so the sharpest source wins at every scale. The low-frequency base, which the focus stack shares, is averaged. Collapsing the fused pyramid reconstructs a sharp, seam-free all-in-focus image. The decomposition depth adapts to the image size, so there is nothing to tune. Based on Burt and Adelson's Laplacian pyramid (1983).
+
+### Depth Map
+
+A local Laplacian-energy focus measure is computed for every frame and pooled over an adjustable window. In **Max** mode each pixel is taken whole from the frame whose measure is highest there — an order-independent per-pixel argmax that produces an explicit depth map, so colour and noise never blend across a slice boundary. In **Average** mode the frames are blended in proportion to that measure with a small baseline weight, so a flat region — where every frame is equally (de)focused — collapses to the plain mean and recovers the stack's multi-frame signal-to-noise (a √N noise reduction), while textured regions are still dominated by the frame that actually holds the detail. This is the depth-map family used by tools such as Zerene DMap and Helicon Methods A/B.
 
 ### StackMFF-V4
 

@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.23**: New **Depth Map** fusion method with two modes — *Max* (hard per-pixel select, the classic depth map) and *Average* (contrast-weighted blend that recovers multi-frame SNR in flat regions). Both are fully CPU-based and driven by a single focus-measure window. This closes the last two blending families the field treats as mandatory.
+
 > 🎉 **2026.07.23**: New **Pyramid** fusion method — Laplacian-pyramid choose-max blending. Fully CPU-based with no tuning, it scores highest of all methods on our synthetic benchmark and makes a strong, dependable default for typical focus stacks.
 
 > 🎉 **2026.07.23**: Optional **contrast enhancement** for fused output. Pick *Auto* (color-safe global tone curve) or *Local* (CLAHE) with a strength slider — it applies after fusion and updates the preview live, so the stored result stays untouched. Off by default.
@@ -89,6 +91,7 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **Dual-Tree Complex Wavelet Transform (DTCWT)**: Multi-scale representation that preserves fine texture structures.
 - **GFG-FGF**: GFG-FGF is based on a generalized four-neighborhood Gaussian gradient (GFG) operator combined with a fast guided filter (FGF). 
 - **Pyramid**: Laplacian-pyramid choose-max fusion that selects, band by band, the coefficient carrying the most local energy. CPU-based, tuning-free, and a strong general-purpose default.
+- **Depth Map**: Per-pixel depth-map fusion from a local Laplacian focus measure, in two modes. *Max* takes each pixel whole from the sharpest frame (an order-independent hard select that keeps colour and noise clean within a slice); *Average* blends frames by their focus measure, so flat regions collapse to the mean and recover the stack's multi-frame SNR (√N noise reduction) while detail still follows the sharpest frame.
 - **StackMFF V4**: Pretrained deep model delivering state-of-the-art focus stacking quality.
 
 ### Registration Algorithms

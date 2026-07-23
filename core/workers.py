@@ -121,6 +121,8 @@ class RenderWorker(QThread):
         rb_d_checked,
         kernel_slider_value,
         rb_pyramid_checked=False,
+        rb_dmap_max_checked=False,
+        rb_dmap_avg_checked=False,
         tile_enabled=None,
         tile_block_size=None,
         tile_overlap=None,
@@ -155,6 +157,8 @@ class RenderWorker(QThread):
         self.rb_gfg_checked = rb_gfg_checked
         self.rb_d_checked = rb_d_checked
         self.rb_pyramid_checked = rb_pyramid_checked
+        self.rb_dmap_max_checked = rb_dmap_max_checked
+        self.rb_dmap_avg_checked = rb_dmap_avg_checked
         self.kernel_slider_value = kernel_slider_value
         # Optional IFCNN refinement stage, applied to the fusion result
         self.ifcnn_refine = bool(ifcnn_refine)
@@ -379,6 +383,13 @@ class RenderWorker(QThread):
                 img_resize=None,
                 thread_count=self.thread_count,
             )
+        elif algorithm in ("depthmap_max", "depthmap_average"):
+            result = fusion.fuse(
+                input_source=images,
+                img_resize=None,
+                kernel_size=kernel_size,
+                thread_count=self.thread_count,
+            )
         elif algorithm == "stackmffv4":
             model_path = resource_path("weights", "stackmffv4.pth")
             result = fusion.fuse(
@@ -420,6 +431,10 @@ class RenderWorker(QThread):
             return "gfgfgf"
         elif self.rb_pyramid_checked:
             return "pyramid"
+        elif self.rb_dmap_max_checked:
+            return "depthmap_max"
+        elif self.rb_dmap_avg_checked:
+            return "depthmap_average"
         elif self.rb_d_checked:
             return "stackmffv4"
         else:
@@ -654,6 +669,16 @@ class BatchWorker(QThread):
                 result = fusion.fuse(
                     input_source=aligned_images,
                     img_resize=None,
+                    thread_count=self.thread_count,
+                )
+            elif fusion_method in ("depthmap_max", "depthmap_average"):
+                kernel_size = fusion_params.get('kernel_size', 9)
+                if kernel_size % 2 == 0:
+                    kernel_size = max(1, kernel_size - 1)
+                result = fusion.fuse(
+                    input_source=aligned_images,
+                    img_resize=None,
+                    kernel_size=kernel_size,
                     thread_count=self.thread_count,
                 )
             elif fusion_method == "stackmffv4":

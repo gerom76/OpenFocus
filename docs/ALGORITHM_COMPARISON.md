@@ -1,6 +1,6 @@
 # Focus stacking algorithms: OpenFocus against the field
 
-A capability comparison between OpenFocus 1.7.0, the improvements proposed in
+A capability comparison between OpenFocus 1.8.0, the improvements proposed in
 [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) and this document, and five
 other focus stacking tools.
 
@@ -13,7 +13,7 @@ says so rather than guessing.
 
 | Tool | Licence | Basis for entries here |
 |------|---------|------------------------|
-| **OpenFocus** 1.7.0 | MIT, open | source inspection |
+| **OpenFocus** 1.8.0 | MIT, open | source inspection |
 | **Helicon Focus** 8 | commercial, closed | vendor docs |
 | **Zerene Stacker** | commercial, closed | vendor docs + community |
 | **focus-stack** (P. Aimonen) | GPL, open | project README |
@@ -29,16 +29,18 @@ This is the clearest single result in the comparison.
 | Family | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
 |--------|-----------|---------|--------|-------------|---------------|---------|
 | **Laplacian / contrast pyramid** | ✓ Pyramid³ | Method C | PMax | — | `PyramidStack` | — |
-| **Depth map, hard per-pixel select** | implicit only¹ | Method B | DMap | — | `DepthMapStack` (`DM_MAP_MAX`) | core method |
-| **Contrast-weighted average** | ✗ | Method A | — | — | `DepthMapStack` (`DM_MAP_AVERAGE`) | — |
+| **Depth map, hard per-pixel select** | ✓ Depth Map (Max)¹ | Method B | DMap | — | `DepthMapStack` (`DM_MAP_MAX`) | core method |
+| **Contrast-weighted average** | ✓ Depth Map (Average) | Method A | — | — | `DepthMapStack` (`DM_MAP_AVERAGE`) | — |
 | **Complex wavelet** | DTCWT² | — | — | ✓ (Forster et al. 2004) | — | — |
 | **Block DCT** | ✓ | — | — | — | — | — |
 | **Single-scale guided filter** | GFF, GFG-FGF | — | — | — | — | — |
 | **Neural** | StackMFF V4, IFCNN | — | — | — | — | — |
 
-¹ Decision maps *are* computed — `fusion_methods/gff.py:133`, `gfg_fgf.py:241`,
-`dct.py:107` — but they are internal and discarded; there is no depth-map method
-or output.
+¹ Added in 1.8.0 as `Depth Map (Max)` (`fusion_methods/depthmap.py`), an
+order-independent per-pixel argmax on a pooled Laplacian focus measure. The other
+methods still compute internal decision maps that are discarded
+(`fusion_methods/gff.py:133`, `gfg_fgf.py:241`, `dct.py:107`), and no method yet
+*exports* the depth map as a file — see §6.
 ² Applied recursively pairwise, so the result is order-dependent
 ([ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §7).
 ³ Added in 1.7.0. A single choose-max over all frames' Laplacian bands, so —
@@ -46,22 +48,25 @@ unlike DTCWT — it is order-independent (`fusion_methods/pyramid.py`).
 
 ### What this table says
 
-**As of 1.7.0 OpenFocus ships a Laplacian pyramid (`Pyramid`), closing what this
-comparison had flagged as the field's clearest gap; the one mandatory family
-still missing is the contrast-weighted average.** Every commercial and open
-competitor makes a pyramid or a closely-related multiscale transform a headline
-method — Helicon's Method C, Zerene's PMax, Shine Stacker's `PyramidStack`, and
-focus-stack's complex wavelet is the same idea in a different basis. OpenFocus now
-has two multiscale methods: the new Laplacian pyramid and DTCWT. Unlike DTCWT,
-which fuses recursively pairwise and is therefore order-dependent, the pyramid
-does a single choose-max across all frames — order-independent and far cheaper.
+**As of 1.8.0 OpenFocus ships every blending family the field treats as
+mandatory.** The Laplacian pyramid (`Pyramid`, 1.7.0) closed what this comparison
+had flagged as the clearest gap, and the depth-map family followed in 1.8.0 as
+`Depth Map`, carrying both selection rules the mature tools offer: a hard
+per-pixel select (`Max`, cf. Zerene DMap and Helicon Method B) and the
+contrast-weighted average (`Average`, cf. Helicon Method A and Shine Stacker's
+average mode) that recovers multi-frame SNR in flat regions. Every commercial and
+open competitor makes a pyramid or a closely-related multiscale transform a
+headline method — Helicon's Method C, Zerene's PMax, Shine Stacker's
+`PyramidStack`, and focus-stack's complex wavelet is the same idea in a different
+basis — and pairs it with a depth map. OpenFocus now has both, plus DTCWT as a
+second multiscale transform; unlike DTCWT, which fuses recursively pairwise and is
+order-dependent, both the pyramid and the depth map decide across all frames at
+once and are order-independent.
 
 Conversely, **OpenFocus is the only tool with a block-DCT method and the only one
-with neural fusion.** Those are genuine differentiators. Breadth is not the issue —
-seven methods is more than anyone else offers — the one family the rest of the
-field considers essential and OpenFocus still lacks is the contrast-weighted
-average (Helicon Method A, Shine Stacker's average mode), which recovers
-multi-frame SNR in flat regions.
+with neural fusion.** Those are genuine differentiators, and breadth is now well
+clear of the field: nine fusion methods, where no competitor here offers more than
+three.
 
 The industry pattern is also worth noting: the mature tools converge on **exactly
 two** methods, one pyramid and one depth-map, and teach users to retouch between
@@ -128,10 +133,11 @@ returns only unrelated hits in `controllers/label_manager.py:306`. The
 consequence is not only visible luminance banding where the winning source frame
 changes — it is that **every focus measure in the codebase is contrast-linear**
 (Scharr in `gfg_fgf.py`, Laplacian in `gff.py:142`, DCT variance in `dct.py`,
-squared-Laplacian band energy in `pyramid.py`), so a 5% brighter frame wins the
-argmax on identical detail. This is the single strongest catch-up signal in the
-whole comparison: cheap to implement, near-universal in the field, and it
-corrupts the input to all seven existing methods.
+squared-Laplacian band energy in `pyramid.py`, pooled Laplacian energy in
+`depthmap.py`), so a 5% brighter frame wins the argmax on identical detail. This
+is the single strongest catch-up signal in the whole comparison: cheap to
+implement, near-universal in the field, and it corrupts the input to all nine
+existing methods.
 
 ---
 
@@ -186,7 +192,7 @@ right operator is subject-dependent and no single choice wins everywhere.
 | Denoising | ✗ | ✗ | ✗ | ✓ `--denoise` | ✓ non-local means | ✓ |
 | Hot / noisy pixel masking | ✗ | ✓ dust map | ✗ | ✗ | ✓ automatic | ✗ |
 | Sharpening | ✗ | ✗ | ✗ | ✗ | ✓ unsharp mask | ✓ |
-| Multi-frame SNR gain in flat regions | ✗ | ✓ Method A | ✗ | ✗ | ✓ average mode | ✗ |
+| Multi-frame SNR gain in flat regions | ✓ Depth Map (Average) | ✓ Method A | ✗ | ✗ | ✓ average mode | ✗ |
 | **Depth-wise slabbing / bunching** | **✗**¹ | ✗ | ✓ slabbing | ✓ `--batchsize` | ✓ `FocusStackBunch` | ✗ |
 
 ¹ OpenFocus's tiling (`TILE_BLOCK_SIZE`, `TILE_OVERLAP`) subdivides in **X/Y for
@@ -207,10 +213,12 @@ results. It reduces artifact accumulation in deep stacks and is not what
 OpenFocus's XY tiling does. This is a cheap addition given the existing worker
 infrastructure.
 
-**Helicon Method A and Shine Stacker's average mode recover multi-frame SNR;
-OpenFocus discards it.** Where all frames are equally defocused, N frames offer a
-free √N noise reduction. Every OpenFocus method hard-selects one frame and throws
-that away.
+**Helicon Method A and Shine Stacker's average mode recover multi-frame SNR, and
+as of 1.8.0 so does OpenFocus.** Where all frames are equally defocused, N frames
+offer a free √N noise reduction. Every other OpenFocus method hard-selects one
+frame and throws that away; `Depth Map (Average)` instead blends by the focus
+measure, so a flat region collapses to the plain mean and keeps the gain, while
+detail still follows the sharpest frame.
 
 ---
 
@@ -236,7 +244,8 @@ stays 16-bit through alignment, fusion and export. Mode selectable under
 *Settings → Bit Depth*; see `utils/bitdepth.py`.
 ² `.nef` / `.nrw` at `core/image_loader.py:35`, though LibRaw handles CR2, CR3,
 ARW, RAF, DNG and ORF identically.
-³ Computed internally, then discarded — see §1 note 1.
+³ Since 1.8.0 the map drives a fusion method (`Depth Map`) but is still not
+*exported* as a file — see §1 note 1.
 ⁴ Read for display at `core/image_loader.py:357`, never written back;
 `cv2.imwrite` drops it.
 ⁵ `core/image_loader.py:417`.
@@ -250,11 +259,12 @@ for weighted blending; it was not an algorithm, but it bounded every algorithm.
 The pipeline now decodes at native depth and preserves it end to end, with the
 depth mode selectable rather than implicit.
 
-**Depth map output is standard and OpenFocus already computes one.** Four of five
-competitors export it; for PICOLAY it is the point of the software. OpenFocus
-builds an index map in every method and throws it away. Exposing it is nearly
-free, and it is the substrate that depth-driven blending, occlusion-aware halo
-suppression, and 3D output all require.
+**Depth map output is standard, and OpenFocus computes one but still does not
+export it.** Four of five competitors write it out; for PICOLAY it is the point of
+the software. As of 1.8.0 the `Depth Map` method turns that internal map into a
+blending method — closing depth-driven blending, one of the things this map is the
+substrate for — but saving it as a file, and the occlusion-aware halo suppression
+and 3D output it also feeds, are still open.
 
 **OpenFocus leads on GPU and is alone in accepting video input.** CUDA/MPS
 acceleration across five methods is ahead of everything except focus-stack's
@@ -278,13 +288,13 @@ the field has already closed, or moves ahead of it.
 | 7 | Noise-aware measure + flat-region averaging | **Parity+** | averaging yes; noise-normalised measure, none |
 | 8 | 16-bit pipeline — **done in 1.6.0** | **Catch-up** | 4 of 5 tools |
 | 9 | Non-rigid / optical-flow refinement | **Differentiating** | none; Zerene explicitly global-only |
-| 10 | Depth-map export & depth-driven blending | **Catch-up** | 4 of 5 tools |
+| 10 | Depth-driven blending — **done in 1.8.0** (depth-map *export* still open) | **Catch-up** | 4 of 5 tools |
 | 11 | Focus-based ordering + bad-frame gating | **Catch-up** | Zerene auto-order |
 | 12 | Retouching brush | **Catch-up** | both commercial tools |
 | **13** | **Contrast / trust threshold** | **Catch-up** | Zerene, focus-stack, PICOLAY |
 | **14** | **Depth-wise slabbing** | **Catch-up** | 3 of 5 tools |
 | **15** | **Selectable focus operator** | **Parity+** | Shine Stacker only |
-| **16** | **Contrast-weighted average method** | **Catch-up** | Helicon A, Shine Stacker average |
+| **16** | **Contrast-weighted average method — done in 1.8.0** | **Catch-up** | Helicon A, Shine Stacker average |
 
 Items 13-16 were identified by this comparison and were not in the original gap
 analysis.
@@ -295,7 +305,8 @@ analysis.
 
 Stated plainly, because the tables above are weighted toward gaps.
 
-- **Method breadth.** Seven fusion methods against two for both commercial tools.
+- **Method breadth.** Nine fusion methods against two or three for the commercial
+  tools.
 - **Only tool with neural fusion.** StackMFF V4 and IFCNN refinement have no
   counterpart in any competitor here.
 - **Only tool with block-DCT fusion.**
@@ -320,18 +331,18 @@ The competitors converge on two blending methods each, then spend their remainin
 effort on the pipeline around them — photometric normalisation, scale
 correction, trust thresholds, slabbing, depth-map export, retouching. OpenFocus
 inverts that; of the two families the field treats as mandatory it added the
-Laplacian pyramid in 1.7.0 and now lacks only the contrast-weighted average.
+Laplacian pyramid in 1.7.0 and the depth map — both selection rules — in 1.8.0, so
+every mandatory blending family is now present.
 
-With the pyramid in place, the highest-value remaining work is less another
-fusion method than the pipeline around them:
+With both mandatory families in place, the highest-value remaining work is no
+longer another fusion method but the pipeline around them:
 
 1. **Fix the inputs** — photometric alignment (§3) and scale correction (§2).
-   These improve all seven existing methods at once, and both are near-universal
+   These improve all nine existing methods at once, and both are near-universal
    elsewhere.
-2. **Add the last missing family** — a contrast-weighted average (§1) for the √N
-   noise gain in flat regions, the one mandatory family still absent.
-3. **Stop discarding the depth map** (§6), which unlocks trust thresholds,
-   depth-driven blending, halo suppression and 3D output from one change.
+2. **Finish the depth map** (§6) — the `Depth Map` method (1.8.0) turned the
+   internal map into depth-driven blending; still open are *exporting* it as a
+   file and the trust thresholds, halo suppression and 3D output it feeds.
 
 Then the differentiators — global label optimisation and non-rigid alignment —
 where there is no field precedent to catch up to.

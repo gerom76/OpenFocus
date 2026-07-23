@@ -349,6 +349,14 @@ class BatchProcessingDialog(QDialog):
                     kernel_size_value = slider_widget.value()
             elif getattr(self.parent_window, 'rb_pyramid', None) and self.parent_window.rb_pyramid.isChecked():
                 fusion_method = trans.t('radio_pyramid')
+            elif getattr(self.parent_window, 'rb_dmap_max', None) and self.parent_window.rb_dmap_max.isChecked():
+                fusion_method = trans.t('radio_depthmap_max')
+                if slider_widget:
+                    kernel_size_value = slider_widget.value()
+            elif getattr(self.parent_window, 'rb_dmap_avg', None) and self.parent_window.rb_dmap_avg.isChecked():
+                fusion_method = trans.t('radio_depthmap_avg')
+                if slider_widget:
+                    kernel_size_value = slider_widget.value()
             elif rb_d and rb_d.isChecked():
                 fusion_method = trans.t('radio_stackmff')
         
@@ -715,6 +723,12 @@ class BatchProcessingDialog(QDialog):
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
             elif getattr(self.parent_window, 'rb_pyramid', None) and self.parent_window.rb_pyramid.isChecked():
                 fusion_method = "pyramid"
+            elif getattr(self.parent_window, 'rb_dmap_max', None) and self.parent_window.rb_dmap_max.isChecked():
+                fusion_method = "depthmap_max"
+                fusion_params["kernel_size"] = _sanitized_kernel_value()
+            elif getattr(self.parent_window, 'rb_dmap_avg', None) and self.parent_window.rb_dmap_avg.isChecked():
+                fusion_method = "depthmap_average"
+                fusion_params["kernel_size"] = _sanitized_kernel_value()
             elif rb_d and rb_d.isChecked():
                 fusion_method = "stackmffv4"
         

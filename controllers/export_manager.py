@@ -75,12 +75,14 @@ class ExportManager:
     def _kernel_suffix(self) -> str:
         """Return a '_k<size>' suffix for methods that use the kernel slider.
 
-        Only GuidedFilter (rb_a), DCT (rb_b) and GFG-FGF (rb_gfg) rely on the
-        kernel-size slider; DTCWT and StackMFF-V4 ignore it, so no suffix is
-        emitted for those.
+        GuidedFilter (rb_a), DCT (rb_b), GFG-FGF (rb_gfg) and both Depth Map
+        modes rely on the kernel-size slider; DTCWT, Pyramid and StackMFF-V4
+        ignore it, so no suffix is emitted for those.
         """
         window = self.window
-        if window.rb_a.isChecked() or window.rb_b.isChecked() or window.rb_gfg.isChecked():
+        if (window.rb_a.isChecked() or window.rb_b.isChecked()
+                or window.rb_gfg.isChecked()
+                or window.rb_dmap_max.isChecked() or window.rb_dmap_avg.isChecked()):
             try:
                 return f"_k{int(window.slider_smooth.value())}"
             except Exception:
@@ -101,6 +103,10 @@ class ExportManager:
             fusion_method = "GFGFGF"
         elif window.rb_pyramid.isChecked():
             fusion_method = "Pyramid"
+        elif window.rb_dmap_max.isChecked():
+            fusion_method = "DepthMapMax"
+        elif window.rb_dmap_avg.isChecked():
+            fusion_method = "DepthMapAvg"
         elif window.rb_d.isChecked():
             fusion_method = "StackMFFV4"
         else:

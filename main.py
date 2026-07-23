@@ -240,6 +240,8 @@ class OpenFocus(QMainWindow):
         self.rb_c = right_panel_components.rb_c
         self.rb_gfg = right_panel_components.rb_gfg
         self.rb_pyramid = right_panel_components.rb_pyramid
+        self.rb_dmap_max = right_panel_components.rb_dmap_max
+        self.rb_dmap_avg = right_panel_components.rb_dmap_avg
         self.rb_d = right_panel_components.rb_d
         self.cb_ifcnn = right_panel_components.cb_ifcnn
         self.cb_align_homography = right_panel_components.cb_align_homography
@@ -446,6 +448,8 @@ class OpenFocus(QMainWindow):
         self.rb_c.setChecked(False)
         self.rb_gfg.setChecked(False)
         self.rb_pyramid.setChecked(False)
+        self.rb_dmap_max.setChecked(False)
+        self.rb_dmap_avg.setChecked(False)
         self.rb_d.setChecked(False)
 
         # Reset the post-fusion refinement stage
@@ -531,7 +535,8 @@ class OpenFocus(QMainWindow):
         # If the clicked button is already selected, deselect it
         if selected_button.isChecked():
             # Deselect the other buttons
-            for btn in [self.rb_a, self.rb_b, self.rb_c, self.rb_gfg, self.rb_pyramid, self.rb_d]:
+            for btn in [self.rb_a, self.rb_b, self.rb_c, self.rb_gfg, self.rb_pyramid,
+                        self.rb_dmap_max, self.rb_dmap_avg, self.rb_d]:
                 if btn != selected_button:
                     btn.setChecked(False)
         # If it was not selected when clicked, do nothing (already auto-deselected)
@@ -574,6 +579,13 @@ class OpenFocus(QMainWindow):
                 # GFG-FGF uses kernel=7 by default
                 self.slider_smooth.setValue(7)
             self.current_kernel_mode = "gfg"
+        elif self.rb_dmap_max.isChecked() or self.rb_dmap_avg.isChecked():
+            # Both depth-map modes pool the focus measure over the same slider-
+            # controlled window; 9 px is the method default.
+            self.smooth_widget.setEnabled(True)
+            if self.current_kernel_mode != "dmap":
+                self.slider_smooth.setValue(9)
+            self.current_kernel_mode = "dmap"
         else:
             self.smooth_widget.setEnabled(False)
             self.current_kernel_mode = None
@@ -1078,6 +1090,8 @@ class OpenFocus(QMainWindow):
         c.rb_c.setText(trans.t('radio_dtcwt'))
         c.rb_gfg.setText(trans.t('radio_gfg'))
         c.rb_pyramid.setText(trans.t('radio_pyramid'))
+        c.rb_dmap_max.setText(trans.t('radio_depthmap_max'))
+        c.rb_dmap_avg.setText(trans.t('radio_depthmap_avg'))
         c.rb_d.setText(trans.t('radio_stackmff'))
         c.cb_ifcnn.setText(trans.t('check_ifcnn_refine'))
         # Availability tooltips carry translated text, so refresh them here too

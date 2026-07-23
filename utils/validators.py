@@ -57,6 +57,8 @@ def get_algorithm_from_checkboxes(
     rb_gfg: bool,
     rb_d: bool,
     rb_pyramid: bool = False,
+    rb_dmap_max: bool = False,
+    rb_dmap_avg: bool = False,
     default: str = "guided_filter"
 ) -> str:
     if rb_a:
@@ -69,6 +71,10 @@ def get_algorithm_from_checkboxes(
         return "gfgfgf"
     elif rb_pyramid:
         return "pyramid"
+    elif rb_dmap_max:
+        return "depthmap_max"
+    elif rb_dmap_avg:
+        return "depthmap_average"
     elif rb_d:
         return "stackmffv4"
     return default
