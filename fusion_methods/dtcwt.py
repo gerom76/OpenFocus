@@ -34,11 +34,8 @@ if not hasattr(np, "issubsctype"):
 # Optional imports with checks
 try:
     import dtcwt
-    from scipy.ndimage import maximum_filter, convolve
 except ImportError:
     dtcwt = None
-    maximum_filter = None
-    convolve = None
 
 
 def _dtcwt_impl(input_source, img_resize, N, use_gpu):
@@ -51,10 +48,10 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
         N: Number of wavelet decomposition levels.
         use_gpu: Ignored in this optimized NumPy version (CPU is used).
     """
-    if dtcwt is None or maximum_filter is None or convolve is None:
+    if dtcwt is None:
         raise RuntimeError(
-            "DTCWT fusion requires 'dtcwt' and 'scipy'. "
-            "Please install them via: pip install dtcwt scipy"
+            "DTCWT fusion requires 'dtcwt'. "
+            "Please install it via: pip install dtcwt"
         )
 
     # 1. Load and Preprocess Images
@@ -96,27 +93,40 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
         
         # c1 shape is typically (H, W, 6).
         # We want to filter spatially (H, W) but independently for each direction (6).
-        # We construct a 3D kernel: (window_size, window_size, 1).
-        footprint = np.ones((window_size, window_size, 1), dtype=bool)
+        # OpenCV filters work on 2D planes, so the 6 slices are looped.
+        dilate_kernel = np.ones((window_size, window_size), dtype=np.uint8)
 
         # 1. Compute Magnitudes
         mag1 = np.abs(c1)
         mag2 = np.abs(c2)
 
         # 2. Activity Level Measurement (Max Filter)
-        # Applying 3D filter with size (3,3,1) acts as 2D filter on each of the 6 slices in parallel.
-        A1 = maximum_filter(mag1, footprint=footprint, mode='reflect')
-        A2 = maximum_filter(mag2, footprint=footprint, mode='reflect')
+        # cv2.dilate is a sliding maximum; its default border ignores
+        # out-of-bounds pixels, which for a max filter is bit-identical to
+        # scipy's reflect mode (reflection only duplicates in-window values).
+        A1 = np.empty_like(mag1)
+        A2 = np.empty_like(mag2)
+        for d in range(mag1.shape[2]):
+            A1[:, :, d] = cv2.dilate(np.ascontiguousarray(mag1[:, :, d]), dilate_kernel)
+            A2[:, :, d] = cv2.dilate(np.ascontiguousarray(mag2[:, :, d]), dilate_kernel)
 
         # 3. Initial Mask Generation
         initial_mask = A1 > A2  # Boolean array (H, W, 6)
 
-        # 4. Consistency Verification (Majority Filter / Convolution)
-        # Using a float kernel of ones to count neighbors
-        kernel_weights = np.ones((window_size, window_size, 1), dtype=np.float32)
-        
-        # Convolve input mask (converted to float) with kernel
-        count_map = convolve(initial_mask.astype(np.float32), kernel_weights, mode='constant', cval=0.0)
+        # 4. Consistency Verification (Majority Filter)
+        # Unnormalized box filter counts each pixel's agreeing neighbours.
+        # BORDER_CONSTANT zero-pads, keeping the border behaviour of the
+        # previous mode='constant', cval=0.0 convolution (the border bias of
+        # item 14 in docs/ALGORITHM_IMPROVEMENTS.md is preserved deliberately
+        # so this swap stays bit-identical).
+        mask_f32 = initial_mask.astype(np.float32)
+        count_map = np.empty_like(mask_f32)
+        for d in range(mask_f32.shape[2]):
+            count_map[:, :, d] = cv2.boxFilter(
+                np.ascontiguousarray(mask_f32[:, :, d]), -1,
+                (window_size, window_size),
+                normalize=False, borderType=cv2.BORDER_CONSTANT,
+            )
 
         # Threshold: if more than half the window supports source 1, use source 1
         threshold = (window_size * window_size) / 2.0

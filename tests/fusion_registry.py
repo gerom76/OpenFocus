@@ -291,7 +291,7 @@ METHODS = [
     ),
     FusionMethod(
         key="dtcwt", label="DTCWT", fuse=_dtcwt,
-        check=_needs("dtcwt", "scipy"), params={"N": 4},
+        check=_needs("dtcwt"), params={"N": 4},
         sweeps=(
             ("N", [1, 2, 3, 4, 5, 6],
              "How many times the frame is halved into coarser scales before "

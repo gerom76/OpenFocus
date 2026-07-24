@@ -27,7 +27,7 @@ remains.
 |---|--------|----------|-------|--------|--------|-------|
 | 1 | GFG-FGF | Quality | Focus measured on one colour channel; fails outright when detail is not in it - *fixed in 1.5.7* | High | Low | 100% |
 | 2 | GFG-FGF | Quality | Whole frames discarded by a global 15% sharpness threshold - *fixed in 1.5.7* | High | Low | 100% |
-| 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically | High | Low | 0% |
+| 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically - *fixed in 1.11.1* | High | Low | 100% |
 | 4 | DCT | Quality | Result depends on the order frames are passed in | Medium | Low | 0% |
 | 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial | 100% |
 | 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip - *fixed in 1.5.5* | Medium | Medium | 100% |
@@ -42,8 +42,8 @@ remains.
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
 | 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift | Low | Medium | 0% |
 
-**Overall: 39% done** - 6 of 16 items fully fixed, item 8 partially (the GPU
-default shipped; the CPU cost itself is untouched), 9 untouched.
+**Overall: 45% done** - 7 of 16 items fully fixed, item 8 partially (the GPU
+default shipped; the CPU cost itself is untouched), 8 untouched.
 
 ---
 
@@ -145,7 +145,7 @@ and `::test_gfgfgf_finds_detail_in_any_colour_channel`.
 
 ## 3. DTCWT spends 30% of its time in two replaceable scipy calls
 
-**Category: performance. Impact: high. Effort: low.**
+**Category: performance. Impact: high. Effort: low. Fixed in 1.11.1.**
 
 Profiling 6 frames at 768x768 (2.56 s total) puts 0.78 s in
 `scipy.ndimage.maximum_filter` and `scipy.ndimage.convolve`, both called from
@@ -162,8 +162,26 @@ quality trade-off. It also removes the only scipy dependency in the hot path.
 **Fix.** Replace the two calls, looping the 6 orientation slices (OpenCV works on
 2D planes). Expect roughly a 20-25% cut in DTCWT CPU time.
 
-**Status at 1.11.0: open.** Both scipy calls are still in
-`fuse_highfreq_vectorized`.
+**Fixed in 1.11.1**, exactly as prescribed: both calls replaced, looping the
+six orientation slices. `cv2.dilate` stands in for the max filter - its
+default border ignores out-of-bounds pixels, which for a max filter is the
+same set of values scipy's reflect mode produces, since reflection only
+duplicates pixels already inside the window. The neighbour count uses
+`cv2.boxFilter(normalize=False, borderType=BORDER_CONSTANT)`, whose
+zero-padding matches the previous `mode='constant', cval=0.0` - which keeps
+the item 14 border bias, deliberately, so the swap stays bit-identical (see
+the note there).
+
+Verified bit-identical against the scipy path at the filter level (random
+complex input, sizes 7x129 to 768x768, windows 3/5/7) and end to end: the
+fused image from a 6-frame 768x768 photographic stack is byte-for-byte the
+same as before the change. DTCWT CPU time on that stack fell from 1.53 s to
+1.16 s (best of 3) - a 24.5% cut, within the predicted 20-25%. The scipy
+import is gone from `dtcwt.py`, and with it the last direct scipy import in
+the codebase; the registry check and the install hint in
+`core/multi_focus_fusion.py` no longer ask for scipy. (scipy is still listed
+in `requirements.txt` and the PyInstaller build commands - dropping it from
+packaging is a separate decision.)
 
 ---
 
@@ -602,9 +620,10 @@ undercounted there, and the border strip leans toward the second source
 regardless of sharpness.
 
 **Fix.** Reflect the neighbour count at the border, or threshold against the
-true neighbour count. Note the interaction with item 3: the `cv2.boxFilter`
-substitution was verified bit-identical, which preserves this bias - decide
-deliberately whether that swap should keep parity or fix both at once.
+true neighbour count. Note the interaction with item 3: its `cv2.boxFilter`
+substitution landed in 1.11.1 with parity kept deliberately
+(`borderType=BORDER_CONSTANT`), so this bias survives that swap unchanged
+and remains open to fix on its own terms.
 
 ---
 

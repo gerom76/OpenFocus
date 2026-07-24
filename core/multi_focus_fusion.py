@@ -279,7 +279,7 @@ class MultiFocusFusion:
                 importlib.import_module("dtcwt")
             else:
                 raise RuntimeError(
-                    "DTCWT fusion requires the dtcwt package on CPU. Install it with: pip install dtcwt scipy"
+                    "DTCWT fusion requires the dtcwt package on CPU. Install it with: pip install dtcwt"
                 )
 
     def _validate_spatial_environment(self) -> None:
