@@ -374,8 +374,22 @@ class TranslationManager(QObject):
         <h3>Parallel ECC Computation</h3>
         <p>Computes the ECC transform between each pair of adjacent frames concurrently
         across CPU cores. Results are identical to sequential computation, only faster
-        (roughly 2x on typical stacks). Disable only for troubleshooting.</p>''',
+        (roughly 2x on typical stacks). Disable only for troubleshooting.</p>
+
+        <h3>Reference Frame</h3>
+        <p>The frame held fixed while every other frame is aligned onto it. Alignment
+        chains each frame to its neighbour, so error accumulates with distance from
+        the reference.</p>
+        <p><b>First</b> (default) references frame 0, matching earlier behaviour.
+        <b>Middle</b> references the centre frame, halving the longest chain and
+        spreading any residual drift symmetrically across the stack - useful for
+        long stacks where the far end drifts. <b>Last</b> anchors on the final
+        frame, mirroring First from the other end.</p>''',
                 'dialog_reg_parallel_ecc': 'Parallel ECC computation',
+                'dialog_reg_reference': 'Reference Frame:',
+                'dialog_reg_reference_first': 'First',
+                'dialog_reg_reference_middle': 'Middle',
+                'dialog_reg_reference_last': 'Last',
                 'dialog_thread_title': 'Thread Settings',
                 'dialog_thread_group': 'Thread Count',
                 'dialog_thread_label': 'Thread Count:',
@@ -920,8 +934,20 @@ class TranslationManager(QObject):
 
         <h3>并行 ECC 计算</h3>
         <p>在多个 CPU 核心上并发计算相邻帧之间的 ECC 变换。结果与串行计算完全一致，
-        只是速度更快（典型图像栈约 2 倍）。仅在排查问题时才需要禁用。</p>''',
-                'dialog_reg_parallel_ecc': '并行 ECC 计算'
+        只是速度更快（典型图像栈约 2 倍）。仅在排查问题时才需要禁用。</p>
+
+        <h3>参考帧</h3>
+        <p>配准时保持固定、供其他帧对齐的基准帧。配准会将每一帧与相邻帧逐级串联，
+        因此误差会随着与参考帧的距离而累积。</p>
+        <p><b>首帧</b>（默认）以第 0 帧为参考，与旧版行为一致。
+        <b>中间帧</b>以中心帧为参考，可将最长的串联链减半，并让残余漂移在图像栈中
+        对称分布——适用于远端容易漂移的长图像栈。<b>末帧</b>以最后一帧为参考，
+        相当于从另一端进行首帧对齐。</p>''',
+                'dialog_reg_parallel_ecc': '并行 ECC 计算',
+                'dialog_reg_reference': '参考帧:',
+                'dialog_reg_reference_first': '首帧',
+                'dialog_reg_reference_middle': '中间帧',
+                'dialog_reg_reference_last': '末帧'
             }
         }
 

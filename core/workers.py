@@ -4,7 +4,7 @@ import os
 import cv2
 import numpy as np
 import imageio.v2 as imageio
-from core.registration import ImageRegistration
+from core.registration import ImageRegistration, resolve_reference_index
 from core.multi_focus_fusion import MultiFocusFusion
 from core.cancellation import RenderCancelled
 from core import contrast
@@ -138,6 +138,7 @@ class RenderWorker(QThread):
         ecc_parallel: bool = True,
         ifcnn_refine: bool = False,
         need_align_scale: bool = False,
+        reference_mode: str = "first",
     ):
         super().__init__()
         # Set by cancel() from the GUI thread to request an early, cooperative
@@ -158,6 +159,9 @@ class RenderWorker(QThread):
         self.need_align_scale = bool(need_align_scale)
         self.need_align_homography = need_align_homography
         self.need_align_ecc = need_align_ecc
+        # Which frame stays fixed during registration ('first' or 'middle').
+        # Resolved to a concrete index per stage once the frame count is known.
+        self.reference_mode = reference_mode or "first"
 
         # Fusion options
         self.need_fusion = need_fusion
@@ -220,6 +224,7 @@ class RenderWorker(QThread):
                 self.need_align_scale,
                 self.need_align_homography,
                 self.need_align_ecc,
+                self.reference_mode,
             )
             need_registration = (
                 self.need_align_scale
@@ -297,12 +302,12 @@ class RenderWorker(QThread):
             import traceback
             traceback.print_exc()
 
-    def _make_registration(self, mode):
+    def _make_registration(self, mode, reference_index=0):
         """Build an ImageRegistration for one stage, honouring the UI downscale width."""
         if self.reg_downscale_width is not None:
             return ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
-                                     ecc_parallel=self.ecc_parallel)
-        return ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
+                                     ecc_parallel=self.ecc_parallel, reference_index=reference_index)
+        return ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel, reference_index=reference_index)
 
     def _run_registration(self, images):
         """Perform image registration.
@@ -315,10 +320,17 @@ class RenderWorker(QThread):
 
         processed = images
 
+        # Every stage preserves the frame count, so the reference index resolves
+        # once from the incoming stack and holds across scale/homography/ECC.
+        reference_index = resolve_reference_index(self.reference_mode, len(images))
+        if reference_index != 0:
+            print(f"Registration: reference frame = {reference_index} "
+                  f"(mode={self.reference_mode})", flush=True)
+
         # Stage 1: scale / focus-breathing correction (similarity transform)
         if self.need_align_scale:
             print(f"Registration started: mode=scale, {len(processed)} images", flush=True)
-            processed = self._make_registration("scale").process(
+            processed = self._make_registration("scale", reference_index).process(
                 processed, output_path=None, thread_count=self.thread_count)
 
         # Stage 2: homography and/or ECC refinement
@@ -333,7 +345,7 @@ class RenderWorker(QThread):
 
         if mode is not None:
             print(f"Registration started: mode={mode}, {len(processed)} images", flush=True)
-            processed = self._make_registration(mode).process(
+            processed = self._make_registration(mode, reference_index).process(
                 processed, output_path=None, thread_count=self.thread_count)
 
         alignment_time = time.time() - alignment_start_time
@@ -525,7 +537,8 @@ class BatchWorker(QThread):
                  tile_enabled=None, tile_block_size=None, tile_overlap=None, tile_threshold=None, thread_count: int = 4,
                  stackmffv4_batch_size: int = 2,
                  import_mode="multiple_folders", split_method=None, split_param=None,
-                 single_folder_images_with_times=None, ecc_parallel: bool = True):
+                 single_folder_images_with_times=None, ecc_parallel: bool = True,
+                 reference_mode: str = "first"):
         super().__init__()
         self.folder_paths = folder_paths
         self.output_type = output_type
@@ -542,6 +555,8 @@ class BatchWorker(QThread):
         from core.registration import ImageRegistration
         self.reg_downscale_width = reg_downscale_width
         self.ecc_parallel = bool(ecc_parallel)
+        # Frame held fixed during registration ('first' or 'middle').
+        self.reference_mode = reference_mode or "first"
         self.tile_enabled = tile_enabled
         self.tile_block_size = tile_block_size
         self.tile_overlap = tile_overlap
@@ -562,13 +577,15 @@ class BatchWorker(QThread):
         if not reg_methods:
             return images.copy()
 
-        from core.registration import ImageRegistration
+        from core.registration import ImageRegistration, resolve_reference_index
+
+        reference_index = resolve_reference_index(self.reference_mode, len(images))
 
         def make(mode):
             if getattr(self, 'reg_downscale_width', None) is not None:
                 return ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
-                                         ecc_parallel=self.ecc_parallel)
-            return ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel)
+                                         ecc_parallel=self.ecc_parallel, reference_index=reference_index)
+            return ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel, reference_index=reference_index)
 
         processed = images
 

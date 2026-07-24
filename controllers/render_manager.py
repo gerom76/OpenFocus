@@ -168,7 +168,9 @@ class RenderManager:
             # Tell the Worker that the images are already aligned
             effective_aligned_images = window.roi_aligned_images
             effective_is_aligned = True
-            effective_last_alignment_options = (False, False, True)  # indicates ECC is done
+            # ROI pre-alignment always references frame 0 (see ROIAlignmentWorker).
+            effective_reference_mode = "first"
+            effective_last_alignment_options = (False, False, True, effective_reference_mode)  # indicates ECC is done
         else:
             source_images = window.raw_images
             effective_need_align_scale = need_align_scale
@@ -176,6 +178,7 @@ class RenderManager:
             effective_need_align_ecc = need_align_ecc
             effective_aligned_images = window.aligned_images
             effective_is_aligned = window.is_images_aligned
+            effective_reference_mode = getattr(window, "reference_frame_mode", "first")
             effective_last_alignment_options = window.last_alignment_options
 
         self.worker = RenderWorker(
@@ -208,6 +211,7 @@ class RenderManager:
             ecc_parallel=getattr(window, "ecc_parallel", True),
             ifcnn_refine=ifcnn_refine,
             need_align_scale=effective_need_align_scale,
+            reference_mode=effective_reference_mode,
         )
 
         self.worker.finished_signal.connect(self.on_render_finished)
@@ -281,6 +285,7 @@ class RenderManager:
                     worker.need_align_scale,
                     worker.need_align_homography,
                     worker.need_align_ecc,
+                    worker.reference_mode,
                 )
 
             total_time = alignment_time + fusion_time

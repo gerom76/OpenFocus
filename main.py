@@ -59,6 +59,7 @@ from constants import (
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
     REG_DOWNSCALE_WIDTH, DEFAULT_THREAD_COUNT,
     STACKMFFV4_BATCH_SIZE, ECC_PARALLEL,
+    REFERENCE_FRAME_MODE,
 )
 
 class OpenFocus(QMainWindow):
@@ -105,6 +106,9 @@ class OpenFocus(QMainWindow):
         self.reg_downscale_width = REG_DOWNSCALE_WIDTH
         # Parallel ECC pair computation (user-configurable in Settings -> Registration)
         self.ecc_parallel = ECC_PARALLEL
+        # Reference frame for registration: 'first' (frame 0, chained - default)
+        # or 'middle'. User-configurable in Settings -> Registration.
+        self.reference_frame_mode = REFERENCE_FRAME_MODE
         # Global thread-count setting, default 4 (can be changed in Settings)
         self.thread_count = DEFAULT_THREAD_COUNT
         # StackMFF V4 batch-size setting, default 2 (can be changed in Settings)

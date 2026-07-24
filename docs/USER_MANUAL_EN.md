@@ -213,6 +213,24 @@ Access additional settings via **Settings → Registration**:
 - Lower values = faster processing, potentially lower accuracy
 - Higher values = slower processing, potentially higher accuracy
 
+#### Reference Frame
+
+Registration aligns each frame to its neighbour and chains those transforms back
+to a single fixed frame — the *reference*. Alignment error accumulates with
+distance from the reference, so on long stacks the frames farthest from it drift
+the most. Choose which frame stays fixed:
+
+- **First** (default): anchors on frame 0, matching earlier versions. Error
+  grows toward the end of the stack.
+- **Middle**: anchors on the centre frame, halving the longest chain so residual
+  drift is spread symmetrically across the stack. Best for long stacks where the
+  far end drifts or shows ghosting.
+- **Last**: anchors on the final frame — the mirror of **First**, useful when the
+  sharpest or most important detail sits at the end of the stack.
+
+The reference frame is held fixed (it is only cropped to the shared valid
+region, never warped); every other frame is aligned onto it.
+
 ---
 
 ## 7. Image Fusion Methods
@@ -369,6 +387,8 @@ Access via **Settings → Registration**:
 - **Downscale Width**: Preprocessing resolution for registration
   - Default: 1024px
   - Lower for speed, higher for accuracy
+- **Reference Frame**: Frame held fixed during alignment — **First** (default),
+  **Middle**, or **Last**. Middle minimises accumulated drift on long stacks.
 
 ### Thread Count Settings
 

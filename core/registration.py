@@ -54,9 +54,27 @@ if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
         pass
 
 
+def resolve_reference_index(reference_mode, num_images: int) -> int:
+    """Map a reference-frame mode onto a concrete 0-based frame index.
+
+    'middle' resolves to the centre frame (num_images // 2), 'last' to the final
+    frame; anything else - including the default 'first' - resolves to frame 0,
+    preserving the historical behaviour. Kept next to the registration code so
+    the UI, the render worker and the batch worker all agree on the mapping.
+    """
+    if not num_images or num_images <= 0:
+        return 0
+    if reference_mode == "middle":
+        return num_images // 2
+    if reference_mode == "last":
+        return num_images - 1
+    return 0
+
+
 # ========== Scale / focus-breathing correction (similarity) ==========
 
-def _align_scale_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4):
+def _align_scale_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4,
+                      reference_index: int = 0):
     """
     Focus-breathing (magnification) correction via a similarity transform.
 
@@ -80,6 +98,7 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None, downsc
         img_filenames: optional filenames matching a preloaded image list
         downscale_width: width the frames are downsampled to for feature detection
         thread_count: worker threads for feature extraction and warping
+        reference_index: frame held fixed (0 = first frame, the default)
 
     Returns:
         list of aligned images
@@ -196,6 +215,8 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None, downsc
         last_scale = curr_scale
 
     # --- 5. Warp into the shared frame and crop to the common valid region ---
+    # Re-reference the chain onto the chosen frame before cropping and warping.
+    H_matrices = _rereference_transforms(H_matrices, reference_index)
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
 
     do_crop = True
@@ -319,6 +340,47 @@ def _compute_valid_region_from_transforms(H_matrices, img_shape, margin=2):
     return top, bottom, left, right
 
 
+def _rereference_transforms(H_matrices, reference_index):
+    """Re-express every frame's transform relative to a chosen reference frame.
+
+    The pairwise chain is always accumulated against frame 0, so H_matrices[i]
+    is the forward map placing frame i onto the frame-0 canvas (and
+    H_matrices[0] is the identity). Post-composing every map with the inverse
+    of the reference frame's map re-expresses the whole stack on the frame-ref
+    canvas: the reference frame collapses to identity - it stays fixed, only
+    cropped - and all other frames align onto it.
+
+    Choosing the middle frame as the reference halves the maximum chain length,
+    so accumulated drift is spread symmetrically across the stack instead of
+    piling up at the far end. reference_index 0 (or out of range) returns the
+    list unchanged, preserving the original frame-0 behaviour.
+
+    Args:
+        H_matrices: list of 3x3 forward transforms (frame i -> frame 0)
+        reference_index: index of the frame to hold fixed
+
+    Returns:
+        list of transforms re-referenced to reference_index
+    """
+    if reference_index is None or reference_index <= 0 or reference_index >= len(H_matrices):
+        return H_matrices
+
+    ref = H_matrices[reference_index]
+    if ref is None:
+        return H_matrices
+
+    try:
+        ref_inv = np.linalg.inv(ref)
+    except np.linalg.LinAlgError:
+        # A singular reference transform cannot be inverted; fall back to
+        # frame 0 rather than corrupting the whole stack.
+        print(f"Warning: reference frame {reference_index} transform is singular. "
+              f"Falling back to frame 0.")
+        return H_matrices
+
+    return [ref_inv @ H if H is not None else None for H in H_matrices]
+
+
 def _crop_with_transforms(images, H_matrices):
     """
     Precisely crop the image based on the transform matrices
@@ -354,7 +416,8 @@ def _crop_with_transforms(images, H_matrices):
 
 # ========== Homography alignment algorithm implementation (non-linear) ==========
 
-def _align_homography_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4):
+def _align_homography_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4,
+                           reference_index: int = 0):
     """
     Optimized commercial-grade image-alignment algorithm
     Features:
@@ -494,9 +557,12 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
     # --- 4. Apply transforms and crop in parallel ---
     print("  - Step 3/3: Warping images concurrently...")
     
+    # Re-reference the chain onto the chosen frame before cropping and warping.
+    H_matrices = _rereference_transforms(H_matrices, reference_index)
+
     # Precompute the crop region and warp directly into the target region, avoiding the waste of warping first and cropping later
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
-    
+
     do_crop = True
     if top >= bottom or left >= right:
         print("Warning: Invalid crop region, skipping crop.")
@@ -545,7 +611,7 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
 # ========== ECC alignment algorithm implementation (high precision) ==========
 
 def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscale_width=1000, thread_count: int = 4,
-                    parallel_ecc: bool = True):
+                    parallel_ecc: bool = True, reference_index: int = 0):
     """
     High-precision image-stack alignment algorithm based on ECC (Enhanced Correlation Coefficient)
     Suitable for: fine, sub-pixel refinement of global drift when feature detection is unreliable
@@ -704,6 +770,9 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         # Record the inverse transform (maps target back to source)
         H_inv = np.linalg.inv(H_global)
         H_matrices.append(H_inv.copy())
+
+    # Re-reference the chain onto the chosen frame before cropping and warping.
+    H_matrices = _rereference_transforms(H_matrices, reference_index)
 
     # --- 5. Apply transforms and crop in parallel ---
     # print("  - Step 3/3: Warping and saving concurrently...")
@@ -1034,13 +1103,17 @@ class ImageRegistration:
     
     SUPPORTED_METHODS = ['scale', 'homography', 'ecc', 'both']
 
-    def __init__(self, method: str = 'homography', downscale_width: int = 1024, ecc_parallel: bool = True):
+    def __init__(self, method: str = 'homography', downscale_width: int = 1024, ecc_parallel: bool = True,
+                 reference_index: int = 0):
         """
         Initialize the registrar
 
         Args:
             method (str): registration method name, one of 'scale', 'homography', 'ecc', 'both'
             ecc_parallel (bool): Compute ECC pair matrices concurrently (identical results, faster)
+            reference_index (int): index of the frame held fixed during alignment.
+                0 (the default) keeps the historical behaviour of referencing the
+                first frame; the middle frame minimises accumulated chain drift.
         """
         if method not in self.SUPPORTED_METHODS:
             raise ValueError(
@@ -1052,6 +1125,8 @@ class ImageRegistration:
         # User-configurable downsampling width, used in preprocessing stages such as feature extraction
         self.downscale_width = int(downscale_width) if downscale_width is not None else 1024
         self.ecc_parallel = bool(ecc_parallel)
+        # Frame that stays fixed while the others align onto it (0 = first frame).
+        self.reference_index = int(reference_index) if reference_index is not None else 0
     
     def process(self, 
                 input_source: Union[str, List[np.ndarray]], 
@@ -1104,7 +1179,8 @@ class ImageRegistration:
         Returns:
             list of registered images
         """
-        return _align_scale_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count)
+        return _align_scale_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
+                                 reference_index=self.reference_index)
 
     def _process_homography(self,
                            input_source: Union[str, List[np.ndarray]],
@@ -1120,7 +1196,8 @@ class ImageRegistration:
         Returns:
             list of registered images
         """
-        return _align_homography_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count)
+        return _align_homography_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
+                                      reference_index=self.reference_index)
     
     def _process_ecc(self, 
                     input_source: Union[str, List[np.ndarray]], 
@@ -1137,7 +1214,7 @@ class ImageRegistration:
             list of registered images
         """
         return _align_ecc_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
-                               parallel_ecc=self.ecc_parallel)
+                               parallel_ecc=self.ecc_parallel, reference_index=self.reference_index)
     
     def set_method(self, method: str):
         """

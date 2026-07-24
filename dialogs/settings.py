@@ -522,6 +522,21 @@ class RegistrationSettingsDialog(QDialog):
         self.cb_parallel_ecc.setChecked(True)
         g_layout.addWidget(self.cb_parallel_ecc)
 
+        # Reference frame: which frame stays fixed while the others align onto it.
+        ref_layout = QHBoxLayout()
+        ref_label = QLabel(trans.t("dialog_reg_reference"))
+        ref_label.setMinimumWidth(120)
+        ref_layout.addWidget(ref_label)
+        self.rb_ref_first = QRadioButton(trans.t("dialog_reg_reference_first"))
+        self.rb_ref_middle = QRadioButton(trans.t("dialog_reg_reference_middle"))
+        self.rb_ref_last = QRadioButton(trans.t("dialog_reg_reference_last"))
+        self.rb_ref_first.setChecked(True)
+        ref_layout.addWidget(self.rb_ref_first)
+        ref_layout.addWidget(self.rb_ref_middle)
+        ref_layout.addWidget(self.rb_ref_last)
+        ref_layout.addStretch()
+        g_layout.addLayout(ref_layout)
+
         layout.addWidget(group)
 
         btn_layout = QHBoxLayout()
@@ -555,12 +570,26 @@ class RegistrationSettingsDialog(QDialog):
             except Exception:
                 self.spin_downscale.setValue(1024)
             self.cb_parallel_ecc.setChecked(bool(getattr(self.parent_window, "ecc_parallel", True)))
+            mode = getattr(self.parent_window, "reference_frame_mode", "first")
+            if mode == "middle":
+                self.rb_ref_middle.setChecked(True)
+            elif mode == "last":
+                self.rb_ref_last.setChecked(True)
+            else:
+                self.rb_ref_first.setChecked(True)
 
     def on_accept(self):
         val = int(self.spin_downscale.value())
         if self.parent_window:
             setattr(self.parent_window, "reg_downscale_width", val)
             setattr(self.parent_window, "ecc_parallel", self.cb_parallel_ecc.isChecked())
+            if self.rb_ref_middle.isChecked():
+                reference_mode = "middle"
+            elif self.rb_ref_last.isChecked():
+                reference_mode = "last"
+            else:
+                reference_mode = "first"
+            setattr(self.parent_window, "reference_frame_mode", reference_mode)
         self.accept()
 
     def show_help(self):

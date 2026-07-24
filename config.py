@@ -22,6 +22,8 @@ class RegistrationOptions:
     need_homography: bool = False
     need_ecc: bool = False
     downscale_width: Optional[int] = None
+    # Frame held fixed during alignment: 'first' (frame 0, chained) or 'middle'.
+    reference_mode: str = "first"
 
 
 @dataclass
@@ -52,4 +54,6 @@ class RenderOptions:
     fusion_options: FusionOptions
     roi_options: ROIOptions
     thread_count: int = 4
-    last_alignment_options: Optional[Tuple[bool, bool, bool]] = None
+    # (need_scale, need_homography, need_ecc, reference_mode) used for the last
+    # registration, so cached aligned images can be reused only on an exact match.
+    last_alignment_options: Optional[Tuple[bool, bool, bool, str]] = None

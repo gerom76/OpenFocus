@@ -15,6 +15,13 @@ ECC_PARALLEL = True
 HOMOGRAPHY_DOWNSCALE_WIDTH = 1600
 ECC_DOWNSCALE_WIDTH = 1000
 
+# Which frame the registration chain is referenced to. 'first' keeps the
+# historical behaviour (frame 0 held fixed); 'middle' halves the maximum chain
+# length, spreading accumulated drift symmetrically across the stack; 'last'
+# anchors on the final frame.
+REFERENCE_FRAME_MODE = "first"
+REFERENCE_FRAME_MODES = ("first", "middle", "last")
+
 STATUS_UPDATE_INTERVAL_MS = 2000
 
 BYTES_TO_GB = 1024 ** 3

@@ -160,6 +160,7 @@ class SettingsManager:
             "tile_threshold": window.tile_threshold,
             "reg_downscale_width": window.reg_downscale_width,
             "ecc_parallel": window.ecc_parallel,
+            "reference_frame_mode": getattr(window, "reference_frame_mode", "first"),
             "thread_count": window.thread_count,
             "stackmffv4_batch_size": window.stackmffv4_batch_size,
             "bit_depth_mode": bitdepth.get_mode(),
@@ -273,6 +274,11 @@ class SettingsManager:
         ):
             if attr in data:
                 setattr(window, attr, data[attr])
+
+        # Reference frame mode, validated so a hand-edited config can only ever
+        # leave a value the registration pipeline understands.
+        ref_mode = data.get("reference_frame_mode")
+        window.reference_frame_mode = ref_mode if ref_mode in ("first", "middle", "last") else "first"
 
         # Recently opened paths
         self.recent_folders = self._sanitize_recent(data.get("recent_folders"))
