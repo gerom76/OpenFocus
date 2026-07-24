@@ -57,8 +57,25 @@ def _normalize_image_stack(images: Sequence[np.ndarray]) -> Tuple[List[np.ndarra
         
     if target_h < 8 or target_w < 8:
         raise ValueError("Image size is too small")
-        
+
     return normalized, (target_h, target_w)
+
+def _median_filter_index_map(index_map: np.ndarray, kernel_size: int) -> np.ndarray:
+    """Median-filter a uint16 index map.
+
+    cv2.medianBlur accepts 16-bit input only at apertures 3 and 5, so larger
+    kernels are approximated by iterating the 5-aperture filter: each pass
+    extends the effective radius by 2, so we run enough passes to cover the
+    requested kernel's radius.
+    """
+    if kernel_size < 3:
+        return index_map
+    if kernel_size <= 5:
+        return cv2.medianBlur(index_map, kernel_size)
+    passes = ((kernel_size - 1) // 2 + 1) // 2
+    for _ in range(passes):
+        index_map = cv2.medianBlur(index_map, 5)
+    return index_map
 
 def dct_focus_stack_fusion(
     source: Union[str, ArraySource],
@@ -105,9 +122,10 @@ def dct_focus_stack_fusion(
     # --- 2. Quickly compute the variance map (core optimization) ---
     # Preallocate space
     max_variance_map = np.full((map_h, map_w), -1.0, dtype=np.float32)
-    # Use a smaller data type to store indices, saving memory
-    idx_dtype = np.uint8 if len(images) < 256 else np.int32
-    best_index_map = np.zeros((map_h, map_w), dtype=idx_dtype)
+    # uint16 covers any realistic stack depth and, unlike uint8, does not wrap
+    # indices at 256 frames; medianBlur (apertures 3/5) and INTER_NEAREST
+    # resize both accept it, so the map stays uint16 end to end.
+    best_index_map = np.zeros((map_h, map_w), dtype=np.uint16)
 
     for idx, bgr_img in enumerate(normalized_images):
         # Crop the edges to match the block tiling
@@ -140,26 +158,14 @@ def dct_focus_stack_fusion(
         best_index_map[mask] = idx
 
     # --- 3. Consistency verification (median filtering) ---
-    # Must convert back to a type suitable for filtering; uint8 would also work, but convert for robustness
-    if idx_dtype == np.uint8:
-        map_to_filter = best_index_map
-    else:
-        map_to_filter = best_index_map.astype(np.float32)
-
     # Two passes of median filtering to remove noise
-    filtered_map = cv2.medianBlur(map_to_filter, kernel_size)
-    filtered_map = cv2.medianBlur(filtered_map, kernel_size)
-    
-    # Convert back to integer indices
-    if filtered_map.dtype != np.int32 and filtered_map.dtype != np.uint8:
-        final_index_map = filtered_map.astype(np.int32)
-    else:
-        final_index_map = filtered_map
+    filtered_map = _median_filter_index_map(best_index_map, kernel_size)
+    final_index_map = _median_filter_index_map(filtered_map, kernel_size)
 
     # --- 4. Fast reconstruction ---
     # Scale the small index map back up to the original size in one go (Nearest Neighbor)
     full_size_indices = cv2.resize(
-        final_index_map.astype(np.uint8), # resize is fastest on uint8
+        final_index_map,
         (w_trim, h_trim),
         interpolation=cv2.INTER_NEAREST
     )

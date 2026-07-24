@@ -35,15 +35,15 @@ remains.
 | 8 | DTCWT | Performance | CPU cost grows faster than image area | Medium | Medium | 25% |
 | 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything - *investigated and closed in 1.5.6* | Low | Low | 100% |
 | 10 | Guided Filter | Performance | Dead code; per-frame float32 copies dominate memory - *fixed in 1.5.6* | Low | Low | 100% |
-| 11 | DCT | Quality | Crashes (default kernel) or corrupts indices on stacks of 256+ frames | High | Low | 0% |
+| 11 | DCT | Quality | Crashes (default kernel) or corrupts indices on stacks of 256+ frames - *fixed in 1.11.2* | High | Low | 100% |
 | 12 | DTCWT | Quality | Each colour channel picks its own source frame, so colour splits at depth edges | Medium | Low | 0% |
 | 13 | DTCWT, Pyramid, Depth Map | Robustness | Folder loader copy-pasted four ways; mixed filenames crash the sort | Low | Low | 0% |
 | 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders | Low | Trivial | 0% |
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
 | 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift | Low | Medium | 0% |
 
-**Overall: 45% done** - 7 of 16 items fully fixed, item 8 partially (the GPU
-default shipped; the CPU cost itself is untouched), 8 untouched.
+**Overall: 52% done** - 8 of 16 items fully fixed, item 8 partially (the GPU
+default shipped; the CPU cost itself is untouched), 7 untouched.
 
 ---
 
@@ -530,7 +530,7 @@ the previous implementation on the test stack.
 
 ## 11. DCT fails outright on stacks of 256 frames or more
 
-**Category: quality. Impact: high. Effort: low.**
+**Category: quality. Impact: high. Effort: low. Fixed in 1.11.2.**
 
 `dct.py` stores its per-block winner map as `uint8` while the stack has fewer
 than 256 frames, and widens it to `int32` beyond that:
@@ -560,6 +560,20 @@ input at apertures 3 and 5 (iterate the 5-aperture filter when a larger kernel
 is requested), and `cv2.resize` with `INTER_NEAREST` handles `uint16`
 directly, so the downcast can simply be deleted. Whatever lands must be
 mirrored in `dct_torch.py`, which shares the design.
+
+**Fixed in 1.11.2**, as prescribed: the winner map is `uint16` from allocation
+through filtering, resize and reconstruction, and the `astype(np.uint8)`
+downcast is gone. Median filtering goes through a shared
+`_median_filter_index_map` helper: apertures 3 and 5 run directly on the
+16-bit map; larger kernels iterate the 5-aperture filter enough times to
+cover the requested radius (two passes for the default kernel of 7). The
+same helper and `uint16` map now drive the consistency step in
+`dct_torch.py`, which previously took a lossy `float32` median for stacks of
+256+ frames and no longer needs cv2 directly. Verified: 260 random 64x64
+frames at the default kernel now fuse without error, indices above 255
+survive the filter unchanged, and the DCT tests in
+`tests/test_fusion_quality.py` and `tests/test_fusion_characteristics.py`
+still pass.
 
 ---
 

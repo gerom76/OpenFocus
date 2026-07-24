@@ -15,12 +15,15 @@ visual sensor networks in DCT domain[J]. Computers & Electrical Engineering,
 
 from typing import Sequence, Union
 
-import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from fusion_methods.dct import _collect_images_from_folder, _normalize_image_stack
+from fusion_methods.dct import (
+    _collect_images_from_folder,
+    _median_filter_index_map,
+    _normalize_image_stack,
+)
 from fusion_methods import torch_depth
 from utils import bitdepth
 
@@ -125,10 +128,11 @@ def dct_torch_impl(
                 max_variance = torch.where(mask, var[j], max_variance)
                 best_index = torch.where(mask, torch.tensor(start + j, device=dev), best_index)
 
-        # Consistency verification: double median filter on the tiny index map (CPU/cv2)
-        index_np = best_index.cpu().numpy().astype(np.uint8 if n < 256 else np.float32)
-        filtered = cv2.medianBlur(index_np, kernel_size)
-        filtered = cv2.medianBlur(filtered, kernel_size)
+        # Consistency verification: double median filter on the tiny index map
+        # (CPU/cv2). uint16 end to end so indices never wrap at 256 frames.
+        index_np = best_index.cpu().numpy().astype(np.uint16)
+        filtered = _median_filter_index_map(index_np, kernel_size)
+        filtered = _median_filter_index_map(filtered, kernel_size)
         final_index = torch.from_numpy(filtered.astype(np.int64)).to(dev)
 
         # Pass 2: reconstruction — nearest-neighbor upscale of the index map, then
