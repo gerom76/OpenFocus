@@ -267,6 +267,13 @@ def setup_menus(window: QMainWindow) -> None:
     settings_menu.addAction(stackmffv4_batch_action)
     window.ui_objs['action_stackmffv4_batch_settings'] = stackmffv4_batch_action
 
+    gpu_loading_action = QAction(trans.t('action_gpu_loading'), window)
+    gpu_loading_action.setCheckable(True)
+    gpu_loading_action.setChecked(getattr(window, 'gpu_loading_enabled', True))
+    gpu_loading_action.triggered.connect(lambda checked: window.set_gpu_loading_enabled(checked))
+    settings_menu.addAction(gpu_loading_action)
+    window.ui_objs['action_gpu_loading'] = gpu_loading_action
+
     # --- Help Menu ---
     help_menu = menubar.addMenu(trans.t('menu_help'))
     window.ui_objs['menu_help'] = help_menu

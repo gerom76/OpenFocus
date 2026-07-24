@@ -32,6 +32,8 @@ class SourceManager:
 
     def __init__(self, window: Any):
         self.window = window
+        # Live Stop-button connection while a load is running, None otherwise.
+        self._stop_connection = None
 
     # ------------------------------------------------------------------
     # UI helpers
@@ -43,13 +45,21 @@ class SourceManager:
     # ------------------------------------------------------------------
     # Load progress
     # ------------------------------------------------------------------
-    def _begin_load_progress(self):
+    def _begin_load_progress(self, loader: Any = None):
         """Show the console progress bar and return a callback for the loader.
 
         Loading runs on the GUI thread, so the callback pumps the event loop to
-        keep the bar and the console output moving. Returns None when there is
-        no console to drive.
+        keep the bar and the console output moving - which is also what lets a
+        Stop-button click through: the button is enabled here and routed to the
+        loader's cooperative stop for the duration of the load. Returns None
+        when there is no console to drive.
         """
+        loader = loader if loader is not None else getattr(self.window, "image_loader", None)
+        button = getattr(self.window, "btn_stop", None)
+        if button is not None and loader is not None and hasattr(loader, "request_stop"):
+            self._stop_connection = button.clicked.connect(loader.request_stop)
+            button.setEnabled(True)
+
         console = getattr(self.window, "status_console", None)
         if console is None:
             return None
@@ -64,6 +74,17 @@ class SourceManager:
         return report
 
     def _end_load_progress(self) -> None:
+        # Idempotent: some load paths reach this twice (explicitly and via
+        # finally), so the Stop wiring is only undone while it exists.
+        button = getattr(self.window, "btn_stop", None)
+        if button is not None and self._stop_connection is not None:
+            try:
+                button.clicked.disconnect(self._stop_connection)
+            except TypeError:
+                pass
+            self._stop_connection = None
+            button.setEnabled(False)
+
         console = getattr(self.window, "status_console", None)
         if console is not None:
             console.stop_progress()
@@ -86,6 +107,8 @@ class SourceManager:
             )
 
             if not success:
+                if getattr(window.image_loader, "cancelled", False):
+                    return  # stopped on purpose, not an error
                 show_warning_box(window, trans.t("msg_load_failed"), trans.t("msg_load_stack_failed_text"), message)
                 return
 
@@ -124,6 +147,8 @@ class SourceManager:
             )
 
             if not success:
+                if getattr(window.image_loader, "cancelled", False):
+                    return  # stopped on purpose, not an error
                 show_warning_box(window, trans.t("msg_load_failed"), trans.t("msg_load_video_failed_text"), message)
                 return
 
@@ -272,11 +297,12 @@ class SourceManager:
             scale = dlg.get_scale_factor()
 
             success, message, full_res_images, filenames = loader.load_from_filepaths(
-                valid_paths, scale_factor=scale, progress_callback=self._begin_load_progress()
+                valid_paths, scale_factor=scale, progress_callback=self._begin_load_progress(loader)
             )
             self._end_load_progress()
             if not success:
-                show_warning_box(self.window, trans.t("msg_load_failed"), trans.t("msg_load_dropped_failed_text"), message)
+                if not getattr(loader, "cancelled", False):
+                    show_warning_box(self.window, trans.t("msg_load_failed"), trans.t("msg_load_dropped_failed_text"), message)
                 event.ignore()
                 return
             # Check image sizes (after loading / downsampling)
@@ -556,12 +582,14 @@ class SourceManager:
         loader = self.window.image_loader if hasattr(self.window, "image_loader") else ImageStackLoader()
         try:
             success, message, full_res_images, filenames = loader.load_from_filepaths(
-                file_paths, scale_factor=scale, progress_callback=self._begin_load_progress()
+                file_paths, scale_factor=scale, progress_callback=self._begin_load_progress(loader)
             )
         finally:
             self._end_load_progress()
 
         if not success:
+            if getattr(loader, "cancelled", False):
+                return  # stopped on purpose, not an error
             show_warning_box(self.window, trans.t("msg_load_failed"), trans.t("msg_load_dropped_failed_text"), message)
             return
 

@@ -163,6 +163,7 @@ class SettingsManager:
             "reference_frame_mode": getattr(window, "reference_frame_mode", "first"),
             "thread_count": window.thread_count,
             "stackmffv4_batch_size": window.stackmffv4_batch_size,
+            "gpu_loading": getattr(window, "gpu_loading_enabled", True),
             "bit_depth_mode": bitdepth.get_mode(),
             "contrast_method": getattr(window, "contrast_method", "off"),
             "contrast_strength": getattr(window, "contrast_strength", 50),
@@ -274,6 +275,11 @@ class SettingsManager:
         ):
             if attr in data:
                 setattr(window, attr, data[attr])
+
+        # GPU image loading toggle; the window setter also syncs the
+        # gpu_decode module and the menu action's check mark.
+        if isinstance(data.get("gpu_loading"), bool):
+            window.set_gpu_loading_enabled(data["gpu_loading"])
 
         # Reference frame mode, validated so a hand-edited config can only ever
         # leave a value the registration pipeline understands.

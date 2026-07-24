@@ -111,6 +111,10 @@ class OpenFocus(QMainWindow):
         self.reference_frame_mode = REFERENCE_FRAME_MODE
         # Global thread-count setting, default 4 (can be changed in Settings)
         self.thread_count = DEFAULT_THREAD_COUNT
+        # GPU image loading (nvJPEG / RAW develop), on by default and a no-op
+        # without CUDA. Held on the window for save/restore; the loader reads
+        # it from core.gpu_decode.
+        self.gpu_loading_enabled = True
         # StackMFF V4 batch-size setting, default 2 (can be changed in Settings)
         self.stackmffv4_batch_size = STACKMFFV4_BATCH_SIZE
         # Processing bit depth: 'auto' follows the source files, '8'/'16' force one.
@@ -921,6 +925,20 @@ class OpenFocus(QMainWindow):
         from dialogs import ThreadSettingsDialog
         dialog = ThreadSettingsDialog(self)
         dialog.exec()
+
+    def set_gpu_loading_enabled(self, enabled: bool):
+        """Toggle GPU image loading (nvJPEG decode and RAW develop).
+
+        Syncs the window attribute, the gpu_decode module the loader actually
+        reads, and the checkable menu action, so the three never disagree.
+        """
+        from core import gpu_decode
+        enabled = bool(enabled)
+        self.gpu_loading_enabled = enabled
+        gpu_decode.set_enabled(enabled)
+        action = getattr(self, 'ui_objs', {}).get('action_gpu_loading')
+        if action is not None and action.isChecked() != enabled:
+            action.setChecked(enabled)
 
     def show_stackmffv4_batch_settings(self):
         """Show the StackMFF V4 batch-size settings dialog"""

@@ -1,11 +1,22 @@
 """
-GPU-accelerated JPEG decoding via torchvision's nvJPEG bindings.
+GPU-accelerated image decoding.
 
-The loader hands whole stacks of JPEG byte buffers here when an NVIDIA GPU is
-available; everything else (PNG/TIFF/RAW, machines without CUDA, or files
-nvJPEG cannot handle, such as progressive JPEGs) stays on the OpenCV path.
-Decoded frames come back as BGR uint8 numpy arrays, so callers cannot tell
-which path produced a frame.
+Two entry points, both used by the loader when an NVIDIA GPU is available:
+
+- ``decode_jpegs`` decodes JPEG byte buffers with torchvision's nvJPEG
+  bindings. Files nvJPEG cannot handle (progressive JPEGs, bad data) come
+  back as None and stay on the OpenCV path.
+- ``postprocess_raw`` runs the develop stage of RAW loading on the GPU:
+  LibRaw still unpacks the mosaic on the CPU (there is no GPU LibRaw), but
+  the expensive part - demosaicing plus white balance, colour matrix,
+  auto-brightness and gamma - is reimplemented in torch, mirroring
+  ``rawpy.postprocess(use_camera_wb=True)``. Demosaicing uses the
+  Malvar-He-Cutler linear kernels, so results differ from LibRaw's AHD only
+  in fine edge detail. Returns None for anything unusual (non-Bayer sensor,
+  missing matrices, exotic orientation), which sends the file back to LibRaw.
+
+Decoded frames come back as BGR numpy arrays, so callers cannot tell which
+path produced a frame.
 """
 
 from typing import List, Optional
@@ -23,15 +34,34 @@ _BATCH = 8
 # None = not probed yet, then True/False for the life of the process.
 _available: Optional[bool] = None
 
+# User-facing switch (Settings > GPU Image Loading), persisted by the settings
+# manager. Kept separate from the capability probe so re-enabling never has to
+# re-detect the hardware.
+_enabled: bool = True
+
+
+def set_enabled(enabled: bool) -> None:
+    """Turn GPU image loading on or off; loaders honour it via is_available()."""
+    global _enabled
+    _enabled = bool(enabled)
+
+
+def is_enabled() -> bool:
+    """The user's setting alone, regardless of whether a GPU is present."""
+    return _enabled
+
 
 def is_available() -> bool:
-    """True when torch, torchvision and a working nvJPEG decoder are present.
+    """True when GPU loading is enabled and a working nvJPEG decoder exists.
 
-    The first call pays for CUDA context creation and a 1-frame smoke decode;
-    torchvision can import fine on machines where nvJPEG itself is broken, so
-    availability is proven by decoding, not by imports.
+    Checked before the capability probe so a disabled setting also skips CUDA
+    context creation. The first probe pays for that context plus a 1-frame
+    smoke decode; torchvision can import fine on machines where nvJPEG itself
+    is broken, so availability is proven by decoding, not by imports.
     """
     global _available
+    if not _enabled:
+        return False
     if _available is None:
         _available = _probe()
     return _available
@@ -99,6 +129,192 @@ def decode_jpegs(
             if img is not None:
                 out[index] = _to_bgr_numpy(img, scale_factor)
     return out
+
+
+# sRGB -> XYZ (D65), the same constants dcraw uses to derive the camera matrix.
+_XYZ_FROM_RGB = np.array([
+    [0.412453, 0.357580, 0.180423],
+    [0.212671, 0.715160, 0.072169],
+    [0.019334, 0.119193, 0.950227],
+])
+
+# LibRaw flip codes -> np.rot90 quarter turns (0 none, 3 = 180, 5/6 = 90).
+_FLIP_TO_ROT90 = {0: 0, 3: 2, 5: 1, 6: 3}
+
+# dcraw's default auto-brightness: scale so 1% of pixels clip.
+_AUTO_BRIGHT_CLIP = 0.01
+_HIST_BINS = 8192
+
+# Malvar-He-Cutler 5x5 demosaic kernels (all / 8).
+# _K_GREEN estimates G at an R or B site; _K_SAME_ROW estimates R (or B) at a
+# G site whose horizontal neighbours carry that colour, _K_SAME_COL is its
+# transpose for vertical neighbours; _K_DIAG estimates R at B sites and B at
+# R sites, whose known samples sit on the diagonals.
+_K_GREEN = np.array([
+    [0, 0, -1, 0, 0],
+    [0, 0, 2, 0, 0],
+    [-1, 2, 4, 2, -1],
+    [0, 0, 2, 0, 0],
+    [0, 0, -1, 0, 0],
+], dtype=np.float32) / 8.0
+_K_SAME_ROW = np.array([
+    [0, 0, 0.5, 0, 0],
+    [0, -1, 0, -1, 0],
+    [-1, 4, 5, 4, -1],
+    [0, -1, 0, -1, 0],
+    [0, 0, 0.5, 0, 0],
+], dtype=np.float32) / 8.0
+_K_SAME_COL = _K_SAME_ROW.T.copy()
+_K_DIAG = np.array([
+    [0, 0, -1.5, 0, 0],
+    [0, 2, 0, 2, 0],
+    [-1.5, 0, 6, 0, -1.5],
+    [0, 2, 0, 2, 0],
+    [0, 0, -1.5, 0, 0],
+], dtype=np.float32) / 8.0
+
+
+def postprocess_raw(raw, output_bps: int = 16) -> Optional[np.ndarray]:
+    """Develop an opened rawpy image on the GPU; BGR uint8/uint16 out.
+
+    Mirrors ``raw.postprocess(use_camera_wb=True, output_bps=...)`` closely
+    enough for fusion work: camera white balance, dcraw's highlight clip and
+    1%-clip auto-brightness, BT.709 gamma. Returns None whenever the file
+    falls outside the straightforward Bayer case, so the caller can fall back
+    to LibRaw's own postprocess.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    pattern = np.asarray(raw.raw_pattern)
+    if pattern.shape != (2, 2):
+        return None
+    desc = raw.color_desc.decode('ascii', 'replace')
+    cell = [[desc[pattern[y, x]] for x in range(2)] for y in range(2)]
+    if sorted(cell[0] + cell[1]) != ['B', 'G', 'G', 'R']:
+        return None
+
+    wb = list(raw.camera_whitebalance)
+    if len(wb) < 3 or min(wb[:3]) <= 0:
+        return None
+    cam_xyz = np.asarray(raw.rgb_xyz_matrix, dtype=np.float64)[:3, :3]
+    if not np.any(cam_xyz):
+        return None
+    flip = raw.sizes.flip
+    if flip not in _FLIP_TO_ROT90:
+        return None
+
+    # cam_rgb = cam_xyz @ (sRGB -> XYZ), rows normalised so camera white maps
+    # to white, then inverted - exactly dcraw's cam_xyz_coeff().
+    cam_rgb = cam_xyz @ _XYZ_FROM_RGB
+    row_sums = cam_rgb.sum(axis=1, keepdims=True)
+    if np.any(np.abs(row_sums) < 1e-8):
+        return None
+    rgb_cam = np.linalg.inv(cam_rgb / row_sums)
+
+    cfa_np = raw.raw_image_visible
+    height, width = cfa_np.shape[0] & ~1, cfa_np.shape[1] & ~1
+    if height < 6 or width < 6:
+        return None
+    cfa_np = cfa_np[:height, :width]
+
+    black = raw.black_level_per_channel
+    white = float(raw.white_level)
+    # Per-CFA-site black level and white-balance gain, as 2x2 tiles. G2 shares
+    # the G gain when the camera reports 0 for it, matching LibRaw.
+    gains = {'R': wb[0], 'G': wb[1], 'B': wb[2]}
+    wb_norm = min(gains.values())
+    black_tile = np.array([[black[pattern[y, x]] for x in range(2)] for y in range(2)], dtype=np.float32)
+    gain_tile = np.array([[gains[cell[y][x]] / wb_norm for x in range(2)] for y in range(2)], dtype=np.float32)
+
+    device = torch.device('cuda')
+    cfa = torch.from_numpy(np.ascontiguousarray(cfa_np)).to(device, torch.float32)
+    black_t = torch.from_numpy(black_tile).to(device).repeat(height // 2, width // 2)
+    gain_t = torch.from_numpy(gain_tile).to(device).repeat(height // 2, width // 2)
+    scale = white - black_tile.max()
+    if scale <= 0:
+        return None
+    # dcraw's scale_colors with highlight mode 0: the smallest gain lands at
+    # 1.0 and everything above full scale is clipped.
+    cfa = ((cfa - black_t) / scale * gain_t).clamp_(0.0, 1.0)
+
+    rgb = _demosaic_mhc(cfa, cell)
+
+    matrix = torch.from_numpy(rgb_cam.astype(np.float32)).to(device)
+    rgb = torch.einsum('ij,jhw->ihw', matrix, rgb).clamp_(0.0, 1.0)
+
+    # Auto-brightness: per channel, find the level whose top tail holds 1% of
+    # the pixels; the largest such level becomes the new white point.
+    clip_count = height * width * _AUTO_BRIGHT_CLIP
+    white_point = 0.0
+    for c in range(3):
+        hist = torch.histc(rgb[c], bins=_HIST_BINS, min=0.0, max=1.0)
+        tail = hist.flip(0).cumsum(0)
+        first = int(torch.searchsorted(tail, torch.tensor(clip_count, device=device)).item())
+        white_point = max(white_point, (_HIST_BINS - first) / _HIST_BINS)
+    if white_point > 1e-4:
+        rgb = (rgb / white_point).clamp_(0.0, 1.0)
+
+    # BT.709 transfer curve, dcraw's default gamma (2.222, 4.5).
+    rgb = torch.where(rgb < 0.018, rgb * 4.5, 1.099 * rgb.clamp(min=0.018).pow(1.0 / 2.222) - 0.099)
+
+    if output_bps == 8:
+        out = (rgb * 255.0).round_().clamp_(0, 255).to(torch.uint8)
+    else:
+        out = (rgb * 65535.0).round_().clamp_(0, 65535).to(torch.uint16)
+    bgr = out.flip(0).permute(1, 2, 0).contiguous().cpu().numpy()
+
+    turns = _FLIP_TO_ROT90[flip]
+    if turns:
+        bgr = np.ascontiguousarray(np.rot90(bgr, turns))
+    return bgr
+
+
+def _demosaic_mhc(cfa, cell) -> 'object':
+    """Malvar-He-Cutler demosaic of a white-balanced CFA plane.
+
+    `cfa` is a (H, W) float CUDA tensor in [0, 1]; `cell` the 2x2 colour
+    letters. Returns a (3, H, W) RGB tensor. Four fixed 5x5 convolutions
+    produce every missing sample; masks then pick the right estimate per site.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    device = cfa.device
+    height, width = cfa.shape
+
+    def mask(predicate):
+        m = torch.zeros((height, width), device=device)
+        for y in range(2):
+            for x in range(2):
+                if predicate(y, x):
+                    m[y::2, x::2] = 1.0
+        return m
+
+    m_r = mask(lambda y, x: cell[y][x] == 'R')
+    m_b = mask(lambda y, x: cell[y][x] == 'B')
+    m_g = mask(lambda y, x: cell[y][x] == 'G')
+    # G sites split by which colour sits beside them horizontally.
+    m_g_row_r = mask(lambda y, x: cell[y][x] == 'G' and cell[y][1 - x] == 'R')
+    m_g_row_b = mask(lambda y, x: cell[y][x] == 'G' and cell[y][1 - x] == 'B')
+
+    x4 = cfa.unsqueeze(0).unsqueeze(0)
+    padded = F.pad(x4, (2, 2, 2, 2), mode='reflect')
+
+    def conv(kernel: np.ndarray):
+        k = torch.from_numpy(kernel).to(device).reshape(1, 1, 5, 5)
+        return F.conv2d(padded, k)[0, 0]
+
+    est_green = conv(_K_GREEN)
+    est_row = conv(_K_SAME_ROW)
+    est_col = conv(_K_SAME_COL)
+    est_diag = conv(_K_DIAG)
+
+    green = cfa * m_g + est_green * (m_r + m_b)
+    # A G site with R beside it has B above/below, and vice versa.
+    red = cfa * m_r + est_row * m_g_row_r + est_col * m_g_row_b + est_diag * m_b
+    blue = cfa * m_b + est_row * m_g_row_b + est_col * m_g_row_r + est_diag * m_r
+    return torch.stack((red, green, blue)).clamp_(0.0, 1.0)
 
 
 def _to_bgr_numpy(img, scale_factor: float) -> np.ndarray:

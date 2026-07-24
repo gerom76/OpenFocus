@@ -46,10 +46,25 @@ class ImageStackLoader:
     # Formats nvJPEG can decode on the GPU; everything else stays on OpenCV.
     GPU_DECODE_FORMATS = {'.jpg', '.jpeg'}
 
+    # How many GPU JPEGs to decode per burst. Progress and the stop flag are
+    # only serviced between bursts, so this bounds Stop-button latency.
+    GPU_CHUNK = 16
+
     def __init__(self):
         self.image_paths = []
         self.images = []
         self.thumbnail_size = (600, 400)
+        # Cooperative stop: request_stop() may be called (from a Stop button
+        # handler running inside the progress callback's processEvents) while
+        # a load is under way; the load loops notice it at the next file or
+        # GPU-chunk boundary. `cancelled` reports how the last load ended.
+        self._cancel_requested = False
+        self.cancelled = False
+
+    def request_stop(self) -> None:
+        """Ask the running load to stop at its next checkpoint."""
+        self._cancel_requested = True
+        print("[Loader] Stop requested - finishing files already in flight...", flush=True)
 
     @classmethod
     def read_image_bgr(cls, full_path: str) -> Optional[np.ndarray]:
@@ -73,8 +88,16 @@ class ImageStackLoader:
             # Pass a file object to support paths with non-ASCII characters
             with open(full_path, 'rb') as f:
                 with rawpy.imread(f) as raw:
-                    rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
-            return bitdepth.apply_load_mode(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                    bgr = None
+                    if gpu_decode.is_available():
+                        try:
+                            bgr = gpu_decode.postprocess_raw(raw, output_bps)
+                        except Exception:
+                            bgr = None  # any GPU hiccup falls back to LibRaw
+                    if bgr is None:
+                        rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
+                        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            return bitdepth.apply_load_mode(bgr)
 
         return read_image_any_depth(full_path)
 
@@ -98,6 +121,9 @@ class ImageStackLoader:
         if max_workers is None:
             max_workers = min(32, os.cpu_count() or 4)
         max_workers = max(1, min(max_workers, len(entries)))
+
+        self._cancel_requested = False
+        self.cancelled = False
 
         total = len(entries)
         results: List[Optional[np.ndarray]] = [None] * total
@@ -155,7 +181,10 @@ class ImageStackLoader:
                 now = time.perf_counter()
                 if completed == total or now - last_print >= _PRINT_INTERVAL:
                     last_print = now
-                    print(f"[{completed}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
+                    elapsed = now - start_time
+                    rate = completed / elapsed if elapsed > 0 else 0.0
+                    print(f"[{completed}/{total}] Loaded {filename} "
+                          f"({img.shape[1]}x{img.shape[0]}) - avg {rate:.1f} images/s", flush=True)
             if progress_callback is not None:
                 try:
                     progress_callback(completed, total)
@@ -163,7 +192,12 @@ class ImageStackLoader:
                     pass
 
         def drain(futures):
+            """Consume decode futures; on a stop request, drop what remains."""
             for future in concurrent.futures.as_completed(futures):
+                if self._cancel_requested:
+                    for pending in futures:
+                        pending.cancel()
+                    return
                 index, filename, img, error = future.result()
                 results[index] = img
                 note(filename, img, error)
@@ -182,19 +216,30 @@ class ImageStackLoader:
 
             drain(cpu_futures)
 
-            if gpu_set:
+            if gpu_set and not self._cancel_requested:
                 order = sorted(gpu_set)
-                decoded = gpu_decode.decode_jpegs([buffers.get(i) for i in order], scale_factor)
                 fallback = []
-                for index, img in zip(order, decoded):
-                    if img is None:
-                        fallback.append(index)
-                    else:
-                        results[index] = bitdepth.apply_load_mode(img)
-                        note(entries[index][0], results[index], None)
-                drain([executor.submit(decode, i, *entries[i]) for i in fallback])
+                # Decode in bursts so progress (and with it the event loop,
+                # where the Stop button lives) is serviced between them.
+                for chunk_start in range(0, len(order), self.GPU_CHUNK):
+                    if self._cancel_requested:
+                        break
+                    chunk = order[chunk_start:chunk_start + self.GPU_CHUNK]
+                    decoded = gpu_decode.decode_jpegs([buffers.get(i) for i in chunk], scale_factor)
+                    for index, img in zip(chunk, decoded):
+                        if img is None:
+                            fallback.append(index)
+                        else:
+                            results[index] = bitdepth.apply_load_mode(img)
+                            note(entries[index][0], results[index], None)
+                if not self._cancel_requested:
+                    drain([executor.submit(decode, i, *entries[i]) for i in fallback])
 
-        print(self._format_load_stats(total - failed, failed, time.perf_counter() - start_time), flush=True)
+        self.cancelled = self._cancel_requested
+        if self.cancelled:
+            print(f"Loading cancelled by user after {completed} of {total} image(s)", flush=True)
+        else:
+            print(self._format_load_stats(total - failed, failed, time.perf_counter() - start_time), flush=True)
 
         return results
 
@@ -250,6 +295,8 @@ class ImageStackLoader:
         image_files.sort(key=lambda x: x[0])
 
         decoded = self._load_files_parallel(image_files, scale_factor, progress_callback=progress_callback)
+        if self.cancelled:
+            return False, "Loading cancelled", [], []
 
         loaded_images = []
         filenames = []
@@ -294,6 +341,9 @@ class ImageStackLoader:
         if not cap.isOpened():
             return False, "Failed to open video file", [], []
 
+        self._cancel_requested = False
+        self.cancelled = False
+
         loaded_images = []
         filenames = []
         frame_index = 0
@@ -306,6 +356,10 @@ class ImageStackLoader:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
             while True:
+                if self._cancel_requested:
+                    self.cancelled = True
+                    print(f"Loading cancelled by user after {frame_index} frame(s)", flush=True)
+                    break
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -325,8 +379,10 @@ class ImageStackLoader:
                 if total_frames > 0 and (frame_index == total_frames
                                          or now - last_print >= _PRINT_INTERVAL):
                     last_print = now
+                    elapsed = now - start_time
+                    rate = frame_index / elapsed if elapsed > 0 else 0.0
                     print(f"[{frame_index}/{total_frames}] Extracted frame "
-                          f"({frame.shape[1]}x{frame.shape[0]})", flush=True)
+                          f"({frame.shape[1]}x{frame.shape[0]}) - avg {rate:.1f} frames/s", flush=True)
                 if progress_callback is not None:
                     try:
                         progress_callback(frame_index, total_frames)
@@ -334,6 +390,9 @@ class ImageStackLoader:
                         pass
         finally:
             cap.release()
+
+        if self.cancelled:
+            return False, "Loading cancelled", [], []
 
         elapsed = time.perf_counter() - start_time
         rate = len(loaded_images) / elapsed if elapsed > 0 else 0.0
@@ -367,6 +426,8 @@ class ImageStackLoader:
 
         entries = [(os.path.basename(p), p) for p in filepaths]
         decoded = self._load_files_parallel(entries, scale_factor, progress_callback=progress_callback)
+        if self.cancelled:
+            return False, "Loading cancelled", [], []
 
         loaded_images = []
         filenames = []
@@ -506,6 +567,8 @@ class ImageStackLoader:
             return False, "No supported image files found in the folder", [], []
 
         decoded = self._load_files_parallel(image_files, progress_callback=progress_callback)
+        if self.cancelled:
+            return False, "Loading cancelled", [], []
 
         loaded_data = []
         failed_count = 0
