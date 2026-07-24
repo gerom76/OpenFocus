@@ -30,6 +30,11 @@ from PyQt6.QtGui import QPixmap, QImage
 
 from utils import bitdepth
 from utils.image_utils import read_image_any_depth
+from core import gpu_decode
+
+# Progress lines are throttled to this interval so a large stack does not
+# flood the Qt console redirect, which is far slower than the decode itself.
+_PRINT_INTERVAL = 0.1
 
 
 class ImageStackLoader:
@@ -38,6 +43,8 @@ class ImageStackLoader:
     RAW_FORMATS = {'.nef', '.nrw'}  # Nikon RAW, requires rawpy (LibRaw)
     SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'} | (RAW_FORMATS if RAWPY_AVAILABLE else set())
     SUPPORTED_VIDEO_FORMATS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
+    # Formats nvJPEG can decode on the GPU; everything else stays on OpenCV.
+    GPU_DECODE_FORMATS = {'.jpg', '.jpeg'}
 
     def __init__(self):
         self.image_paths = []
@@ -80,17 +87,32 @@ class ImageStackLoader:
     ) -> List[Optional[np.ndarray]]:
         """Decode a list of (filename, full_path) entries in parallel.
 
-        Decoding (cv2/rawpy) releases the GIL, so threads give near-linear speedup.
-        Returns decoded images in input order (None for entries that failed);
-        progress is printed as files complete and reported to progress_callback,
-        followed by a summary line with elapsed time and throughput.
+        Decoding (cv2/rawpy) releases the GIL, so threads give near-linear
+        speedup. JPEG stacks are additionally routed through nvJPEG on the GPU
+        when one is available; files nvJPEG refuses (progressive JPEGs, bad
+        data) silently fall back to the OpenCV path. Returns decoded images in
+        input order (None for entries that failed); progress is printed as
+        files complete and reported to progress_callback, followed by a
+        summary line with elapsed time and throughput.
         """
         if max_workers is None:
-            max_workers = min(8, os.cpu_count() or 4)
+            max_workers = min(32, os.cpu_count() or 4)
         max_workers = max(1, min(max_workers, len(entries)))
 
         total = len(entries)
         results: List[Optional[np.ndarray]] = [None] * total
+
+        # The count check comes first so tiny stacks never pay for CUDA
+        # context creation inside is_available().
+        gpu_indices = [
+            i for i, (filename, _) in enumerate(entries)
+            if os.path.splitext(filename)[1].lower() in self.GPU_DECODE_FORMATS
+        ]
+        use_gpu = len(gpu_indices) >= gpu_decode.MIN_IMAGES and gpu_decode.is_available()
+        gpu_set = set(gpu_indices) if use_gpu else set()
+        if use_gpu:
+            print(f"[Loader] Decoding {len(gpu_set)} JPEG(s) on GPU "
+                  f"({gpu_decode.device_name()})", flush=True)
 
         def decode(index: int, filename: str, full_path: str):
             if not os.path.exists(full_path):
@@ -105,36 +127,72 @@ class ImageStackLoader:
             except Exception as e:
                 return index, filename, None, str(e)
 
+        def read_bytes(index: int, full_path: str):
+            try:
+                return index, np.fromfile(full_path, dtype=np.uint8)
+            except Exception:
+                return index, None
+
         start_time = time.perf_counter()
         failed = 0
+        completed = 0
+        last_print = 0.0
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(decode, i, filename, full_path)
-                for i, (filename, full_path) in enumerate(entries)
-            ]
-            completed = 0
+        def note(filename: str, img: Optional[np.ndarray], error: Optional[str]):
+            """Record one finished file: failures always print, successes are throttled."""
+            nonlocal failed, completed, last_print
+            completed += 1
+            if error == "not_found":
+                failed += 1
+                print(f"[{completed}/{total}] File not found: {filename}", flush=True)
+            elif error is not None:
+                failed += 1
+                print(f"[{completed}/{total}] Failed to load {filename}: {error}", flush=True)
+            elif img is None:
+                failed += 1
+                print(f"[{completed}/{total}] Failed to load {filename}", flush=True)
+            else:
+                now = time.perf_counter()
+                if completed == total or now - last_print >= _PRINT_INTERVAL:
+                    last_print = now
+                    print(f"[{completed}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
+            if progress_callback is not None:
+                try:
+                    progress_callback(completed, total)
+                except Exception:
+                    pass
+
+        def drain(futures):
             for future in concurrent.futures.as_completed(futures):
                 index, filename, img, error = future.result()
                 results[index] = img
-                completed += 1
-                if error == "not_found":
-                    failed += 1
-                    print(f"[{completed}/{total}] File not found: {filename}", flush=True)
-                elif error is not None:
-                    failed += 1
-                    print(f"[{completed}/{total}] Failed to load {filename}: {error}", flush=True)
-                elif img is None:
-                    failed += 1
-                    print(f"[{completed}/{total}] Failed to load {filename}", flush=True)
-                else:
-                    print(f"[{completed}/{total}] Loaded {filename} ({img.shape[1]}x{img.shape[0]})", flush=True)
+                note(filename, img, error)
 
-                if progress_callback is not None:
-                    try:
-                        progress_callback(completed, total)
-                    except Exception:
-                        pass
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            cpu_futures = [
+                executor.submit(decode, i, filename, full_path)
+                for i, (filename, full_path) in enumerate(entries) if i not in gpu_set
+            ]
+            read_futures = [executor.submit(read_bytes, i, entries[i][1]) for i in sorted(gpu_set)]
+
+            buffers: Dict[int, Optional[np.ndarray]] = {}
+            for future in concurrent.futures.as_completed(read_futures):
+                index, data = future.result()
+                buffers[index] = data
+
+            drain(cpu_futures)
+
+            if gpu_set:
+                order = sorted(gpu_set)
+                decoded = gpu_decode.decode_jpegs([buffers.get(i) for i in order], scale_factor)
+                fallback = []
+                for index, img in zip(order, decoded):
+                    if img is None:
+                        fallback.append(index)
+                    else:
+                        results[index] = bitdepth.apply_load_mode(img)
+                        note(entries[index][0], results[index], None)
+                drain([executor.submit(decode, i, *entries[i]) for i in fallback])
 
         print(self._format_load_stats(total - failed, failed, time.perf_counter() - start_time), flush=True)
 
@@ -242,6 +300,7 @@ class ImageStackLoader:
         video_name = os.path.splitext(os.path.basename(video_path))[0]
 
         start_time = time.perf_counter()
+        last_print = 0.0
 
         try:
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -262,7 +321,10 @@ class ImageStackLoader:
                 filenames.append(f"{video_name}_frame_{frame_index:04d}.png")
                 frame_index += 1
 
-                if total_frames > 0:
+                now = time.perf_counter()
+                if total_frames > 0 and (frame_index == total_frames
+                                         or now - last_print >= _PRINT_INTERVAL):
+                    last_print = now
                     print(f"[{frame_index}/{total_frames}] Extracted frame "
                           f"({frame.shape[1]}x{frame.shape[0]})", flush=True)
                 if progress_callback is not None:
