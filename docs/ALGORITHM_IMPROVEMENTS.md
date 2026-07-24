@@ -11,22 +11,39 @@ absolute timings as relative.
 Ranked by expected value: **impact** is how much it changes a real render,
 **effort** is rough implementation cost.
 
+Items 1-10 are the original audit. Items 11-16 were added by a follow-up at
+1.11.0 that re-verified every claim below against the code; the follow-up also
+covered the two methods added since the audit - `pyramid.py` and `depthmap.py` -
+which were written to this document's standards and contribute only items 15
+and 16. The **Fixed** column tracks how much of each item has actually landed;
+a partial percentage means a mitigation shipped but the underlying issue
+remains.
+
 ---
 
 ## Summary
 
-| # | Method | Category | Issue | Impact | Effort |
-|---|--------|----------|-------|--------|--------|
-| 1 | GFG-FGF | Quality | Focus measured on one colour channel; fails outright when detail is not in it - *fixed in 1.5.7* | High | Low |
-| 2 | GFG-FGF | Quality | Whole frames discarded by a global 15% sharpness threshold - *fixed in 1.5.7* | High | Low |
-| 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically | High | Low |
-| 4 | DCT | Quality | Result depends on the order frames are passed in | Medium | Low |
-| 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial |
-| 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip - *fixed in 1.5.5* | Medium | Medium |
-| 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent | Medium | Medium |
-| 8 | DTCWT | Performance | CPU cost grows faster than image area | Medium | Medium |
-| 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything - *investigated and closed in 1.5.6* | Low | Low |
-| 10 | Guided Filter | Performance | Dead code; per-frame float32 copies dominate memory - *fixed in 1.5.6* | Low | Low |
+| # | Method | Category | Issue | Impact | Effort | Fixed |
+|---|--------|----------|-------|--------|--------|-------|
+| 1 | GFG-FGF | Quality | Focus measured on one colour channel; fails outright when detail is not in it - *fixed in 1.5.7* | High | Low | 100% |
+| 2 | GFG-FGF | Quality | Whole frames discarded by a global 15% sharpness threshold - *fixed in 1.5.7* | High | Low | 100% |
+| 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically | High | Low | 0% |
+| 4 | DCT | Quality | Result depends on the order frames are passed in | Medium | Low | 0% |
+| 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial | 100% |
+| 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip - *fixed in 1.5.5* | Medium | Medium | 100% |
+| 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent | Medium | Medium | 0% |
+| 8 | DTCWT | Performance | CPU cost grows faster than image area | Medium | Medium | 25% |
+| 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything - *investigated and closed in 1.5.6* | Low | Low | 100% |
+| 10 | Guided Filter | Performance | Dead code; per-frame float32 copies dominate memory - *fixed in 1.5.6* | Low | Low | 100% |
+| 11 | DCT | Quality | Crashes (default kernel) or corrupts indices on stacks of 256+ frames | High | Low | 0% |
+| 12 | DTCWT | Quality | Each colour channel picks its own source frame, so colour splits at depth edges | Medium | Low | 0% |
+| 13 | DTCWT, Pyramid, Depth Map | Robustness | Folder loader copy-pasted four ways; mixed filenames crash the sort | Low | Low | 0% |
+| 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders | Low | Trivial | 0% |
+| 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
+| 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift | Low | Medium | 0% |
+
+**Overall: 39% done** - 6 of 16 items fully fixed, item 8 partially (the GPU
+default shipped; the CPU cost itself is untouched), 9 untouched.
 
 ---
 
@@ -145,6 +162,9 @@ quality trade-off. It also removes the only scipy dependency in the hot path.
 **Fix.** Replace the two calls, looping the 6 orientation slices (OpenCV works on
 2D planes). Expect roughly a 20-25% cut in DTCWT CPU time.
 
+**Status at 1.11.0: open.** Both scipy calls are still in
+`fuse_highfreq_vectorized`.
+
 ---
 
 ## 4. DCT's result depends on the order frames are given in
@@ -175,6 +195,12 @@ reason, which is one source of the blockiness DCT is criticised for.
 the frame already chosen by the neighbouring block, or require a winner to exceed
 the runner-up by a small margin before switching. A margin also suppresses the
 noise-driven flipping that makes DCT weak on grainy shots.
+
+**Status at 1.11.0: open.** The implementation has since moved from `np.argmax`
+to a running maximum (`var_map > max_variance_map`), which keeps the identical
+lowest-index tie bias, and the GPU twin reproduces it deliberately
+(`dct_torch.py`: "preserves first-max-wins tie behavior of the CPU path"). Any
+fix must land in both paths together to keep `test_gpu_matches_cpu` green.
 
 ---
 
@@ -351,6 +377,10 @@ stack length - which is precisely the macro use case.
 frame, then take the winner per coefficient in one pass, as the other methods do.
 That is also faster: one pass instead of N-1.
 
+**Status at 1.11.0: open.** `dtcwt_torch.py` replicates the pairwise order
+deliberately ("matches the sequential pairwise fusion order exactly"), so the
+joint-selection rewrite must change both paths in the same commit.
+
 ---
 
 ## 8. DTCWT's CPU cost grows faster than image area
@@ -373,6 +403,12 @@ At 2048x2048 the CPU path takes half a minute while the GPU path takes a fifth o
 a second. Fixing items 3 and 7 should bring the CPU path down substantially; in
 the meantime, this is the strongest argument for making the GPU path the default
 whenever `pytorch_wavelets` and `pywt` are installed.
+
+**Status at 1.11.0: 25%.** The interim recommendation shipped: the render
+pipeline now requests the GPU by default (`core/workers.py` constructs
+`MultiFocusFusion(..., use_gpu=True)`, with automatic CPU fallback when torch
+or a device is missing). The CPU scaling itself is unchanged, pending items 3
+and 7.
 
 ---
 
@@ -474,18 +510,155 @@ the previous implementation on the test stack.
 
 ---
 
+## 11. DCT fails outright on stacks of 256 frames or more
+
+**Category: quality. Impact: high. Effort: low.**
+
+`dct.py` stores its per-block winner map as `uint8` while the stack has fewer
+than 256 frames, and widens it to `int32` beyond that:
+
+```python
+idx_dtype = np.uint8 if len(images) < 256 else np.int32
+```
+
+The wide path then fails twice downstream:
+
+- The consistency filter converts the map to float32 and median-filters it
+  with the default `kernel_size=7`. OpenCV allows apertures above 5 on 8-bit
+  input only, so the call raises. Measured: fusing 260 random 64x64 frames at
+  the default kernel fails with `cv2.error` from `median_blur.simd.hpp`
+  (OpenCV 5.0.0) before producing anything.
+- With `kernel_size` <= 5 the filter runs, but reconstruction casts the map
+  with `final_index_map.astype(np.uint8)` "because resize is fastest on
+  uint8", wrapping every index above 255 (index 300 becomes 44 - measured).
+  Pixels whose winner wrapped are then filled from the wrong frame, or - when
+  the wrapped value matches no surviving index - left black.
+
+A stack this deep is not hypothetical: video import routinely produces
+hundreds of frames.
+
+**Fix.** Keep the map in `uint16` end to end. `cv2.medianBlur` accepts 16-bit
+input at apertures 3 and 5 (iterate the 5-aperture filter when a larger kernel
+is requested), and `cv2.resize` with `INTER_NEAREST` handles `uint16`
+directly, so the downcast can simply be deleted. Whatever lands must be
+mirrored in `dct_torch.py`, which shares the design.
+
+---
+
+## 12. DTCWT lets a pixel's colour channels come from different frames
+
+**Category: quality. Impact: medium. Effort: low.**
+
+The R, G and B channels are transformed and fused in three independent passes,
+each with its own activity masks; nothing ties a pixel's channels to the same
+source frame. At a depth edge the red channel can be taken from one frame and
+blue from another, producing a colour that exists in no source - chromatic
+fringing. Every other method here guards against exactly this: `depthmap.py`
+and `pyramid.py` sum squared responses across channels first so "colour can
+never split across sources", and item 1's fix kept a single decision map for
+all channels of GFG-FGF.
+
+**Fix.** Compute the activity and consistency masks once - on luminance, or as
+the maximum across the three channels' coefficient magnitudes - and select all
+three channels with the same mask. Mask construction drops from three passes
+to one, and the change folds naturally into item 7's joint-selection rewrite.
+
+---
+
+## 13. The folder loader is copy-pasted four ways, and two inputs crash it
+
+**Category: robustness. Impact: low. Effort: low.**
+
+`dtcwt.py`, `pyramid.py` and `depthmap.py` each carry the same private folder
+loader; `dct.py` has a fourth with different semantics. The shared copy has
+two defects, both measured:
+
+- Its sort key returns `int` for numbered names and `str` otherwise, so a
+  folder holding both (`img1.png` beside `cover.png`) raises
+  `TypeError: '<' not supported between instances of 'str' and 'int'`.
+- It infers a single extension from the first directory entry and globs only
+  that, so a mixed-extension folder silently loses every other format - while
+  `dct.py`'s variant accepts six extensions. Same app, two behaviours.
+
+The GUI is unaffected - it always hands the methods decoded arrays via
+`ImageStackLoader` - which is why this has survived. It bites direct API
+callers only.
+
+**Fix.** One shared helper in `utils/`, with a type-stable sort key
+(`(0, number)` / `(1, name)` tuples) and the same extension handling
+everywhere.
+
+---
+
+## 14. DTCWT's consistency vote is biased at image borders
+
+**Category: quality. Impact: low. Effort: trivial.**
+
+The majority filter counts each pixel's agreeing neighbours with
+`convolve(..., mode='constant', cval=0.0)` and compares against a fixed
+`window^2 / 2` threshold. Border pixels have fewer real neighbours but face
+the same threshold, so votes for the first source are systematically
+undercounted there, and the border strip leans toward the second source
+regardless of sharpness.
+
+**Fix.** Reflect the neighbour count at the border, or threshold against the
+true neighbour count. Note the interaction with item 3: the `cv2.boxFilter`
+substitution was verified bit-identical, which preserves this bias - decide
+deliberately whether that swap should keep parity or fix both at once.
+
+---
+
+## 15. Depth-map MODE_MAX ships its decision map unregularised
+
+**Category: quality. Impact: low. Effort: low.**
+
+DCT median-filters its index map twice and DTCWT majority-votes its masks, but
+the depth map's hard per-pixel select relies on box-filter pooling alone.
+Where two frames' pooled energies are nearly equal - smooth transitions
+between depth planes - the winner can alternate pixel to pixel and speckle the
+seam. The tools this method cites (Zerene DMap, Helicon A/B) all smooth their
+depth maps before gathering.
+
+**Fix.** An optional median (or guided-filter) pass over the winning-index map
+before the gather, matching the regularisation the other selectors already
+have. MODE_AVERAGE needs nothing: blending is its own smoothing.
+
+---
+
+## 16. DTCWT and Pyramid average the lowpass band across all frames
+
+**Category: quality. Impact: low. Effort: medium.**
+
+Both methods collapse the coarse residual by a plain mean over the stack
+(`np.mean(lowpass_stack)` in one, `base_accumulator / num_images` in the
+other). Focus stacks mostly share their low frequencies, so this is usually
+harmless - but when frames disagree at large scale (exposure drift, strong
+focus breathing) the mean ghosts that disagreement into the result. The
+standard remedy is to weight each frame's base by its aggregate detail
+activity, so the sharpest frames dominate the coarse band too.
+
+Measure on a real stack first: the synthetic scenarios hold brightness
+constant across frames, so they cannot show this failure - the same caveat
+item 6 carried.
+
+---
+
 ## Cross-cutting
 
-**GPU is consistently worth it, and is not the default.** Speed-ups measured
-above are 2.6-8.6x for the guided filter and DCT, and 7.5-138x for DTCWT. The
-GPU paths are already implemented and verified to agree with their CPU twins by
-`tests/test_fusion_quality.py::test_gpu_matches_cpu`.
+**GPU is consistently worth it - and has since become the default.** Speed-ups
+measured above are 2.6-8.6x for the guided filter and DCT, and 7.5-138x for
+DTCWT. The GPU paths are verified to agree with their CPU twins by
+`tests/test_fusion_quality.py::test_gpu_matches_cpu`, and as of 1.11.0 the
+render pipeline requests them by default (`core/workers.py` constructs
+`MultiFocusFusion(..., use_gpu=True)` with automatic CPU fallback).
 
 **No method reports its confidence.** Every one produces a decision map it then
 throws away. Surfacing "how sure was it here" - the margin between the best and
 second-best frame - would let the UI flag regions where the stack simply lacks a
 sharp frame, which is the most common cause of a disappointing render and is
-currently invisible to the user.
+currently invisible to the user. Still open at 1.11.0; the raw material now
+exists in every method (`max_variance_map` in DCT, `best_energy` in the depth
+map and pyramid, the weight maps in GFF/GFG-FGF), but none of it is returned.
 
 **The neural methods have no CPU fallback path worth using.** StackMFF-V4 on CPU
 is usable but slow, and there is no smaller variant. Not a defect, but it shapes
