@@ -64,7 +64,7 @@ Upon launch, you will see the main application window with a dark theme interfac
 2. Configure fusion settings in the right panel
 3. Optionally enable registration for alignment
 4. Adjust kernel size if needed
-5. Click "Start Render" to begin processing
+5. Click "Start Render" to begin processing (or "Stop" to interrupt a running render)
 6. Export your results
 
 ---
@@ -90,7 +90,7 @@ The right panel contains all configuration options organized vertically:
 
 1. **Fusion Settings**: Select fusion algorithm and kernel size
 2. **Registration Settings**: Enable/disable alignment methods
-3. **Action Buttons**: Reset defaults and Start Render
+3. **Action Buttons**: Reset defaults, Start Render, and Stop (interrupts an in-progress render)
 4. **Source Images List**: Shows all loaded images with filenames
 5. **Output List**: Shows generated results
 
@@ -279,6 +279,8 @@ OpenFocus offers eight fusion algorithms. Each has different characteristics sui
 2. Select one or more methods by checking the corresponding boxes
 3. Adjust kernel size if applicable
 4. Click **Start Render** to process
+
+> **Stopping a render**: While a render is running, the **Stop** button next to Start Render becomes active. Click it to interrupt processing — the render unwinds at its next safe checkpoint (between pipeline stages, or between tiles on large images), the controls unlock, and no result is produced. For large tiled images this may take a moment while the tiles already in progress finish.
 
 ### Algorithm Comparison Guide
 
@@ -513,6 +515,7 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 - Use a more powerful CPU
 - Reduce image resolution
 - Use simpler fusion algorithms (Guided Filter instead of StackMFF-V4)
+- Click **Stop** to interrupt a render that is taking longer than expected, then adjust settings and try again
 
 ### Getting Help
 
