@@ -86,7 +86,7 @@ and hair, depth-map keeps colour and noise clean, and neither dominates.
 | Perspective / homography | ✓ | not documented | ✓ | ✓ | not documented | not documented |
 | Feature-based (SIFT) | ✓ | not documented | not documented | — | not documented | not documented |
 | Intensity-based (ECC) | ✓ | not documented | not documented | ✓ | not documented | not documented |
-| **Reference frame** | **frame 0, chained** | not documented | not documented | **middle frame, selectable** | not documented | not documented |
+| **Reference frame** | **first/middle/last, selectable** (1.11.0) | not documented | not documented | **middle frame, selectable** | not documented | not documented |
 | **Direct-to-reference option** | **✗** | n/a | n/a | **✓** | n/a | n/a |
 | Non-rigid / local warp | ✗ | ✗ | ✗ (explicitly global-only) | ✗ | ✗ | ✗ |
 
@@ -107,11 +107,22 @@ removed, and the ECC docstring no longer over-claims focus-breathing suitability
 Unlike Zerene it is opt-in rather than default-on, to keep existing results
 reproducible.
 
-**focus-stack has already shipped the drift fix.** It defaults to the middle
-frame as reference and offers direct-to-reference *or* neighbour chaining. Both
-OpenFocus paths chain unconditionally from frame 0 — `H_global = H_global @
-H_local` at `core/registration.py:386` and `:592` — so error compounds
-multiplicatively across the stack. This is a solved problem in a GPL project.
+**The selectable reference frame shipped in 1.11.0**, closing most of the drift
+gap. The alignment chain can now be anchored on the first (default), middle or
+last frame; anchoring on the middle halves the longest chain, so accumulated
+error spreads symmetrically instead of compounding toward one end — matching
+focus-stack's default-middle behaviour. Mechanically the pairwise chain is still
+accumulated against frame 0 (`H_global = np.matmul(H_global, H_local)` at
+`core/registration.py:210`, `:549` and `:766`), then re-referenced onto the
+chosen frame in one step (`_rereference_transforms`), which post-composes every
+transform with the inverse of the reference frame's — the reference frame
+collapses to identity and is held fixed, never warped.
+
+**What remains is the direct-to-reference option.** focus-stack can also align
+each frame *straight* to the reference instead of chaining neighbour-to-neighbour;
+OpenFocus still builds its transforms by chaining. Re-anchoring the chain removes
+most of the drift, but not the residual that accumulates along the chain itself —
+skipping the chain entirely would remove that too.
 
 **Nobody does non-rigid alignment.** Zerene's documentation states its alignment
 is limited to whole-frame shift/rotate/scale. This is the one alignment axis
@@ -290,7 +301,7 @@ the field has already closed, or moves ahead of it.
 | 3 | Laplacian pyramid fusion — **done in 1.7.0** | **Catch-up** | 3 of 5 directly, 4th equivalent |
 | 4 | Global label optimisation (graph-cut) | **Differentiating** | none |
 | 5 | Halo / bleed suppression | **Parity+** | only indirect, via radius tuning |
-| 6 | Middle-reference + global alignment | **Catch-up** | focus-stack ships both |
+| 6 | Selectable reference frame — **done in 1.11.0** (direct-to-reference still open) | **Catch-up** | focus-stack ships both |
 | 7 | Noise-aware measure + flat-region averaging | **Parity+** | averaging yes; noise-normalised measure, none |
 | 8 | 16-bit pipeline — **done in 1.6.0** | **Catch-up** | 4 of 5 tools |
 | 9 | Non-rigid / optical-flow refinement | **Differentiating** | none; Zerene explicitly global-only |
