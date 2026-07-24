@@ -42,6 +42,27 @@ except ImportError:
 
 WINDOW_SIZE = 3
 
+# Mirrors _LOWPASS_ACTIVITY_EPS in fusion_methods/dtcwt.py: keeps the
+# activity-weighted lowpass average defined on flat stacks, where it degrades
+# to the plain mean.
+LOWPASS_ACTIVITY_EPS = 1e-6
+
+
+def _lowpass_activity(yh, lowpass_shape):
+    """Aggregate detail activity of one frame on the lowpass grid.
+
+    Torch mirror of _lowpass_activity in fusion_methods/dtcwt.py: complex
+    magnitudes summed over the six orientations per level, area-resampled to
+    the lowpass resolution and summed across levels. yh: list of
+    (C, 6, h, w, 2) tensors; returns (C, h', w').
+    """
+    acc = None
+    for level in yh:
+        mag = torch.sqrt(level[..., 0] ** 2 + level[..., 1] ** 2).sum(dim=1)
+        mag = F.interpolate(mag.unsqueeze(0), size=lowpass_shape, mode='area')[0]
+        acc = mag if acc is None else acc + mag
+    return acc
+
 
 def _activity(mag):
     """3x3 spatial maximum filter per direction. mag: (C, 6, h, w)."""
@@ -116,6 +137,7 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
 
     with torch.no_grad():
         lowpass_sum = None
+        lowpass_weight = None
         fused_highpass = None
 
         # Channels are processed independently, so BGR order can be kept as-is
@@ -127,14 +149,21 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
             yl = yl[0]
             yh = [level[0] for level in yh]
 
+            # Lowpass is averaged with each frame weighted by its aggregate
+            # highpass activity (item 16 in docs/ALGORITHM_IMPROVEMENTS.md);
+            # the weighted sum streams just like the plain sum did.
+            weight = _lowpass_activity(yh, yl.shape[-2:]) + LOWPASS_ACTIVITY_EPS
+
             if lowpass_sum is None:
-                lowpass_sum = yl
+                lowpass_sum = yl * weight
+                lowpass_weight = weight
                 fused_highpass = yh
             else:
-                lowpass_sum = lowpass_sum + yl
+                lowpass_sum = lowpass_sum + yl * weight
+                lowpass_weight = lowpass_weight + weight
                 fused_highpass = [_fuse_pair(f, y) for f, y in zip(fused_highpass, yh)]
 
-        fused_lowpass = (lowpass_sum / len(images)).unsqueeze(0)
+        fused_lowpass = (lowpass_sum / lowpass_weight).unsqueeze(0)
         fused_highpass = [level.unsqueeze(0) for level in fused_highpass]
 
         out = ifm((fused_lowpass, fused_highpass))[0]  # (3, H, W)

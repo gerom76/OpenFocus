@@ -40,10 +40,10 @@ remains.
 | 13 | DTCWT, Pyramid, Depth Map | Robustness | Folder loader copy-pasted four ways; mixed filenames crash the sort | Low | Low | 0% |
 | 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders | Low | Trivial | 0% |
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
-| 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift | Low | Medium | 0% |
+| 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift - *fixed in 1.11.3* | Low | Medium | 100% |
 
-**Overall: 52% done** - 8 of 16 items fully fixed, item 8 partially (the GPU
-default shipped; the CPU cost itself is untouched), 7 untouched.
+**Overall: 58% done** - 9 of 16 items fully fixed, item 8 partially (the GPU
+default shipped; the CPU cost itself is untouched), 6 untouched.
 
 ---
 
@@ -660,7 +660,7 @@ have. MODE_AVERAGE needs nothing: blending is its own smoothing.
 
 ## 16. DTCWT and Pyramid average the lowpass band across all frames
 
-**Category: quality. Impact: low. Effort: medium.**
+**Category: quality. Impact: low. Effort: medium. Fixed in 1.11.3.**
 
 Both methods collapse the coarse residual by a plain mean over the stack
 (`np.mean(lowpass_stack)` in one, `base_accumulator / num_images` in the
@@ -673,6 +673,25 @@ activity, so the sharpest frames dominate the coarse band too.
 Measure on a real stack first: the synthetic scenarios hold brightness
 constant across frames, so they cannot show this failure - the same caveat
 item 6 carried.
+
+**Fixed in 1.11.3**, as prescribed: the coarse band is now a per-pixel
+weighted average, each frame weighted by its aggregate detail activity
+resampled to the coarse grid, plus an epsilon (1e-6) so a stack with no
+detail anywhere degrades to the old plain mean. In `pyramid.py` the weight is
+the running sum of the band energies already computed for choose-max, cascaded
+down by `pyrDown` to the base grid; in `dtcwt.py` (and its GPU twin
+`dtcwt_torch.py`, where the weighted sum streams frame by frame like the plain
+sum did) it is the highpass magnitudes summed over the six orientations and
+all levels, area-resampled to the lowpass grid.
+
+Measured on the caveat's own failure case - a two-frame stack, each half sharp
+in a different frame, the second frame 20% darker: mean absolute error against
+a reference that keeps each half at its sharp frame's brightness fell from
+13.0 to 1.4-2.7 (Pyramid) and from 12.9 to 3.9-5.5 (DTCWT). On a
+constant-brightness stack the output is unchanged for practical purposes (old
+vs new agree at 87 dB / 59 dB PSNR), the full quality suite passes, and
+`test_gpu_matches_cpu[dtcwt]` confirms the CPU and GPU paths still land
+together.
 
 ---
 

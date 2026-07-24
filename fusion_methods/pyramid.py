@@ -26,6 +26,13 @@ DEFAULT_LEVELS = 5
 # internal: it trades off with level count, which is the user-facing dial.
 _ENERGY_WINDOW = 5
 
+# Added to each frame's per-pixel base weight (its aggregate detail activity)
+# before the weighted average of the coarse band. Where every frame is flat the
+# activities vanish and the epsilon term takes over, degrading gracefully to
+# the plain mean this method used before; where any frame carries detail the
+# epsilon is negligible against real activity (squared-coefficient energies).
+_BASE_ACTIVITY_EPS = 1e-6
+
 
 def _resolve_levels(height, width, requested):
     """Clamp the decomposition depth so the coarsest band stays workable.
@@ -83,8 +90,12 @@ def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None):
 
     Each frame is split into band-pass detail levels plus a low-frequency base.
     For every detail band the coefficient with the highest pooled energy across
-    the stack wins the pixel; the base, which the focus stack shares, is
-    averaged. Collapsing the fused pyramid gives the all-in-focus image.
+    the stack wins the pixel; the base is averaged with each frame weighted by
+    its aggregate detail activity, so the frames that win the detail bands also
+    dominate the coarse band instead of a plain mean ghosting in the base of
+    blurred frames (exposure drift, focus breathing - item 16 in
+    docs/ALGORITHM_IMPROVEMENTS.md). Collapsing the fused pyramid gives the
+    all-in-focus image.
 
     The stack's own depth is preserved end to end: an 8-bit stack returns
     uint8, a 16-bit stack returns uint16.
@@ -145,6 +156,7 @@ def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None):
     best_energy = [np.full(band.shape[:2], -np.inf, dtype=np.float32)
                    for band in template_detail]
     base_accumulator = np.zeros_like(template_base)
+    base_weight = np.zeros(template_base.shape[:2], dtype=np.float32)
     del template_detail, template_base
 
     def decompose(k):
@@ -153,7 +165,11 @@ def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None):
     # Frames are decomposed on a thread pool but reduced in index order, so the
     # base sum and the strict-'>' tie-break are bitwise-stable run to run.
     for _, (detail, base) in _map_in_order(decompose, num_images, max_workers):
-        base_accumulator += base
+        # The frame's detail energies, cascaded down to the base grid, become
+        # its per-pixel weight in the coarse band: after band i is added the
+        # running map is pyrDown'd to band i+1's grid, so every band
+        # contributes and the final map lands at the base resolution.
+        activity = None
         for i, band in enumerate(detail):
             energy = _band_energy(band)
             better = energy > best_energy[i]
@@ -162,10 +178,20 @@ def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None):
                 np.copyto(fused_detail[i], band, where=better[:, :, np.newaxis])
             else:
                 np.copyto(fused_detail[i], band, where=better)
+            activity = energy if activity is None else activity + energy
+            next_shape = (fused_detail[i + 1].shape[:2] if i + 1 < levels
+                          else base_weight.shape)
+            activity = cv2.pyrDown(activity,
+                                   dstsize=(next_shape[1], next_shape[0]))
+        weight = activity + _BASE_ACTIVITY_EPS
+        base_accumulator += base * (weight[:, :, np.newaxis]
+                                    if base.ndim == 3 else weight)
+        base_weight += weight
         del detail, base
 
     # ---------- Reconstruction ----------
-    fused = base_accumulator / num_images
+    fused = base_accumulator / (base_weight[:, :, np.newaxis]
+                                if base_accumulator.ndim == 3 else base_weight)
     for i in range(levels - 1, -1, -1):
         target = (fused_detail[i].shape[1], fused_detail[i].shape[0])
         fused = fused_detail[i] + cv2.pyrUp(fused, dstsize=target)

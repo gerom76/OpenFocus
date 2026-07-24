@@ -37,6 +37,30 @@ try:
 except ImportError:
     dtcwt = None
 
+# Added to each frame's per-pixel lowpass weight (its aggregate highpass
+# activity) before the weighted average of the lowpass band. Where every frame
+# is flat the activities vanish and the epsilon takes over, degrading
+# gracefully to the plain mean used before; where any frame carries detail the
+# epsilon is negligible against real coefficient magnitudes.
+_LOWPASS_ACTIVITY_EPS = 1e-6
+
+
+def _lowpass_activity(pyramid, lowpass_shape):
+    """Aggregate detail activity of one frame on the lowpass grid.
+
+    Sums the complex magnitudes of every highpass level over the six
+    orientations, area-resampling each level's map to the lowpass resolution so
+    all scales contribute. Used to weight the frame's lowpass band so the
+    frames that win the detail bands also dominate the coarse band (item 16 in
+    docs/ALGORITHM_IMPROVEMENTS.md).
+    """
+    acc = np.zeros(lowpass_shape, dtype=np.float32)
+    for hp in pyramid.highpasses:
+        mag = np.abs(hp).sum(axis=2).astype(np.float32)
+        acc += cv2.resize(mag, (lowpass_shape[1], lowpass_shape[0]),
+                          interpolation=cv2.INTER_AREA)
+    return acc
+
 
 def _dtcwt_impl(input_source, img_resize, N, use_gpu):
     """
@@ -153,10 +177,18 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
             for img in images_rgb
         ]
         
-        # Fuse Low-pass (Average)
-        # Stack low-passes to (Num_Images, H, W) then mean
+        # Fuse Low-pass (activity-weighted average)
+        # Stack low-passes to (Num_Images, H, W), then average with each frame
+        # weighted by its aggregate highpass activity so the sharpest frames
+        # dominate the coarse band too, instead of a plain mean ghosting in
+        # frames that disagree at large scale (exposure drift, focus
+        # breathing).
         lowpass_stack = np.stack([t.lowpass for t in transforms], axis=0)
-        fused_lowpass = np.mean(lowpass_stack, axis=0)
+        weights = np.stack(
+            [_lowpass_activity(t, lowpass_stack.shape[1:]) for t in transforms],
+            axis=0) + _LOWPASS_ACTIVITY_EPS
+        weights /= weights.sum(axis=0, keepdims=True)
+        fused_lowpass = np.sum(lowpass_stack * weights, axis=0)
         
         # Fuse High-pass (Rule-based)
         fused_highpasses = []
