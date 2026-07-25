@@ -100,29 +100,37 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
         """
         Optimized high-frequency fusion.
         Vectorizes operations over the 6 wavelet directions to avoid Python loops.
+
+        Each entry of coeffs_list is one frame's coefficients for a level with
+        the colour channels stacked on a trailing axis, shape (H, W, 6, C).
+        A single decision mask - built from the strongest channel's activity -
+        selects all C channels together, so a pixel's colour cannot split
+        across source frames (item 12 in docs/ALGORITHM_IMPROVEMENTS.md).
         """
         num_imgs = len(coeffs_list)
         if num_imgs == 1:
             return coeffs_list[0]
-        
+
         # Recursive pairwise fusion if more than 2 images
         if num_imgs > 2:
             fused = coeffs_list[0]
             for i in range(1, num_imgs):
                 fused = fuse_highfreq_vectorized([fused, coeffs_list[i]], window_size)
             return fused
-        
+
         # Pairwise Fusion
         c1, c2 = coeffs_list[0], coeffs_list[1]
-        
-        # c1 shape is typically (H, W, 6).
+
+        # c1 shape is (H, W, 6, C).
         # We want to filter spatially (H, W) but independently for each direction (6).
         # OpenCV filters work on 2D planes, so the 6 slices are looped.
         dilate_kernel = np.ones((window_size, window_size), dtype=np.uint8)
 
-        # 1. Compute Magnitudes
-        mag1 = np.abs(c1)
-        mag2 = np.abs(c2)
+        # 1. Compute Magnitudes - keep the strongest channel response at each
+        # coefficient, so structure present in any channel drives the choice
+        # for all of them.
+        mag1 = np.abs(c1).max(axis=-1)
+        mag2 = np.abs(c2).max(axis=-1)
 
         # 2. Activity Level Measurement (Max Filter)
         # cv2.dilate is a sliding maximum; its default border ignores
@@ -157,56 +165,67 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
         W = count_map > threshold  # Final Boolean Mask (H, W, 6)
 
         # 5. Final Blending
-        # Use boolean indexing or multiplication. 
-        # W is boolean: True -> c1, False -> c2
-        fused = np.where(W, c1, c2)
-        
+        # W is boolean: True -> c1, False -> c2; the same mask picks every
+        # channel of a coefficient.
+        fused = np.where(W[..., None], c1, c2)
+
         return fused
 
     # 3. Perform DTCWT and Fusion
     transform = dtcwt.Transform2d()
-    fused_channels = []
 
-    # Process R, G, B channels sequentially
-    # (Parallelizing this loop via ThreadPool gives diminishing returns due to GIL, 
-    # vectorizing the inner fusion is the most effective optimization)
-    for channel_idx in range(3):
-        # Forward Transform
-        transforms = [
-            transform.forward(img[:, :, channel_idx], nlevels=N) 
-            for img in images_rgb
+    # The stack is folded into a running result one frame at a time - the same
+    # sequential pairwise order as before (item 7 in
+    # docs/ALGORITHM_IMPROVEMENTS.md still applies) - but all three channels of
+    # a frame travel through fusion together, so each pairwise step selects
+    # them with one shared decision mask instead of three independent ones
+    # (item 12). Streaming also bounds memory to about two frames' worth of
+    # coefficients regardless of stack depth.
+    lowpass_sum = None       # (h', w', 3) activity-weighted lowpass sum
+    weight_sum = None        # (h', w', 3) sum of those weights
+    fused_highpasses = None  # per level: (H, W, 6, 3) complex
+
+    for img in images_rgb:
+        pyramids = [
+            transform.forward(img[:, :, ch], nlevels=N) for ch in range(3)
         ]
-        
-        # Fuse Low-pass (activity-weighted average)
-        # Stack low-passes to (Num_Images, H, W), then average with each frame
-        # weighted by its aggregate highpass activity so the sharpest frames
-        # dominate the coarse band too, instead of a plain mean ghosting in
-        # frames that disagree at large scale (exposure drift, focus
-        # breathing).
-        lowpass_stack = np.stack([t.lowpass for t in transforms], axis=0)
-        weights = np.stack(
-            [_lowpass_activity(t, lowpass_stack.shape[1:]) for t in transforms],
-            axis=0) + _LOWPASS_ACTIVITY_EPS
-        weights /= weights.sum(axis=0, keepdims=True)
-        fused_lowpass = np.sum(lowpass_stack * weights, axis=0)
-        
-        # Fuse High-pass (Rule-based)
-        fused_highpasses = []
-        for level in range(N):
-            # Extract coefficients for this level from all images
-            # Each t.highpasses[level] is usually (H, W, 6) complex array
-            level_coeffs = [t.highpasses[level] for t in transforms]
-            
-            # Apply vectorized fusion
-            fused_level = fuse_highfreq_vectorized(level_coeffs)
-            fused_highpasses.append(fused_level)
-        
-        # Inverse Transform
-        fused_pyramid = dtcwt.Pyramid(fused_lowpass, tuple(fused_highpasses))
-        fused_channel = transform.inverse(fused_pyramid)
-        fused_channels.append(fused_channel)
+
+        # The lowpass band is averaged with each frame weighted by its
+        # aggregate highpass activity so the sharpest frames dominate the
+        # coarse band too, instead of a plain mean ghosting in frames that
+        # disagree at large scale (exposure drift, focus breathing).
+        lowpass = np.stack([p.lowpass for p in pyramids], axis=-1)
+        weight = np.stack(
+            [_lowpass_activity(p, lowpass.shape[:2]) for p in pyramids],
+            axis=-1) + _LOWPASS_ACTIVITY_EPS
+        highpasses = [
+            np.stack([p.highpasses[level] for p in pyramids], axis=-1)
+            for level in range(N)
+        ]
+
+        if lowpass_sum is None:
+            lowpass_sum = lowpass * weight
+            weight_sum = weight
+            fused_highpasses = highpasses
+        else:
+            lowpass_sum += lowpass * weight
+            weight_sum += weight
+            fused_highpasses = [
+                fuse_highfreq_vectorized([fused, new])
+                for fused, new in zip(fused_highpasses, highpasses)
+            ]
+
+    fused_lowpass = lowpass_sum / weight_sum
 
     # 4. Reconstruct Final Image
+    # The inverse transform runs per channel; the coupling above only decides
+    # which frame each coefficient comes from.
+    fused_channels = [
+        transform.inverse(dtcwt.Pyramid(
+            fused_lowpass[..., ch],
+            tuple(level[..., ch] for level in fused_highpasses)))
+        for ch in range(3)
+    ]
     fused_img = np.stack(fused_channels, axis=-1)
     
     # Clip and convert back to the stack's own depth

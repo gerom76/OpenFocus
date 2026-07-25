@@ -74,12 +74,19 @@ def _activity(mag):
 
 
 def _fuse_pair(c1, c2):
-    """Fuse two coefficient tensors of shape (C, 6, h, w, 2) (real/imag pairs)."""
-    c, d, h, w, _ = c1.shape
+    """Fuse two coefficient tensors of shape (C, 6, h, w, 2) (real/imag pairs).
 
-    # Activity level: 3x3 max filter of the complex magnitude
-    mag1 = torch.sqrt(c1[..., 0] ** 2 + c1[..., 1] ** 2)
-    mag2 = torch.sqrt(c2[..., 0] ** 2 + c2[..., 1] ** 2)
+    A single decision mask - built from the strongest channel's activity at
+    each coefficient - selects all C channels together, so a pixel's colour
+    cannot split across source frames (item 12 in
+    docs/ALGORITHM_IMPROVEMENTS.md). Mirrors fuse_highfreq_vectorized in
+    fusion_methods/dtcwt.py.
+    """
+    _, d, h, w, _ = c1.shape
+
+    # Activity level: 3x3 max filter of the strongest channel's magnitude
+    mag1 = torch.sqrt(c1[..., 0] ** 2 + c1[..., 1] ** 2).amax(dim=0, keepdim=True)
+    mag2 = torch.sqrt(c2[..., 0] ** 2 + c2[..., 1] ** 2).amax(dim=0, keepdim=True)
     a1 = _activity(mag1)
     a2 = _activity(mag2)
 
@@ -87,8 +94,8 @@ def _fuse_pair(c1, c2):
 
     # Consistency verification: majority vote in a 3x3 window (zero-padded count)
     kernel = torch.ones(1, 1, WINDOW_SIZE, WINDOW_SIZE, device=c1.device)
-    count = F.conv2d(initial_mask.reshape(c * d, 1, h, w), kernel, padding=WINDOW_SIZE // 2)
-    decision = (count > (WINDOW_SIZE * WINDOW_SIZE) / 2.0).reshape(c, d, h, w)
+    count = F.conv2d(initial_mask.reshape(d, 1, h, w), kernel, padding=WINDOW_SIZE // 2)
+    decision = (count > (WINDOW_SIZE * WINDOW_SIZE) / 2.0).reshape(1, d, h, w)
 
     return torch.where(decision.unsqueeze(-1), c1, c2)
 
@@ -140,7 +147,9 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
         lowpass_weight = None
         fused_highpass = None
 
-        # Channels are processed independently, so BGR order can be kept as-is
+        # The shared decision mask reduces over channels with a max, which is
+        # order-invariant, so BGR order can be kept as-is (the CPU path works
+        # in RGB and lands on the same mask)
         for img in images:
             # (1, 3, H, W) in [0, 1], from uint8 or uint16 alike
             t = torch_depth.image_to_float01(img, dev)
