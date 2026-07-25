@@ -7,7 +7,12 @@ Modules:
 - ui_utils: UI-related functions (message boxes, dialogs)
 - validators: Validation and utility functions
 - platform_utils: Cross-platform utilities (font detection, OS detection)
+- torch_env: PyTorch availability checks, including frozen-build stub handling
 """
+
+# Imported first: it disarms a code-less torch/ directory left in a frozen
+# bundle, and must run before anything else can import PyTorch.
+from utils import torch_env  # noqa: F401
 
 from utils.image_utils import (
     pixmap_to_cv2,

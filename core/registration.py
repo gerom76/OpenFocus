@@ -73,6 +73,17 @@ def resolve_reference_index(reference_mode, num_images: int) -> int:
 
 # ========== GPU warping helpers ==========
 
+def _import_error_reason(exc: ImportError) -> str:
+    """Condense an import failure to one log-friendly line.
+
+    CuPy answers a failed CUDA library load with a multi-paragraph message, and
+    "not found" would be the wrong summary for it - a packaged build that ships
+    CuPy without its CUDA runtime fails here, not at lookup.
+    """
+    first = next((line.strip() for line in str(exc).splitlines() if line.strip()), "")
+    return first or type(exc).__name__
+
+
 def _init_gpu_warp():
     """Probe for Cupy and a usable CUDA device.
 
@@ -83,8 +94,8 @@ def _init_gpu_warp():
     try:
         import cupy as cp
         import cupyx.scipy.ndimage as cp_ndimage
-    except ImportError:
-        print("    [Info] Cupy not found. Using CPU for warping.")
+    except ImportError as exc:
+        print(f"    [Info] Cupy unavailable ({_import_error_reason(exc)}). Using CPU for warping.")
         return None, None
     try:
         props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
@@ -883,9 +894,9 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
             # Cupy imports fine but no usable CUDA device (driver mismatch, no GPU, ...)
             HAS_CUPY = False
             print(f"    [Info] Cupy installed but GPU unavailable ({e}). Using CPU for warping.")
-    except ImportError:
+    except ImportError as exc:
         HAS_CUPY = False
-        print("    [Info] Cupy not found. Using CPU for warping.")
+        print(f"    [Info] Cupy unavailable ({_import_error_reason(exc)}). Using CPU for warping.")
 
     def warp_task(args):
         idx, img, H = args

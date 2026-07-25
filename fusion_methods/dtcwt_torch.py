@@ -34,7 +34,24 @@ except ImportError:
     import importlib.resources
 
     def _resource_stream(package, resource_name):
-        return importlib.resources.files(package).joinpath(resource_name).open('rb')
+        try:
+            return importlib.resources.files(package).joinpath(resource_name).open('rb')
+        except (ImportError, FileNotFoundError, NotADirectoryError):
+            # pytorch_wavelets names its data package by string only
+            # ('pytorch_wavelets.dtcwt.data'), so a frozen build ships the .npz
+            # files without the package that owns them and importlib.resources
+            # cannot anchor on it. Anchor on the nearest packaged ancestor and
+            # treat the rest of the name as directories instead.
+            parts = package.split('.')
+            for cut in range(len(parts) - 1, 0, -1):
+                try:
+                    anchor = importlib.resources.files('.'.join(parts[:cut]))
+                except (ImportError, FileNotFoundError, NotADirectoryError):
+                    continue
+                candidate = anchor.joinpath(*parts[cut:], resource_name)
+                if candidate.is_file():
+                    return candidate.open('rb')
+            raise
 
     _shim = types.ModuleType('pkg_resources')
     _shim.resource_stream = _resource_stream

@@ -13,6 +13,7 @@ from fusion_methods.dtcwt import _dtcwt_impl
 from core.cancellation import RenderCancelled
 from utils import resource_path, bitdepth
 from utils.image_utils import read_image_any_depth
+from utils.torch_env import gpu_device_name, has_gpu_device, is_torch_available
 
 
 # Tile parameters are now instance attributes of MultiFocusFusion; see the
@@ -62,17 +63,12 @@ def get_tile_params() -> dict:
 
 
 def is_stackmffv4_available() -> bool:
-    """Return True when PyTorch is importable for the StackMFF-V4 fusion."""
-    torch_spec = importlib.util.find_spec("torch")
-    if not torch_spec:
-        return False
+    """Return True when PyTorch is importable for the StackMFF-V4 fusion.
 
-    try:
-        importlib.import_module("torch")
-    except ImportError:
-        return False
-
-    return True
+    A frozen build can expose a code-less ``torch`` directory that imports but
+    has no attributes, so completeness is checked as well as importability.
+    """
+    return is_torch_available()
 
 class MultiFocusFusion:
     """
@@ -133,8 +129,33 @@ class MultiFocusFusion:
             self._validate_dct_environment()
         elif self.algorithm == 'guided_filter':
             self._validate_spatial_environment()
+        elif self.algorithm == 'gfgfgf':
+            self._require_torch_gpu('GFG-FGF fusion')
+        elif self.algorithm == 'pyramid':
+            self._require_torch_gpu('pyramid fusion')
+        elif self.algorithm in ('depthmap_max', 'depthmap_average'):
+            # CPU-only implementation; there is no GPU path to fall back from.
+            self.use_gpu = False
         elif self.algorithm == 'stackmffv4':
             self._validate_ai_environment()
+
+    def _require_torch_gpu(self, label: str) -> None:
+        """Drop GPU mode when PyTorch cannot offer a device for ``label``.
+
+        Deciding this once per render keeps the per-tile GPU attempt (and its
+        warning) out of the log on machines or builds without PyTorch.
+        """
+        if not self.use_gpu:
+            return
+
+        if not is_torch_available():
+            print(f"Note: PyTorch not installed; {label} will run on CPU.")
+        elif not has_gpu_device():
+            print(f"Note: No GPU acceleration available (CUDA/MPS); {label} will run on CPU.")
+        else:
+            return
+
+        self.use_gpu = False
 
     def _fuse_gfgfgf(self,
                      input_source: Union[str, List[np.ndarray]],
@@ -247,19 +268,7 @@ class MultiFocusFusion:
                 "DCT fusion requires OpenCV. Install it with: pip install opencv-python"
             ) from exc
 
-        if self.use_gpu:
-            try:
-                import torch
-                has_gpu = torch.cuda.is_available() or (
-                    hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
-                )
-                if not has_gpu:
-                    print("Note: No GPU acceleration available (CUDA/MPS); DCT fusion will run on CPU.")
-            except ImportError:
-                has_gpu = False
-                print("Note: PyTorch not installed; DCT fusion will run on CPU.")
-            if not has_gpu:
-                self.use_gpu = False
+        self._require_torch_gpu('DCT fusion')
 
     def _validate_transform_environment(self) -> None:
         """Validate transform-domain fusion dependencies."""
@@ -271,15 +280,7 @@ class MultiFocusFusion:
                 importlib.util.find_spec("pytorch_wavelets") is not None
                 and importlib.util.find_spec("pywt") is not None
             )
-            try:
-                import torch
-                has_device = torch.cuda.is_available() or (
-                    hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
-                )
-            except ImportError:
-                has_device = False
-
-            gpu_ready = have_wavelets and has_device
+            gpu_ready = have_wavelets and has_gpu_device()
             if not gpu_ready:
                 if not have_wavelets:
                     print("Note: GPU DTCWT fusion requires pytorch_wavelets and PyWavelets; falling back to CPU.")
@@ -299,19 +300,7 @@ class MultiFocusFusion:
 
     def _validate_spatial_environment(self) -> None:
         """Validate spatial-domain fusion dependencies."""
-        if self.use_gpu:
-            try:
-                import torch
-                has_gpu = torch.cuda.is_available() or (
-                    hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
-                )
-                if not has_gpu:
-                    print("Note: No GPU acceleration available (CUDA/MPS); guided-filter fusion will run on CPU.")
-            except ImportError:
-                has_gpu = False
-                print("Note: PyTorch not installed; guided-filter fusion will run on CPU.")
-            if not has_gpu:
-                self.use_gpu = False
+        self._require_torch_gpu('guided-filter fusion')
 
     def _validate_ai_environment(self) -> None:
         """Validate AI fusion dependencies."""
@@ -320,12 +309,9 @@ class MultiFocusFusion:
                 "StackMFF-V4 fusion requires PyTorch. Install it with: pip install torch torchvision"
             )
 
-        import torch
-
-        if self.use_gpu:
-            if not torch.cuda.is_available() and not torch.backends.mps.is_available():
-                print("Warning: No GPU acceleration available (CUDA/MPS). Running StackMFF-V4 on CPU (slower).")
-                self.use_gpu = False
+        if self.use_gpu and not has_gpu_device():
+            print("Warning: No GPU acceleration available (CUDA/MPS). Running StackMFF-V4 on CPU (slower).")
+            self.use_gpu = False
     
     def fuse(self, 
              input_source: Union[str, List[np.ndarray]], 
@@ -1053,14 +1039,8 @@ class MultiFocusFusion:
         Returns:
             dict: Algorithm name, device type, etc.
         """
-        import torch
         if self.use_gpu:
-            if torch.cuda.is_available():
-                device_name = 'CUDA'
-            elif torch.backends.mps.is_available():
-                device_name = 'MPS'
-            else:
-                device_name = 'CPU (GPU unavailable)'
+            device_name = gpu_device_name() or 'CPU (GPU unavailable)'
         else:
             device_name = 'CPU'
         return {

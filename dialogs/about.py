@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 from locales import trans
 from utils import get_monospace_font_family
+from utils.torch_env import BLOCKED_STUB_MODULES
 from ui.styles import PRIMARY_BLUE
 
 
@@ -141,6 +142,13 @@ class EnvironmentInfoDialog(QDialog):
         except ImportError:
             info_lines.append(f"  ✗ {trans.t('env_not_installed')}")
             info_lines.append(f"  ✗ {trans.t('env_stackmff_unavailable')}")
+        if BLOCKED_STUB_MODULES:
+            # Only ever non-empty in a packaged build; explains why an apparently
+            # present package is reported as missing.
+            info_lines.append(
+                "  ⚠ Incomplete package(s) in this build were ignored: "
+                + ", ".join(BLOCKED_STUB_MODULES)
+            )
         info_lines.append("")
 
         # Detect DTCWT

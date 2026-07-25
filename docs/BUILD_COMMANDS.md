@@ -22,6 +22,9 @@ pyinstaller --clean --noconfirm --onefile --noconsole `
   --collect-data dtcwt `
   --exclude-module torch `
   --exclude-module torchvision `
+  --exclude-module cupy `
+  --exclude-module cupyx `
+  --exclude-module cupy_backends `
   main.py
 ```
 
@@ -30,6 +33,33 @@ Notes:
 - Use when target machines do not need GPU/torch features.
 - `--add-data "ui;ui"` includes UI styles and resources.
 - `--add-data "docs;docs"` includes documentation files.
+- The CuPy excludes are **not optional** — see the warning below.
+
+### ⚠ Why CuPy must be excluded from the no-torch build
+
+CuPy's extension modules link against the CUDA DLLs that ship inside
+`site-packages/torch/lib` (`cublasLt64_13.dll`, `cufft64_12.dll`, ...). Even with
+`--exclude-module torch`, PyInstaller's dependency scan copies those DLLs into a
+`torch/lib/` folder inside the bundle, which has two consequences:
+
+1. **~1.2 GB of dead weight.** Windows does not search bundle subdirectories for
+   DLLs, so CuPy cannot load them anyway: the frozen app logs
+   `[Info] Cupy not found. Using CPU for warping.`
+2. **A fake `torch` package.** `torch/` has no `__init__.py`, so `import torch`
+   succeeds and returns an *empty* implicit namespace package. Every
+   `except ImportError` CPU fallback is bypassed and the first attribute access
+   fails with `AttributeError: module 'torch' has no attribute 'cuda'` — during
+   rendering, after the images are already loaded and registered.
+
+`utils/torch_env.py` detects that stub at startup and makes the import fail
+properly, so a bundle built without the CuPy excludes still falls back to CPU
+instead of crashing. Excluding CuPy removes the cause (and the 1.2 GB).
+
+If a build must keep CuPy, strip the leftovers in a `.spec` file instead:
+
+```python
+a.binaries = [b for b in a.binaries if not b[0].lower().startswith('torch\\')]
+```
 
 ---
 
@@ -60,9 +90,10 @@ Notes:
 
 ---
 
-## 3) Include `torch`, output as one directory (`--onedir`)
+## 3) GPU build: `torch` + CuPy, output as one directory (`--onedir`) ⭐
 
-This builds an output folder containing the executable and required files. Faster to build and easier to troubleshoot dependency issues.
+The recommended GPU build. `torch` drives GPU fusion (DTCWT / GFF / DCT / pyramid /
+GFG-FGF / StackMFF-V4); CuPy drives GPU warping during registration.
 
 ```powershell
 pyinstaller --clean --noconfirm --onedir --noconsole `
@@ -78,11 +109,31 @@ pyinstaller --clean --noconfirm --onedir --noconsole `
   --collect-data dtcwt `
   --collect-all torch `
   --collect-all torchvision `
+  --collect-all cupy `
+  --collect-all cupyx `
+  --collect-all cupy_backends `
+  --collect-all cuda `
+  --collect-data pytorch_wavelets `
+  --hidden-import graphlib `
   main.py
 ```
 
 Notes:
-- `--onedir` is recommended for large dependencies like `torch` during development or when debugging.
+- `--onedir` is strongly preferred here: a `--onefile` GPU build extracts several GB
+  to `%TEMP%` on *every* launch, which costs a minute of start-up and the same amount
+  of free disk. Zip `dist\OpenFocus\` if you need a single file to hand over.
+- `--collect-all cuda` **and** `--hidden-import graphlib` are both required for CuPy.
+  CuPy locates its CUDA libraries through `cuda.pathfinder`, an implicit namespace
+  package PyInstaller does not pick up on its own, and it imports the `graphlib`
+  standard-library module in a way the dependency scan misses. Missing either one
+  makes `import cupy` fail inside the bundle, and the log then reads
+  `[Info] Cupy unavailable (...). Using CPU for warping.`
+- `--collect-data pytorch_wavelets` ships the `.npz` wavelet coefficients that the GPU
+  DTCWT path loads at runtime (via the `pkg_resources` shim in
+  `fusion_methods/dtcwt_torch.py`). Without them GPU DTCWT falls back to the CPU.
+- CuPy compiles kernels at runtime with NVRTC, so GPU warping additionally needs a
+  CUDA toolkit on the *target* machine (`CUDA_PATH`). GPU fusion via `torch` does not
+  — torch ships its own CUDA runtime in `torch\lib`.
 - Includes `ui` and `docs` directories for complete application functionality.
 
 ---
