@@ -8,6 +8,7 @@ from core.registration import ImageRegistration, resolve_reference_index
 from core.multi_focus_fusion import MultiFocusFusion
 from core.cancellation import RenderCancelled
 from core import contrast
+from core.memory import release_render_memory
 from fusion_methods.ifcnn import _ifcnn_refine_impl, get_ifcnn_model_path, is_ifcnn_available
 from utils import resource_path, normalize_kernel_size, write_image, bitdepth
 from constants import (
@@ -98,6 +99,8 @@ class ROIAlignmentWorker(QThread):
             self.error_signal.emit(str(e))
             import traceback
             traceback.print_exc()
+        finally:
+            release_render_memory()
 
 
 class RenderWorker(QThread):
@@ -301,6 +304,8 @@ class RenderWorker(QThread):
             self.error_signal.emit(str(e))
             import traceback
             traceback.print_exc()
+        finally:
+            release_render_memory()
 
     def _make_registration(self, mode, reference_index=0):
         """Build an ImageRegistration for one stage, honouring the UI downscale width."""
@@ -676,6 +681,8 @@ class BatchWorker(QThread):
 
         except Exception as e:
             self.error.emit(f"Batch processing failed: {str(e)}")
+        finally:
+            release_render_memory()
 
     def _split_images_for_processing(self):
         """Split the images in a single folder"""
