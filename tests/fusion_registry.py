@@ -117,6 +117,11 @@ def _pyramid(stack, levels=None, img_resize=None, thread_count=None):
     return pyramid_impl(stack, img_resize, levels=levels, thread_count=thread_count)
 
 
+def _pyramid_torch(stack, levels=None, img_resize=None, device=None):
+    from fusion_methods.pyramid_torch import pyramid_torch_impl
+    return pyramid_torch_impl(stack, img_resize, levels=levels, device=device)
+
+
 def _depthmap_max(stack, kernel_size=9, img_resize=None, thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_MAX
     return depthmap_impl(stack, img_resize, mode=MODE_MAX,
@@ -351,6 +356,11 @@ METHODS = [
         sweeps=(("N", [1, 2, 3, 4, 5, 6], "Same dial as the CPU DTCWT."),),
         gpu=True,
         min_psnr=34.0,
+    ),
+    FusionMethod(
+        key="pyramid_gpu", label="Pyramid (GPU)", fuse=_pyramid_torch,
+        check=_needs_gpu("torch"), params={"levels": None}, gpu=True,
+        sweeps=(("levels", [2, 3, 4, 5, 6], "Same dial as the CPU pyramid."),),
     ),
 ]
 

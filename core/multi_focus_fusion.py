@@ -193,9 +193,21 @@ class MultiFocusFusion:
         Returns:
             Fused image
         """
-        # CPU-only; there is no GPU implementation, so use_gpu is ignored here.
         # kernel_size may arrive from the shared worker call path - the pyramid
         # has no kernel, so it is quietly dropped along with any other extras.
+        if self.use_gpu:
+            try:
+                from fusion_methods.pyramid_torch import pyramid_torch_impl
+                return pyramid_torch_impl(input_source, img_resize, levels=levels)
+            except Exception as exc:
+                print(f"Warning: GPU pyramid fusion failed ({exc}); falling back to CPU.")
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
         thread_count = kwargs.get('thread_count', None)
         return pyramid_impl(input_source, img_resize, levels=levels, thread_count=thread_count)
 
