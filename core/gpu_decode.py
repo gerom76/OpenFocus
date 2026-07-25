@@ -19,6 +19,7 @@ Decoded frames come back as BGR numpy arrays, so callers cannot tell which
 path produced a frame.
 """
 
+import threading
 from typing import List, Optional
 
 import numpy as np
@@ -51,6 +52,13 @@ def is_enabled() -> bool:
     return _enabled
 
 
+# The probe creates the CUDA context. Loader worker threads all ask
+# is_available() around the same moment on the first RAW stack, and letting
+# each of them run its own probe concurrently serialises inside the driver
+# and can stall loading for many seconds - so exactly one thread probes.
+_PROBE_LOCK = threading.Lock()
+
+
 def is_available() -> bool:
     """True when GPU loading is enabled and a working nvJPEG decoder exists.
 
@@ -63,7 +71,9 @@ def is_available() -> bool:
     if not _enabled:
         return False
     if _available is None:
-        _available = _probe()
+        with _PROBE_LOCK:
+            if _available is None:
+                _available = _probe()
     return _available
 
 
@@ -174,17 +184,27 @@ _K_DIAG = np.array([
 ], dtype=np.float32) / 8.0
 
 
+# One RAW image on the GPU at a time: concurrent develops from the loader's
+# worker threads fight over the allocator and can push VRAM into out-of-memory
+# retries. Non-blocking - a thread that finds the GPU busy develops on the CPU
+# instead of idling a core in a queue.
+_RAW_GPU_LOCK = threading.Lock()
+
+# 5x5 kernels uploaded once per process instead of once per image.
+_kernel_cache: dict = {}
+
+
 def postprocess_raw(raw, output_bps: int = 16) -> Optional[np.ndarray]:
     """Develop an opened rawpy image on the GPU; BGR uint8/uint16 out.
 
     Mirrors ``raw.postprocess(use_camera_wb=True, output_bps=...)`` closely
     enough for fusion work: camera white balance, dcraw's highlight clip and
     1%-clip auto-brightness, BT.709 gamma. Returns None whenever the file
-    falls outside the straightforward Bayer case, so the caller can fall back
-    to LibRaw's own postprocess.
+    falls outside the straightforward Bayer case - or whenever the GPU is
+    busy or out of memory - so the caller can fall back to LibRaw's own
+    postprocess.
     """
     import torch
-    import torch.nn.functional as F
 
     pattern = np.asarray(raw.raw_pattern)
     if pattern.shape != (2, 2):
@@ -227,33 +247,56 @@ def postprocess_raw(raw, output_bps: int = 16) -> Optional[np.ndarray]:
     black_tile = np.array([[black[pattern[y, x]] for x in range(2)] for y in range(2)], dtype=np.float32)
     gain_tile = np.array([[gains[cell[y][x]] / wb_norm for x in range(2)] for y in range(2)], dtype=np.float32)
 
-    device = torch.device('cuda')
-    cfa = torch.from_numpy(np.ascontiguousarray(cfa_np)).to(device, torch.float32)
-    black_t = torch.from_numpy(black_tile).to(device).repeat(height // 2, width // 2)
-    gain_t = torch.from_numpy(gain_tile).to(device).repeat(height // 2, width // 2)
     scale = white - black_tile.max()
     if scale <= 0:
         return None
+
+    if not _RAW_GPU_LOCK.acquire(blocking=False):
+        return None
+    try:
+        return _develop_raw(cfa_np, cell, black_tile, gain_tile, scale, rgb_cam, flip, output_bps)
+    except torch.cuda.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        return None
+    finally:
+        _RAW_GPU_LOCK.release()
+
+
+def _develop_raw(cfa_np, cell, black_tile, gain_tile, scale, rgb_cam, flip, output_bps) -> np.ndarray:
+    """The GPU develop itself; caller holds the lock and handles OOM."""
+    import torch
+
+    height, width = cfa_np.shape
+    device = torch.device('cuda')
+
+    # Upload at the source's 16 bits and widen on the GPU: half the PCIe
+    # traffic of sending float32.
+    cfa = torch.from_numpy(np.ascontiguousarray(cfa_np)).to(device).to(torch.float32)
     # dcraw's scale_colors with highlight mode 0: the smallest gain lands at
-    # 1.0 and everything above full scale is clipped.
-    cfa = ((cfa - black_t) / scale * gain_t).clamp_(0.0, 1.0)
+    # 1.0 and everything above full scale is clipped. Applied in place per
+    # 2x2 phase, so no full-size black/gain planes are ever materialised.
+    for y in range(2):
+        for x in range(2):
+            cfa[y::2, x::2].sub_(float(black_tile[y, x])).mul_(float(gain_tile[y, x]) / scale)
+    cfa.clamp_(0.0, 1.0)
 
     rgb = _demosaic_mhc(cfa, cell)
+    del cfa
 
     matrix = torch.from_numpy(rgb_cam.astype(np.float32)).to(device)
     rgb = torch.einsum('ij,jhw->ihw', matrix, rgb).clamp_(0.0, 1.0)
 
     # Auto-brightness: per channel, find the level whose top tail holds 1% of
-    # the pixels; the largest such level becomes the new white point.
-    clip_count = height * width * _AUTO_BRIGHT_CLIP
-    white_point = 0.0
-    for c in range(3):
-        hist = torch.histc(rgb[c], bins=_HIST_BINS, min=0.0, max=1.0)
-        tail = hist.flip(0).cumsum(0)
-        first = int(torch.searchsorted(tail, torch.tensor(clip_count, device=device)).item())
-        white_point = max(white_point, (_HIST_BINS - first) / _HIST_BINS)
+    # the pixels; the largest such level becomes the new white point. Batched
+    # so the whole search costs a single host sync.
+    clip_count = float(height * width * _AUTO_BRIGHT_CLIP)
+    hists = torch.stack([torch.histc(rgb[c], bins=_HIST_BINS, min=0.0, max=1.0) for c in range(3)])
+    tails = hists.flip(1).cumsum(1)
+    limits = torch.full((3, 1), clip_count, device=device)
+    first = int(torch.searchsorted(tails, limits).min().item())
+    white_point = (_HIST_BINS - first) / _HIST_BINS
     if white_point > 1e-4:
-        rgb = (rgb / white_point).clamp_(0.0, 1.0)
+        rgb = rgb.div_(white_point).clamp_(0.0, 1.0)
 
     # BT.709 transfer curve, dcraw's default gamma (2.222, 4.5).
     rgb = torch.where(rgb < 0.018, rgb * 4.5, 1.099 * rgb.clamp(min=0.018).pow(1.0 / 2.222) - 0.099)
@@ -270,50 +313,58 @@ def postprocess_raw(raw, output_bps: int = 16) -> Optional[np.ndarray]:
     return bgr
 
 
-def _demosaic_mhc(cfa, cell) -> 'object':
+def _cached_kernel(kernel: np.ndarray, device):
+    """The 5x5 kernel as a (1, 1, 5, 5) tensor, uploaded once per process."""
+    import torch
+    tensor = _kernel_cache.get(id(kernel))
+    if tensor is None:
+        tensor = torch.from_numpy(kernel).to(device).reshape(1, 1, 5, 5)
+        _kernel_cache[id(kernel)] = tensor
+    return tensor
+
+
+def _demosaic_mhc(cfa, cell):
     """Malvar-He-Cutler demosaic of a white-balanced CFA plane.
 
     `cfa` is a (H, W) float CUDA tensor in [0, 1]; `cell` the 2x2 colour
     letters. Returns a (3, H, W) RGB tensor. Four fixed 5x5 convolutions
-    produce every missing sample; masks then pick the right estimate per site.
+    produce every missing sample; strided slice assignment then picks the
+    right estimate per site, so no mask planes are allocated.
     """
     import torch
     import torch.nn.functional as F
 
-    device = cfa.device
-    height, width = cfa.shape
+    padded = F.pad(cfa[None, None], (2, 2, 2, 2), mode='reflect')
+    est_green = F.conv2d(padded, _cached_kernel(_K_GREEN, cfa.device))[0, 0]
+    est_row = F.conv2d(padded, _cached_kernel(_K_SAME_ROW, cfa.device))[0, 0]
+    est_col = F.conv2d(padded, _cached_kernel(_K_SAME_COL, cfa.device))[0, 0]
+    est_diag = F.conv2d(padded, _cached_kernel(_K_DIAG, cfa.device))[0, 0]
+    del padded
 
-    def mask(predicate):
-        m = torch.zeros((height, width), device=device)
-        for y in range(2):
-            for x in range(2):
-                if predicate(y, x):
-                    m[y::2, x::2] = 1.0
-        return m
-
-    m_r = mask(lambda y, x: cell[y][x] == 'R')
-    m_b = mask(lambda y, x: cell[y][x] == 'B')
-    m_g = mask(lambda y, x: cell[y][x] == 'G')
-    # G sites split by which colour sits beside them horizontally.
-    m_g_row_r = mask(lambda y, x: cell[y][x] == 'G' and cell[y][1 - x] == 'R')
-    m_g_row_b = mask(lambda y, x: cell[y][x] == 'G' and cell[y][1 - x] == 'B')
-
-    x4 = cfa.unsqueeze(0).unsqueeze(0)
-    padded = F.pad(x4, (2, 2, 2, 2), mode='reflect')
-
-    def conv(kernel: np.ndarray):
-        k = torch.from_numpy(kernel).to(device).reshape(1, 1, 5, 5)
-        return F.conv2d(padded, k)[0, 0]
-
-    est_green = conv(_K_GREEN)
-    est_row = conv(_K_SAME_ROW)
-    est_col = conv(_K_SAME_COL)
-    est_diag = conv(_K_DIAG)
-
-    green = cfa * m_g + est_green * (m_r + m_b)
-    # A G site with R beside it has B above/below, and vice versa.
-    red = cfa * m_r + est_row * m_g_row_r + est_col * m_g_row_b + est_diag * m_b
-    blue = cfa * m_b + est_row * m_g_row_b + est_col * m_g_row_r + est_diag * m_r
+    red = torch.empty_like(cfa)
+    green = torch.empty_like(cfa)
+    blue = torch.empty_like(cfa)
+    for y in range(2):
+        for x in range(2):
+            site = (slice(y, None, 2), slice(x, None, 2))
+            colour = cell[y][x]
+            if colour == 'R':
+                red[site] = cfa[site]
+                green[site] = est_green[site]
+                blue[site] = est_diag[site]
+            elif colour == 'B':
+                blue[site] = cfa[site]
+                green[site] = est_green[site]
+                red[site] = est_diag[site]
+            else:
+                green[site] = cfa[site]
+                # A G site with R beside it has B above/below, and vice versa.
+                if cell[y][1 - x] == 'R':
+                    red[site] = est_row[site]
+                    blue[site] = est_col[site]
+                else:
+                    blue[site] = est_row[site]
+                    red[site] = est_col[site]
     return torch.stack((red, green, blue)).clamp_(0.0, 1.0)
 
 
