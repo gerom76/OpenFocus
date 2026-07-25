@@ -264,6 +264,11 @@ class OpenFocus(QMainWindow):
         self.lbl_contrast_value = right_panel_components.contrast_value_label
         self.source_images_label = right_panel_components.source_images_label
         self.file_list = right_panel_components.file_list
+        self.btn_select_all = right_panel_components.btn_select_all
+        self.btn_select_invert = right_panel_components.btn_select_invert
+        self.btn_select_none = right_panel_components.btn_select_none
+        self.btn_select_nth = right_panel_components.btn_select_nth
+        self.spin_select_nth = right_panel_components.spin_select_nth
         self.output_label = right_panel_components.output_label
         self.output_list = right_panel_components.output_list
         
@@ -1137,9 +1142,18 @@ class OpenFocus(QMainWindow):
             self.btn_preview_roi.setText(trans.t('btn_roi'))
 
         # Lists labels
-        count = self.file_list.count()
-        c.source_images_label.setText(trans.t('label_source_images').format(count))
-        
+        self.source_manager.update_source_images_count()
+
+        c.btn_select_all.setText(trans.t('btn_select_all'))
+        c.btn_select_all.setToolTip(trans.t('tip_select_all'))
+        c.btn_select_invert.setText(trans.t('btn_select_invert'))
+        c.btn_select_invert.setToolTip(trans.t('tip_select_invert'))
+        c.btn_select_none.setText(trans.t('btn_select_none'))
+        c.btn_select_none.setToolTip(trans.t('tip_select_none'))
+        c.btn_select_nth.setText(trans.t('btn_select_nth'))
+        c.btn_select_nth.setToolTip(trans.t('tip_select_nth'))
+        c.spin_select_nth.setToolTip(trans.t('tip_select_nth'))
+
         out_count = self.output_list.count()
         c.output_label.setText(trans.t('label_output').format(out_count))
         

@@ -314,15 +314,62 @@ QPushButton:disabled {{
 """
 
 
-# Source / output list style
-SOURCE_LIST_STYLE = f"""
-QListWidget {{ background-color: #333; border: 1px solid #555; }}
-QListWidget::item {{ padding: 5px; color: #ccc; }}
+# Source / output list style. Rows carry no vertical padding on purpose: the
+# thumbnail is scaled to the full row height, so any padding would reappear as a
+# gap between consecutive images (see fit_list_rows_to_thumbnails).
+LIST_STYLE = f"""
+QListWidget {{ background-color: #333; border: 1px solid #555; outline: none; }}
+QListWidget::item {{ padding: 0px 2px; color: #ccc; border: 0; }}
 QListWidget::item:selected {{ background-color: {PRIMARY_BLUE}; color: white; }}
 QListWidget::item:hover {{ background-color: #444; }}
 """
 
-OUTPUT_LIST_STYLE = SOURCE_LIST_STYLE
+# The source list adds the per-frame checkbox used to pick what gets processed.
+SOURCE_LIST_STYLE = LIST_STYLE + f"""
+QListWidget::indicator {{
+    width: 13px;
+    height: 13px;
+    border: 1px solid #777;
+    border-radius: 2px;
+    background-color: #2b2b2b;
+}}
+QListWidget::indicator:hover {{ border-color: #999; }}
+QListWidget::indicator:checked {{
+    background-color: {PRIMARY_BLUE};
+    border-color: {PRIMARY_BLUE};
+}}
+"""
+
+# Compact toolbar above the source list (All / Invert / None / N-th)
+SOURCE_TOOLBAR_STYLE = f"""
+QPushButton {{
+    background-color: #3c3c3c;
+    color: #ddd;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 11px;
+}}
+QPushButton:hover {{ background-color: #4a4a4a; }}
+QPushButton:pressed {{ background-color: {PRIMARY_BLUE}; color: white; }}
+QSpinBox {{
+    background-color: #2b2b2b;
+    color: #ddd;
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 1px 2px;
+    font-size: 11px;
+}}
+QSpinBox::up-button, QSpinBox::down-button {{
+    subcontrol-origin: border;
+    width: 12px;
+    background-color: #4a4a4a;
+    border-left: 1px solid #666;
+}}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background-color: #5a5a5a; }}
+"""
+
+OUTPUT_LIST_STYLE = LIST_STYLE
 
 
 # Overall style of the Add Label dialog

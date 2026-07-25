@@ -6,7 +6,7 @@ from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox
 
-from utils import write_image, cv2_to_pixmap
+from utils import write_image, cv2_to_pixmap, fit_list_rows_to_thumbnails
 from utils import show_error_box, show_message_box, show_success_box, show_warning_box
 from locales import trans
 
@@ -37,13 +37,16 @@ class OutputManager:
         if window.fusion_result is not None:
             try:
                 pixmap = cv2_to_pixmap(window.apply_output_contrast(window.fusion_result))
-                icon = QIcon(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                # 64px tall keeps the thumbnail sharp once the icon box scales it
+                # down to the row height, whatever the result's aspect ratio.
+                icon = QIcon(pixmap.scaledToHeight(64, Qt.TransformationMode.SmoothTransformation))
                 item.setIcon(icon)
             except Exception:
                 pass
 
         window.output_list.insertItem(0, item)
         window.output_list.setCurrentRow(0)
+        fit_list_rows_to_thumbnails(window.output_list)
         self.update_output_count()
 
     def sync_output_slider_from_list(self, row: int) -> None:

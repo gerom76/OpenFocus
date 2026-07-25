@@ -1,8 +1,9 @@
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
 import os
-from PyQt6.QtCore import QPoint
+from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QAction, QIcon, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QApplication,
@@ -14,7 +15,12 @@ from PyQt6.QtWidgets import (
 )
 
 from dialogs import DownsampleDialog
-from utils import exec_message_box, show_message_box, show_warning_box
+from utils import (
+    exec_message_box,
+    fit_list_rows_to_thumbnails,
+    show_message_box,
+    show_warning_box,
+)
 from ui.styles import MESSAGE_BOX_STYLE
 from locales import trans
 
@@ -40,7 +46,95 @@ class SourceManager:
     # ------------------------------------------------------------------
     def update_source_images_count(self) -> None:
         count = self.window.file_list.count()
-        self.window.source_images_label.setText(f"Source Images: {count}")
+        checked = len(self.checked_source_indices())
+        if checked == count:
+            self.window.source_images_label.setText(trans.t("label_source_images").format(count))
+        else:
+            self.window.source_images_label.setText(
+                trans.t("label_source_images_sel").format(count, checked)
+            )
+
+    # ------------------------------------------------------------------
+    # Check-state handling (which frames take part in processing)
+    # ------------------------------------------------------------------
+    def checked_source_indices(self) -> list[int]:
+        """Rows whose checkbox is ticked, i.e. the frames to be processed."""
+        file_list = getattr(self.window, "file_list", None)
+        if file_list is None:
+            return []
+
+        indices = []
+        for row in range(file_list.count()):
+            item = file_list.item(row)
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
+                indices.append(row)
+        return indices
+
+    def _set_check_states(self, predicate) -> None:
+        """Apply predicate(row) -> bool to every row, refreshing the count once."""
+        file_list = getattr(self.window, "file_list", None)
+        if file_list is None:
+            return
+
+        file_list.blockSignals(True)
+        try:
+            for row in range(file_list.count()):
+                item = file_list.item(row)
+                if item is None:
+                    continue
+                item.setCheckState(
+                    Qt.CheckState.Checked if predicate(row) else Qt.CheckState.Unchecked
+                )
+        finally:
+            file_list.blockSignals(False)
+
+        self.update_source_images_count()
+
+    def check_all_sources(self) -> None:
+        self._set_check_states(lambda row: True)
+
+    def uncheck_all_sources(self) -> None:
+        self._set_check_states(lambda row: False)
+
+    def invert_source_checks(self) -> None:
+        checked = set(self.checked_source_indices())
+        self._set_check_states(lambda row: row not in checked)
+
+    def mark_selected_sources(self) -> None:
+        """Tick the highlighted rows, leaving the rest of the list untouched."""
+        self._set_selected_check_state(True)
+
+    def unmark_selected_sources(self) -> None:
+        self._set_selected_check_state(False)
+
+    def _set_selected_check_state(self, checked: bool) -> None:
+        file_list = getattr(self.window, "file_list", None)
+        if file_list is None:
+            return
+
+        selected_items = file_list.selectedItems()
+        if not selected_items:
+            return
+
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        file_list.blockSignals(True)
+        try:
+            for item in selected_items:
+                item.setCheckState(state)
+        finally:
+            file_list.blockSignals(False)
+
+        self.update_source_images_count()
+
+    def check_every_nth_source(self) -> None:
+        """Clear the selection, then tick the 1st, (n+1)-th, (2n+1)-th ... rows."""
+        spin = getattr(self.window, "spin_select_nth", None)
+        step = spin.value() if spin is not None else 2
+        step = max(1, int(step))
+        self._set_check_states(lambda row: row % step == 0)
+
+    def handle_source_item_changed(self, item: QListWidgetItem) -> None:
+        self.update_source_images_count()
 
     # ------------------------------------------------------------------
     # Load progress
@@ -445,11 +539,26 @@ class SourceManager:
 
     def update_file_list(self, filenames, thumbnails) -> None:
         window = self.window
+        # The list is rebuilt from scratch on every stack mutation (delete,
+        # append, resize), so carry the check states over per filename: frames
+        # that survive keep their state, anything new starts checked.
+        previous_states = self._collect_check_states()
+
+        # Signals stay blocked while filling so the per-item check state does not
+        # fire a label refresh for every row.
+        window.file_list.blockSignals(True)
         window.file_list.clear()
 
         try:
             for filename, thumbnail in zip(filenames, thumbnails):
                 item = QListWidgetItem(QIcon(thumbnail), filename)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                # Newly loaded images all take part in processing by default.
+                states = previous_states.get(filename)
+                checked = states.popleft() if states else True
+                item.setCheckState(
+                    Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+                )
                 window.file_list.addItem(item)
         except Exception as exc:  # pylint: disable=broad-except
             show_message_box(
@@ -459,8 +568,27 @@ class SourceManager:
                 f"Error: {str(exc)}",
                 QMessageBox.Icon.Critical,
             )
+        finally:
+            fit_list_rows_to_thumbnails(window.file_list)
+            window.file_list.blockSignals(False)
 
         self.update_source_images_count()
+
+    def _collect_check_states(self) -> dict[str, deque]:
+        """Current check states grouped by filename, in row order."""
+        file_list = getattr(self.window, "file_list", None)
+        states: dict[str, deque] = {}
+        if file_list is None:
+            return states
+
+        for row in range(file_list.count()):
+            item = file_list.item(row)
+            if item is None:
+                continue
+            states.setdefault(item.text(), deque()).append(
+                item.checkState() == Qt.CheckState.Checked
+            )
+        return states
 
     def sync_slider_from_list(self, row: int) -> None:
         if row >= 0:
@@ -476,6 +604,18 @@ class SourceManager:
         delete_action = QAction("Delete", window)
         delete_action.triggered.connect(self.delete_selected_source_images)
         menu.addAction(delete_action)
+
+        has_selection = bool(window.file_list.selectedItems())
+
+        mark_action = QAction(trans.t("menu_mark"), window)
+        mark_action.triggered.connect(self.mark_selected_sources)
+        mark_action.setEnabled(has_selection)
+        menu.addAction(mark_action)
+
+        unmark_action = QAction(trans.t("menu_unmark"), window)
+        unmark_action.triggered.connect(self.unmark_selected_sources)
+        unmark_action.setEnabled(has_selection)
+        menu.addAction(unmark_action)
 
         menu.exec(window.file_list.mapToGlobal(position))
 

@@ -44,6 +44,7 @@ from utils.bitdepth import (
 )
 
 from utils.ui_utils import (
+    fit_list_rows_to_thumbnails,
     log_message_box,
     exec_message_box,
     show_message_box,
@@ -111,6 +112,7 @@ __all__ = [
     'to_float01',
     'unify',
     # ui_utils
+    'fit_list_rows_to_thumbnails',
     'log_message_box',
     'exec_message_box',
     'show_message_box',

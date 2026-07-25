@@ -16,6 +16,9 @@ class RenderManager:
     def __init__(self, window: Any):
         self.window = window
         self.worker: Optional[RenderWorker] = None
+        # True while the running render covers only the ticked subset of the
+        # source list - its result must not be cached as the aligned full stack.
+        self._subset_render = False
 
     def _set_stop_enabled(self, enabled: bool) -> None:
         """Enable the Stop button only while a render is interruptible."""
@@ -79,11 +82,30 @@ class RenderManager:
         self._set_stop_enabled(False)
         self.window.btn_render.setText(trans.t('btn_render_stopping'))
 
+    def _selected_source_rows(self) -> List[int]:
+        """Rows ticked in the source list, or the whole stack when unavailable."""
+        window = self.window
+        total = len(window.raw_images or [])
+        manager = getattr(window, "source_manager", None)
+        file_list = getattr(window, "file_list", None)
+
+        # The list widget mirrors raw_images; if they ever drift apart the
+        # row indices cannot be trusted, so fall back to the full stack.
+        if manager is None or file_list is None or file_list.count() != total:
+            return list(range(total))
+
+        return manager.checked_source_indices()
+
     def start_render(self) -> None:
         window = self.window
 
         if not window.raw_images or len(window.raw_images) < 2:
             show_warning_box(window, trans.t("msg_no_images_title"), trans.t("msg_render_need_images_text"))
+            return
+
+        selected_rows = self._selected_source_rows()
+        if len(selected_rows) < 2:
+            show_warning_box(window, trans.t("msg_no_images_title"), trans.t("msg_render_need_selected_text"))
             return
 
         window.btn_render.setEnabled(False)
@@ -142,13 +164,19 @@ class RenderManager:
         roi_base_index = 0
         use_roi_aligned_images = False
         
+        # The ROI stack is index-aligned with the raw stack, so the ticked rows
+        # select from it the same way they do from raw_images.
+        roi_source_images = window.roi_aligned_images
+        if len(roi_source_images or []) == len(window.raw_images) and len(selected_rows) < len(window.raw_images):
+            roi_source_images = [roi_source_images[i] for i in selected_rows]
+
         # Check whether ROI mode is active and get the ROI region from the right panel
         if getattr(window, 'roi_mode_active', False) and window.roi_aligned_images:
             # Get the ROI region from the right-side result panel (because the ROI is selected on the aligned image)
             roi_rect = window.lbl_result_img.get_roi_rect() if hasattr(window.lbl_result_img, 'get_roi_rect') else None
             if roi_rect is not None:
                 use_roi_aligned_images = True
-                dialog = ROIRenderOptionsDialog(len(window.roi_aligned_images), window)
+                dialog = ROIRenderOptionsDialog(len(roi_source_images), window)
                 if dialog.exec() == QDialog.DialogCode.Accepted:
                     roi_mode = dialog.mode
                     roi_base_index = dialog.base_frame_index
@@ -158,28 +186,50 @@ class RenderManager:
                     return
         
         # Determine the image source to use
+        self._subset_render = False
         if use_roi_aligned_images:
             # In ROI mode, use the already-aligned image stack and skip the extra registration
-            source_images = window.roi_aligned_images
+            source_images = roi_source_images
             # In ROI mode, the images are already aligned and do not need to be registered again
             effective_need_align_scale = False
             effective_need_align_homography = False
             effective_need_align_ecc = False
             # Tell the Worker that the images are already aligned
-            effective_aligned_images = window.roi_aligned_images
+            effective_aligned_images = roi_source_images
             effective_is_aligned = True
             # ROI pre-alignment always references frame 0 (see ROIAlignmentWorker).
             effective_reference_mode = "first"
             effective_last_alignment_options = (False, False, True, effective_reference_mode)  # indicates ECC is done
         else:
-            source_images = window.raw_images
+            # Only the frames ticked in the source list take part in the render
+            self._subset_render = len(selected_rows) < len(window.raw_images)
+            if self._subset_render:
+                source_images = [window.raw_images[i] for i in selected_rows]
+                print(
+                    f"Rendering {len(source_images)} of {len(window.raw_images)} source images",
+                    flush=True,
+                )
+            else:
+                source_images = window.raw_images
+
             effective_need_align_scale = need_align_scale
             effective_need_align_homography = need_align_homography
             effective_need_align_ecc = need_align_ecc
-            effective_aligned_images = window.aligned_images
-            effective_is_aligned = window.is_images_aligned
             effective_reference_mode = getattr(window, "reference_frame_mode", "first")
             effective_last_alignment_options = window.last_alignment_options
+
+            cached_aligned = window.aligned_images or []
+            if not self._subset_render:
+                effective_aligned_images = window.aligned_images
+                effective_is_aligned = window.is_images_aligned
+            elif len(cached_aligned) == len(window.raw_images):
+                # The cache is index-aligned with the raw stack, so the same
+                # subset of it stays valid and the alignment can be reused.
+                effective_aligned_images = [cached_aligned[i] for i in selected_rows]
+                effective_is_aligned = window.is_images_aligned
+            else:
+                effective_aligned_images = []
+                effective_is_aligned = False
 
         self.worker = RenderWorker(
             source_images,
@@ -277,8 +327,15 @@ class RenderManager:
 
             # Only cache aligned images if we performed a FULL registration (no ROI cropping)
             # Note: self.worker may be None if error occurred, so we check first
+            # A subset render only aligns the ticked frames, so its output does
+            # not describe the full stack and must not become the cache.
             worker = self.worker
-            if registration_performed and worker is not None and not getattr(worker, 'roi_rect', None):
+            if (
+                registration_performed
+                and worker is not None
+                and not getattr(worker, 'roi_rect', None)
+                and not self._subset_render
+            ):
                 window.aligned_images = processed_images
                 window.is_images_aligned = True
                 window.last_alignment_options = (

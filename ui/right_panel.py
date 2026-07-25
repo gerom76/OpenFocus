@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSlider,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -26,6 +27,7 @@ from ui.styles import (
     HOVER_HIGHLIGHT_BUTTON_STYLE,
     OUTPUT_LIST_STYLE,
     SOURCE_LIST_STYLE,
+    SOURCE_TOOLBAR_STYLE,
     STOP_BUTTON_STYLE,
 )
 from locales import trans
@@ -68,6 +70,11 @@ class RightPanelComponents:
 
     source_images_label: QLabel
     file_list: QListWidget
+    btn_select_all: QPushButton
+    btn_select_invert: QPushButton
+    btn_select_none: QPushButton
+    btn_select_nth: QPushButton
+    spin_select_nth: QSpinBox
     output_label: QLabel
     output_list: QListWidget
     
@@ -237,8 +244,44 @@ def create_right_panel() -> RightPanelComponents:
     source_list_layout.setContentsMargins(10, 10, 10, 10)
     source_images_label = QLabel(trans.t('label_source_images').format(0))
     source_list_layout.addWidget(source_images_label)
+
+    # Check-state toolbar: All / None / every N-th
+    source_toolbar = QHBoxLayout()
+    source_toolbar.setContentsMargins(0, 0, 0, 2)
+    source_toolbar.setSpacing(4)
+    btn_select_all = QPushButton(trans.t('btn_select_all'))
+    btn_select_all.setToolTip(trans.t('tip_select_all'))
+    btn_select_invert = QPushButton(trans.t('btn_select_invert'))
+    btn_select_invert.setToolTip(trans.t('tip_select_invert'))
+    btn_select_none = QPushButton(trans.t('btn_select_none'))
+    btn_select_none.setToolTip(trans.t('tip_select_none'))
+    btn_select_nth = QPushButton(trans.t('btn_select_nth'))
+    btn_select_nth.setToolTip(trans.t('tip_select_nth'))
+    spin_select_nth = QSpinBox()
+    spin_select_nth.setRange(1, 999)
+    spin_select_nth.setValue(2)
+    spin_select_nth.setFixedWidth(52)
+    spin_select_nth.setToolTip(trans.t('tip_select_nth'))
+    for button in (btn_select_all, btn_select_invert, btn_select_none, btn_select_nth):
+        button.setFixedHeight(22)
+    source_toolbar.addWidget(btn_select_all)
+    source_toolbar.addWidget(btn_select_invert)
+    source_toolbar.addWidget(btn_select_none)
+    source_toolbar.addWidget(btn_select_nth)
+    source_toolbar.addWidget(spin_select_nth)
+    source_toolbar.addStretch()
+    source_toolbar_widget = QWidget()
+    source_toolbar_widget.setLayout(source_toolbar)
+    source_toolbar_widget.setStyleSheet(SOURCE_TOOLBAR_STYLE)
+    source_list_layout.addWidget(source_toolbar_widget)
+
     file_list = QListWidget()
-    file_list.setIconSize(QSize(40, 40))
+    # Dense rows: uniform item sizes and thumbnails no taller than a text line
+    # let many more frames fit on screen than the 40px icons of the output list.
+    # SourceManager re-shapes the icon box to the loaded frames' aspect ratio.
+    file_list.setIconSize(QSize(30, 20))
+    file_list.setUniformItemSizes(True)
+    file_list.setSpacing(0)
     file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
     file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     file_list.setStyleSheet(SOURCE_LIST_STYLE)
@@ -253,7 +296,10 @@ def create_right_panel() -> RightPanelComponents:
     output_label = QLabel(trans.t('label_output').format(0))
     output_list_layout.addWidget(output_label)
     output_list = OutputListWidget()
-    output_list.setIconSize(QSize(40, 40))
+    # OutputManager re-shapes the icon box to each result's aspect ratio so the
+    # thumbnails fill their rows; this is only the size used while empty.
+    output_list.setIconSize(QSize(30, 20))
+    output_list.setUniformItemSizes(True)
     output_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
     output_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     output_list.setDragEnabled(True)
@@ -334,6 +380,11 @@ def create_right_panel() -> RightPanelComponents:
 
         source_images_label=source_images_label,
         file_list=file_list,
+        btn_select_all=btn_select_all,
+        btn_select_invert=btn_select_invert,
+        btn_select_none=btn_select_none,
+        btn_select_nth=btn_select_nth,
+        spin_select_nth=spin_select_nth,
         output_label=output_label,
         output_list=output_list,
         lbl_status_loaded=lbl_status_loaded,
@@ -383,6 +434,12 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
 
     components.file_list.customContextMenuRequested.connect(window.source_manager.show_source_context_menu)
     components.file_list.currentRowChanged.connect(window.source_manager.sync_slider_from_list)
+    components.file_list.itemChanged.connect(window.source_manager.handle_source_item_changed)
+
+    components.btn_select_all.clicked.connect(window.source_manager.check_all_sources)
+    components.btn_select_invert.clicked.connect(window.source_manager.invert_source_checks)
+    components.btn_select_none.clicked.connect(window.source_manager.uncheck_all_sources)
+    components.btn_select_nth.clicked.connect(window.source_manager.check_every_nth_source)
     components.output_list.customContextMenuRequested.connect(window.output_manager.show_output_context_menu)
     components.output_list.currentRowChanged.connect(window.output_manager.sync_output_slider_from_list)
     components.output_list.itemClicked.connect(window.output_manager.display_output_image_in_result_view)

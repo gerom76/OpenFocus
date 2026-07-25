@@ -3,7 +3,51 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+from PyQt6.QtCore import QSize
 from PyQt6.QtWidgets import QMessageBox
+
+
+def fit_list_rows_to_thumbnails(list_widget, min_row_height: int = 22, max_aspect: float = 5.0) -> None:
+    """Pack a list view's rows so that consecutive thumbnails touch.
+
+    Thumbnails keep their aspect ratio, so a square icon box letterboxes a
+    landscape frame and the leftover box height reads as a gap between rows.
+    The box is therefore shaped to the items' own aspect ratio at the height a
+    row of text needs, and every row's size hint is pinned to that height - the
+    item delegate would otherwise pad its hint with a focus-frame margin and
+    leave a one-pixel line between images.
+    """
+    count = list_widget.count()
+    if count == 0:
+        return
+
+    row_height = max(min_row_height, list_widget.fontMetrics().height())
+
+    aspect = 1.0
+    probe = QSize(4096, 4096)
+    for row in range(count):
+        item = list_widget.item(row)
+        if item is None:
+            continue
+        icon_size = item.icon().actualSize(probe)
+        if icon_size.height() > 0:
+            aspect = min(icon_size.width() / icon_size.height(), max_aspect)
+            break
+
+    list_widget.setIconSize(QSize(max(1, round(row_height * aspect)), row_height))
+
+    # The natural width is measured with the previous hints cleared, so a newly
+    # added long filename can still widen the rows.
+    for row in range(count):
+        item = list_widget.item(row)
+        if item is not None:
+            item.setSizeHint(QSize())
+
+    width = list_widget.sizeHintForColumn(0)
+    for row in range(count):
+        item = list_widget.item(row)
+        if item is not None:
+            item.setSizeHint(QSize(width, row_height))
 
 
 def resource_path(*relative_parts: str) -> str:

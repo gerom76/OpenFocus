@@ -113,8 +113,10 @@ class TransformManager:
                     window.update_loaded_status()
                 return
 
+            # 64px on the long edge keeps the source-list thumbnail sharp once it
+            # is scaled down to the row height, whatever the frame's aspect ratio.
             pixmaps, thumbnails = window.image_loader.create_stack_pixmaps(
-                window.raw_images, thumb_size=40)
+                window.raw_images, thumb_size=64)
 
             window.stack_images = pixmaps
             window.source_manager.update_file_list(window.image_filenames, thumbnails)
