@@ -71,6 +71,69 @@ def resolve_reference_index(reference_mode, num_images: int) -> int:
     return 0
 
 
+# ========== GPU warping helpers ==========
+
+def _init_gpu_warp():
+    """Probe for Cupy and a usable CUDA device.
+
+    Returns (cp, ndimage) when GPU warping is available, otherwise (None, None).
+    Prints the same diagnostics as the ECC stage so the log reads consistently
+    whichever alignment method runs first.
+    """
+    try:
+        import cupy as cp
+        import cupyx.scipy.ndimage as cp_ndimage
+    except ImportError:
+        print("    [Info] Cupy not found. Using CPU for warping.")
+        return None, None
+    try:
+        props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+        gpu_name = props['name'].decode()
+        free_mem, total_mem = cp.cuda.runtime.memGetInfo()
+        print(f"    [Info] Cupy {cp.__version__} detected. GPU acceleration enabled for warping.")
+        print(f"           Device: {gpu_name} ({free_mem / 1024**3:.1f}/{total_mem / 1024**3:.1f} GB free)")
+    except Exception as e:
+        # Cupy imports fine but no usable CUDA device (driver mismatch, no GPU, ...)
+        print(f"    [Info] Cupy installed but GPU unavailable ({e}). Using CPU for warping.")
+        return None, None
+    return cp, cp_ndimage
+
+
+def _warp_perspective_gpu(cp, cp_ndimage, img, M, target_w, target_h):
+    """GPU equivalent of cv2.warpPerspective(img, M, (target_w, target_h)).
+
+    cv2 treats M as the forward (source -> destination) mapping and samples
+    through its inverse; map_coordinates needs the destination -> source
+    mapping explicitly, so M is inverted here. Interpolation is bilinear
+    (order=1) - map_coordinates has no Lanczos kernel, and the higher spline
+    orders cost far more than the quality difference is worth on stacks.
+    """
+    M_inv = np.linalg.inv(np.asarray(M, dtype=np.float64))
+
+    img_gpu = cp.asarray(img)
+    y_grid, x_grid = cp.meshgrid(cp.arange(target_h), cp.arange(target_w), indexing='ij')
+    coords = cp.stack([x_grid, y_grid, cp.ones_like(x_grid)]).reshape(3, -1)
+
+    src = cp.asarray(M_inv) @ coords
+    w_coords = src[2, :]
+    w_coords = cp.where(cp.abs(w_coords) < 1e-10, 1e-10, w_coords)
+    src_x = (src[0, :] / w_coords).reshape(target_h, target_w)
+    src_y = (src[1, :] / w_coords).reshape(target_h, target_w)
+    sample_coords = cp.stack([src_y, src_x])
+
+    if img.ndim == 2:
+        out_gpu = cp_ndimage.map_coordinates(img_gpu, sample_coords,
+                                             order=1, mode='constant', cval=0)
+    else:
+        out_gpu = cp.stack([
+            cp_ndimage.map_coordinates(img_gpu[:, :, c], sample_coords,
+                                       order=1, mode='constant', cval=0)
+            for c in range(img.shape[2])
+        ], axis=2)
+
+    return cp.asnumpy(out_gpu).astype(img.dtype)
+
+
 # ========== Scale / focus-breathing correction (similarity) ==========
 
 def _align_scale_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4,
@@ -234,15 +297,24 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None, downsc
     # Build the crop translation and fold it into each warp.
     T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
 
+    cp, cp_ndimage = _init_gpu_warp()
+
     def warp_task(args):
         img, H = args
         H_final = T_crop @ H if do_crop else H
+        if cp is not None:
+            return _warp_perspective_gpu(cp, cp_ndimage, img, H_final, target_w, target_h)
         return cv2.warpPerspective(img, H_final, (target_w, target_h),
                                    flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT)
 
     warp_args = list(zip(images, H_matrices))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        aligned_images = list(executor.map(warp_task, warp_args))
+    if cp is not None:
+        # The GPU already parallelises each warp; concurrent host->device
+        # copies would only contend for PCIe bandwidth, so run serially.
+        aligned_images = [warp_task(args) for args in warp_args]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            aligned_images = list(executor.map(warp_task, warp_args))
 
     if output_path:
         os.makedirs(output_path, exist_ok=True)
