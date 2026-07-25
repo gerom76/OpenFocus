@@ -455,6 +455,63 @@ class ImageStackLoader:
 
         return True, message, loaded_images, filenames
 
+    def create_stack_pixmaps(
+        self,
+        images: List[np.ndarray],
+        thumb_size: int = 40,
+    ) -> Tuple[List[QPixmap], List[QPixmap]]:
+        """Full-resolution display pixmap plus a small thumbnail per frame.
+
+        One pass replaces the separate create_pixmaps/create_thumbnails calls
+        after a stack (re)load, sharing a single 8-bit copy per frame. The
+        cv2/numpy work releases the GIL and runs across threads; only the
+        QPixmap wrapping, which must happen on the GUI thread, stays serial.
+        BGRA buffers map straight onto QImage.Format_RGB32, so that wrap is a
+        copy without per-pixel conversion. Processing is chunked to bound how
+        many full-resolution BGRA buffers are alive at once.
+        """
+        def prepare(img: np.ndarray):
+            disp8 = bitdepth.to_display8(img)
+            h, w = disp8.shape[:2]
+            if h <= 0 or w <= 0:
+                raise ValueError(f"Invalid image dimensions: {w}x{h}")
+            full = np.ascontiguousarray(cv2.cvtColor(disp8, cv2.COLOR_BGR2BGRA))
+            scale = thumb_size / max(h, w)
+            small = cv2.resize(
+                disp8,
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+            thumb = np.ascontiguousarray(cv2.cvtColor(small, cv2.COLOR_BGR2BGRA))
+            return full, thumb
+
+        def to_pixmap(bgra: np.ndarray) -> QPixmap:
+            h, w = bgra.shape[:2]
+            qimg = QImage(bgra.data, w, h, 4 * w, QImage.Format.Format_RGB32)
+            # .copy() is essential: fromImage() on an already-RGB32 image may
+            # share the buffer instead of copying, and this buffer is numpy
+            # memory that dies with `bgra` - the pixmap would dangle. The copy
+            # is Qt-owned and still a straight memcpy, no per-pixel swizzle.
+            return QPixmap.fromImage(qimg.copy())
+
+        pixmaps: List[QPixmap] = []
+        thumbnails: List[QPixmap] = []
+        if not images:
+            return pixmaps, thumbnails
+
+        start_time = time.perf_counter()
+        max_workers = max(1, min(8, os.cpu_count() or 4, len(images)))
+        chunk = max_workers * 2
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for start in range(0, len(images), chunk):
+                for full, thumb in executor.map(prepare, images[start:start + chunk]):
+                    pixmaps.append(to_pixmap(full))
+                    thumbnails.append(to_pixmap(thumb))
+
+        print(f"[Stack] Prepared {len(pixmaps)} preview(s) in "
+              f"{time.perf_counter() - start_time:.2f} s", flush=True)
+        return pixmaps, thumbnails
+
     def create_pixmaps(self, images: List[np.ndarray], max_size: Tuple[int, int] = (800, 600)) -> List[QPixmap]:
         pixmaps = []
         for img in images:

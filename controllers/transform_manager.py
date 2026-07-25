@@ -113,8 +113,8 @@ class TransformManager:
                     window.update_loaded_status()
                 return
 
-            pixmaps = window.image_loader.create_pixmaps(window.raw_images, max_size=None)
-            thumbnails = window.image_loader.create_thumbnails(window.raw_images, thumb_size=40)
+            pixmaps, thumbnails = window.image_loader.create_stack_pixmaps(
+                window.raw_images, thumb_size=40)
 
             window.stack_images = pixmaps
             window.source_manager.update_file_list(window.image_filenames, thumbnails)
