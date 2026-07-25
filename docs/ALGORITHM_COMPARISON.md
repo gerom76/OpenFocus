@@ -205,14 +205,20 @@ right operator is subject-dependent and no single choice wins everywhere.
 | Capability | OpenFocus | Helicon | Zerene | focus-stack | Shine Stacker | PICOLAY |
 |------------|-----------|---------|--------|-------------|---------------|---------|
 | **Retouching brush from source frame** | **✗** | ✓ | ✓ | ✗ | ✗ | ✗ |
-| Halo mitigation | ✗ | via Radius | via Radius | not documented | ✗ | ✗ |
+| Halo mitigation | ✓ dedicated radius (Depth Map)¹ | via Radius | via Radius | not documented | ✗ | ✗ |
 | Denoising | ✗ | ✗ | ✗ | ✓ `--denoise` | ✓ non-local means | ✓ |
 | Hot / noisy pixel masking | ✗ | ✓ dust map | ✗ | ✗ | ✓ automatic | ✗ |
 | Sharpening | ✗ | ✗ | ✗ | ✗ | ✓ unsharp mask | ✓ |
 | Multi-frame SNR gain in flat regions | ✓ Depth Map (Average) | ✓ Method A | ✗ | ✗ | ✓ average mode | ✗ |
-| **Depth-wise slabbing / bunching** | **✗**¹ | ✗ | ✓ slabbing | ✓ `--batchsize` | ✓ `FocusStackBunch` | ✗ |
+| **Depth-wise slabbing / bunching** | **✗**² | ✗ | ✓ slabbing | ✓ `--batchsize` | ✓ `FocusStackBunch` | ✗ |
 
-¹ OpenFocus's tiling (`TILE_BLOCK_SIZE`, `TILE_OVERLAP`) subdivides in **X/Y for
+¹ Added in 1.14.0: the Depth Map methods grey-dilate each frame's focus energy
+by a user-set halo radius before the per-pixel decision, so a sharply focused
+edge claims the band its defocused glow contaminates in the other frames. This
+is a dedicated control, not the indirect analysis-radius tuning Helicon and
+Zerene document — see roadmap item 5.
+
+² OpenFocus's tiling (`TILE_BLOCK_SIZE`, `TILE_OVERLAP`) subdivides in **X/Y for
 memory**. Slabbing subdivides along the **depth axis for quality** — a different
 operation with a different purpose.
 
@@ -280,8 +286,9 @@ depth mode selectable rather than implicit.
 export it.** Four of five competitors write it out; for PICOLAY it is the point of
 the software. As of 1.8.0 the `Depth Map` method turns that internal map into a
 blending method — closing depth-driven blending, one of the things this map is the
-substrate for — but saving it as a file, and the occlusion-aware halo suppression
-and 3D output it also feeds, are still open.
+substrate for — and 1.14.0 added occlusion-aware halo suppression on the same
+methods (a dedicated radius, ahead of the field's indirect tuning) — but saving
+it as a file, and the 3D output it also feeds, are still open.
 
 **OpenFocus leads on GPU and is alone in accepting video input.** CUDA/MPS
 acceleration across five methods is ahead of everything except focus-stack's
@@ -300,7 +307,7 @@ the field has already closed, or moves ahead of it.
 | 2 | Scale / focus-breathing correction — **done in 1.9.0** | **Catch-up** | 5 of 5 tools |
 | 3 | Laplacian pyramid fusion — **done in 1.7.0** | **Catch-up** | 3 of 5 directly, 4th equivalent |
 | 4 | Global label optimisation (graph-cut) | **Differentiating** | none |
-| 5 | Halo / bleed suppression | **Parity+** | only indirect, via radius tuning |
+| 5 | Halo / bleed suppression — **done in 1.14.0** (Depth Map halo radius) | **Parity+** | only indirect, via radius tuning |
 | 6 | Selectable reference frame — **done in 1.11.0** (direct-to-reference still open) | **Catch-up** | focus-stack ships both |
 | 7 | Noise-aware measure + flat-region averaging | **Parity+** | averaging yes; noise-normalised measure, none |
 | 8 | 16-bit pipeline — **done in 1.6.0** | **Catch-up** | 4 of 5 tools |
@@ -359,8 +366,9 @@ longer another fusion method but the pipeline around them:
    alignment (§3) is the remaining near-universal input fix. Both improve all nine
    existing methods at once.
 2. **Finish the depth map** (§6) — the `Depth Map` method (1.8.0) turned the
-   internal map into depth-driven blending; still open are *exporting* it as a
-   file and the trust thresholds, halo suppression and 3D output it feeds.
+   internal map into depth-driven blending, and 1.14.0 added halo suppression;
+   still open are *exporting* it as a file and the trust thresholds and 3D
+   output it feeds.
 
 Then the differentiators — global label optimisation and non-rigid alignment —
 where there is no field precedent to catch up to.

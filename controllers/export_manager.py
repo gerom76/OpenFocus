@@ -89,6 +89,18 @@ class ExportManager:
                 return ""
         return ""
 
+    def _halo_suffix(self) -> str:
+        """Return a '_h<radius>' suffix when depth-map halo suppression is on."""
+        window = self.window
+        if window.rb_dmap_max.isChecked() or window.rb_dmap_avg.isChecked():
+            try:
+                radius = int(window.slider_halo.value())
+            except Exception:
+                return ""
+            if radius > 0:
+                return f"_h{radius}"
+        return ""
+
     def _fusion_suffix(self) -> str:
         """Describe the fusion stages in the name: method, kernel, refinement."""
         window = self.window
@@ -113,6 +125,7 @@ class ExportManager:
             fusion_method = "None"
 
         fusion_method += self._kernel_suffix()
+        fusion_method += self._halo_suffix()
 
         # The IFCNN stage runs on top of the method above, so it reads as an addition
         if getattr(window, "cb_ifcnn", None) is not None and window.cb_ifcnn.isChecked():

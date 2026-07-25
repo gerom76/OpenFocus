@@ -122,16 +122,20 @@ def _pyramid_torch(stack, levels=None, img_resize=None, device=None):
     return pyramid_torch_impl(stack, img_resize, levels=levels, device=device)
 
 
-def _depthmap_max(stack, kernel_size=9, img_resize=None, thread_count=None):
+def _depthmap_max(stack, kernel_size=9, halo_radius=0, img_resize=None,
+                  thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_MAX
     return depthmap_impl(stack, img_resize, mode=MODE_MAX,
-                         kernel_size=kernel_size, thread_count=thread_count)
+                         kernel_size=kernel_size, halo_radius=halo_radius,
+                         thread_count=thread_count)
 
 
-def _depthmap_average(stack, kernel_size=9, img_resize=None, thread_count=None):
+def _depthmap_average(stack, kernel_size=9, halo_radius=0, img_resize=None,
+                      thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_AVERAGE
     return depthmap_impl(stack, img_resize, mode=MODE_AVERAGE,
-                         kernel_size=kernel_size, thread_count=thread_count)
+                         kernel_size=kernel_size, halo_radius=halo_radius,
+                         thread_count=thread_count)
 
 
 def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
@@ -255,19 +259,25 @@ METHODS = [
     ),
     FusionMethod(
         key="depthmap_max", label="Depth Map (Max)", fuse=_depthmap_max,
-        check=_needs("cv2"), params={"kernel_size": 9},
+        check=_needs("cv2"), params={"kernel_size": 9, "halo_radius": 0},
         sweeps=(
             ("kernel_size", [3, 7, 9, 15, 31],
              "Window the per-pixel Laplacian focus energy is pooled over before "
              "the hard per-pixel select. Small follows fine detail but speckles "
              "on noise; large is steadier but rounds off narrow in-focus "
              "regions."),
+            ("halo_radius", [0, 2, 4, 8, 12],
+             "Halo-suppression radius. Each frame's focus energy is grey-dilated "
+             "by this many pixels before the select, so a sharply focused edge "
+             "also claims the band its defocused glow contaminates in the other "
+             "frames. 0 is off; set it to roughly the visible halo width. The "
+             "cost is genuine detail from other frames within the band."),
         ),
         min_psnr=36.0,      # measured 44.6
     ),
     FusionMethod(
         key="depthmap_average", label="Depth Map (Average)", fuse=_depthmap_average,
-        check=_needs("cv2"), params={"kernel_size": 9},
+        check=_needs("cv2"), params={"kernel_size": 9, "halo_radius": 0},
         sweeps=(
             ("kernel_size", [3, 7, 9, 15, 31],
              "Window the focus energy is pooled over before the contrast-weighted "

@@ -32,6 +32,19 @@ MODE_AVERAGE = "average"
 # this is only the fallback when none is supplied.
 DEFAULT_KERNEL_SIZE = 9
 
+# Halo suppression radius, in pixels; 0 disables it. A defocused foreground
+# edge spills a glow of roughly its blur radius over the background in the
+# frames where the background is sharp, and the argmax happily takes those
+# contaminated pixels because the veiled background still out-measures the
+# defocused background of the foreground frame. Grey-dilating every frame's
+# pooled energy by this radius lets a strongly focused region claim that band
+# outright: within `halo_radius` of a sharp edge the frame holding the edge
+# wins, so the ring comes out as that frame's (glow-free) defocused background
+# instead of the glow. The price is the usual one the competitors document for
+# their Radius dials - genuinely sharp detail of another frame within the band
+# is rounded off - which is why it defaults to off.
+DEFAULT_HALO_RADIUS = 0
+
 # In MODE_AVERAGE every frame is given a small baseline weight on top of its
 # focus measure, set to this fraction of the stack's mean energy. It is what
 # makes a flat region average rather than chase the noisiest frame: where the
@@ -59,6 +72,24 @@ def _resolve_kernel(kernel_size):
     return k
 
 
+def _resolve_halo_radius(halo_radius):
+    """Coerce the halo-suppression radius to a non-negative integer."""
+    if halo_radius is None:
+        return DEFAULT_HALO_RADIUS
+    try:
+        return max(0, int(halo_radius))
+    except (TypeError, ValueError):
+        return DEFAULT_HALO_RADIUS
+
+
+def _halo_element(radius):
+    """Elliptical structuring element covering `radius` pixels, or None for 0."""
+    if radius <= 0:
+        return None
+    side = 2 * radius + 1
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (side, side))
+
+
 def _focus_energy(img, window):
     """Local focus energy of one frame: pooled squared Laplacian response.
 
@@ -78,7 +109,7 @@ def _focus_energy(img, window):
 
 
 def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
-                  kernel_size=None, thread_count=None):
+                  kernel_size=None, thread_count=None, halo_radius=None):
     """Depth-map multi-focus fusion (per-pixel select or contrast-weighted avg).
 
     A local Laplacian-energy focus measure is computed for every frame. In
@@ -87,6 +118,11 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     MODE_AVERAGE the frames are blended in proportion to that measure, so flat
     regions average (recovering multi-frame SNR) and sharp regions still follow
     the frame that holds the detail.
+
+    `halo_radius` > 0 turns on halo suppression: each frame's energy map is
+    grey-dilated by that many pixels before the decision, so a sharply focused
+    region also claims the surrounding band its defocused image contaminates
+    in the other frames. See DEFAULT_HALO_RADIUS for the mechanism.
 
     The stack's own depth is preserved end to end: an 8-bit stack returns
     uint8, a 16-bit stack returns uint16.
@@ -104,6 +140,7 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
             max_workers = min(8, os.cpu_count() or 4)
 
     window = _resolve_kernel(kernel_size)
+    halo_element = _halo_element(_resolve_halo_radius(halo_radius))
 
     # ---------- Data loading ----------
     if isinstance(input_source, str):
@@ -145,7 +182,10 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
 
     def measure(k):
         img = load_float(k)
-        return img, _focus_energy(img, window)
+        energy = _focus_energy(img, window)
+        if halo_element is not None:
+            energy = cv2.dilate(energy, halo_element)
+        return img, energy
 
     # Frames are measured on a thread pool but reduced in index order, so both
     # the strict-'>' tie-break (MODE_MAX) and the float accumulation

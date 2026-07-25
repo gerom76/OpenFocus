@@ -173,6 +173,7 @@ class SettingsManager:
             "align_homography": window.cb_align_homography.isChecked(),
             "align_ecc": window.cb_align_ecc.isChecked(),
             "smooth_kernel": window.slider_smooth.value(),
+            "halo_radius": window.slider_halo.value(),
             "show_status_console": getattr(window, "status_console", None) is not None
                                    and window.status_console.isVisible(),
             "recent_folders": list(self.recent_folders),
@@ -360,5 +361,10 @@ class SettingsManager:
         if "smooth_kernel" in data:
             try:
                 window.slider_smooth.setValue(int(data["smooth_kernel"]))
+            except (TypeError, ValueError):
+                pass
+        if "halo_radius" in data:
+            try:
+                window.slider_halo.setValue(int(data["halo_radius"]))
             except (TypeError, ValueError):
                 pass

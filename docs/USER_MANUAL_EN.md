@@ -282,6 +282,7 @@ OpenFocus offers eight fusion algorithms. Each has different characteristics sui
 - **Best for**: *Max* — clean, artifact-free selection on well-defined subjects; *Average* — stacks with large smooth areas where a hard select would chase sensor noise
 - **Advantages**: Fully CPU-based; no colour splitting across sources; order-independent
 - **Parameter**: Kernel size sets the window the focus measure is pooled over (larger is steadier on noise, smaller follows finer detail)
+- **Parameter**: Halo suppression radius (0 = off). A defocused foreground edge casts a bright glow over the background in the frames where the background is sharp, and plain per-pixel selection copies that glow into the result — the classic focus-stacking halo. With a radius set, a sharply focused region also claims the surrounding band its glow contaminates, so the ring comes out as natural defocused background instead. Set it to roughly the visible halo width in pixels; larger values round off genuine detail near depth edges, which is the same trade-off the Radius dial has in Helicon Focus and Zerene Stacker
 
 ### StackMFF-V4 (Deep Learning)
 
@@ -509,6 +510,12 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 - Ensure images are properly aligned before fusion
 - Try a different fusion algorithm
 - Increase kernel size for smoother results
+
+#### Bright Halo Around the Subject
+
+- This is the defocused foreground's glow being copied from the background-focused frames
+- Switch to a **Depth Map** method and raise **Halo suppression** to roughly the halo's width in pixels
+- Larger radii trade away genuine background detail near the subject's outline, so use the smallest value that clears the glow
 
 #### StackMFF-V4 Unavailable
 

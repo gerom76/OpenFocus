@@ -712,6 +712,12 @@ class BatchProcessingDialog(QDialog):
                     value = max(1, value - 1)
                 return value
 
+            def _halo_radius_value() -> int:
+                halo_widget = getattr(self.parent_window, "slider_halo", None)
+                if not halo_widget:
+                    return 0
+                return max(0, int(halo_widget.value()))
+
             if rb_a and rb_a.isChecked():
                 fusion_method = "guided_filter"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
@@ -728,9 +734,11 @@ class BatchProcessingDialog(QDialog):
             elif getattr(self.parent_window, 'rb_dmap_max', None) and self.parent_window.rb_dmap_max.isChecked():
                 fusion_method = "depthmap_max"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
+                fusion_params["halo_radius"] = _halo_radius_value()
             elif getattr(self.parent_window, 'rb_dmap_avg', None) and self.parent_window.rb_dmap_avg.isChecked():
                 fusion_method = "depthmap_average"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
+                fusion_params["halo_radius"] = _halo_radius_value()
             elif rb_d and rb_d.isChecked():
                 fusion_method = "stackmffv4"
         

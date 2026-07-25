@@ -259,6 +259,9 @@ class OpenFocus(QMainWindow):
         self.slider_smooth = right_panel_components.slider_smooth
         self.lbl_smooth_value = right_panel_components.smooth_value_label
         self.smooth_widget = right_panel_components.smooth_widget
+        self.slider_halo = right_panel_components.slider_halo
+        self.lbl_halo_value = right_panel_components.halo_value_label
+        self.halo_widget = right_panel_components.halo_widget
         self.combo_contrast = right_panel_components.combo_contrast
         self.slider_contrast = right_panel_components.slider_contrast
         self.lbl_contrast_value = right_panel_components.contrast_value_label
@@ -478,6 +481,9 @@ class OpenFocus(QMainWindow):
         # Reset the slider value to the default
         self.slider_smooth.setValue(31)
 
+        # Halo suppression back to off
+        self.slider_halo.setValue(0)
+
         # Reset contrast to off (strength back to the 50% default)
         self.combo_contrast.setCurrentIndex(0)
         self.slider_contrast.setValue(50)
@@ -573,10 +579,23 @@ class OpenFocus(QMainWindow):
 
         self.lbl_smooth_value.setText(str(adjusted))
 
+    def handle_halo_slider_change(self, value):
+        """Update the halo-radius display label; 0 reads as Off."""
+        radius = int(value)
+        if radius <= 0:
+            self.lbl_halo_value.setText(trans.t('halo_off'))
+        else:
+            self.lbl_halo_value.setText(f"{radius} px")
+
     def update_slider_availability(self):
         """Update slider availability and default value based on the selected fusion method"""
         # Guided Filter/DCT: shared kernel slider
         # DTCWT / StackMFF-V4: no slider used
+
+        # Halo suppression only exists on the depth-map paths; the slider keeps
+        # its value while disabled so switching methods does not forget it.
+        self.halo_widget.setEnabled(
+            self.rb_dmap_max.isChecked() or self.rb_dmap_avg.isChecked())
 
         if self.rb_a.isChecked():
             self.smooth_widget.setEnabled(True)
@@ -1133,6 +1152,8 @@ class OpenFocus(QMainWindow):
         c.cb_align_homography.setText(trans.t('check_align_homography'))
         
         c.lbl_kernel.setText(trans.t('label_kernel'))
+        c.lbl_halo.setText(trans.t('label_halo'))
+        self.handle_halo_slider_change(self.slider_halo.value())
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))
         c.btn_stop.setText(trans.t('btn_stop'))

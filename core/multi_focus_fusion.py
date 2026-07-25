@@ -216,6 +216,7 @@ class MultiFocusFusion:
                        img_resize: Optional[Tuple[int, int]] = None,
                        mode: str = MODE_MAX,
                        kernel_size: Optional[int] = None,
+                       halo_radius: Optional[int] = None,
                        **kwargs) -> np.ndarray:
         """
         Depth-map fusion (per-pixel select or contrast-weighted average).
@@ -226,6 +227,7 @@ class MultiFocusFusion:
             mode: 'max' for hard per-pixel select, 'average' for the
                   contrast-weighted average
             kernel_size: Side of the focus-measure pooling window (odd)
+            halo_radius: Halo-suppression radius in pixels; 0/None disables it
 
         Returns:
             Fused image
@@ -233,7 +235,8 @@ class MultiFocusFusion:
         # CPU-only; there is no GPU implementation, so use_gpu is ignored here.
         thread_count = kwargs.get('thread_count', None)
         return depthmap_impl(input_source, img_resize, mode=mode,
-                             kernel_size=kernel_size, thread_count=thread_count)
+                             kernel_size=kernel_size, thread_count=thread_count,
+                             halo_radius=halo_radius)
 
     def _validate_dct_environment(self) -> None:
         """Validate DCT fusion dependencies."""

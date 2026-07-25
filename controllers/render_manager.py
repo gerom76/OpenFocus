@@ -245,6 +245,7 @@ class RenderManager:
             window.rb_gfg.isChecked(),
             window.rb_d.isChecked(),
             kernel_slider_value,
+            halo_radius_value=window.slider_halo.value(),
             rb_pyramid_checked=window.rb_pyramid.isChecked(),
             rb_dmap_max_checked=window.rb_dmap_max.isChecked(),
             rb_dmap_avg_checked=window.rb_dmap_avg.isChecked(),

@@ -125,6 +125,7 @@ class RenderWorker(QThread):
         rb_gfg_checked,
         rb_d_checked,
         kernel_slider_value,
+        halo_radius_value=0,
         rb_pyramid_checked=False,
         rb_dmap_max_checked=False,
         rb_dmap_avg_checked=False,
@@ -177,6 +178,8 @@ class RenderWorker(QThread):
         self.rb_dmap_max_checked = rb_dmap_max_checked
         self.rb_dmap_avg_checked = rb_dmap_avg_checked
         self.kernel_slider_value = kernel_slider_value
+        # Halo-suppression radius for the depth-map methods; 0 = off
+        self.halo_radius_value = max(0, int(halo_radius_value or 0))
         # Optional IFCNN refinement stage, applied to the fusion result
         self.ifcnn_refine = bool(ifcnn_refine)
         # Tile params passed from UI (may be None -> use fusion defaults)
@@ -459,6 +462,7 @@ class RenderWorker(QThread):
                 input_source=images,
                 img_resize=None,
                 kernel_size=kernel_size,
+                halo_radius=self.halo_radius_value,
                 thread_count=self.thread_count,
             )
         elif algorithm == "stackmffv4":
@@ -776,6 +780,7 @@ class BatchWorker(QThread):
                     input_source=aligned_images,
                     img_resize=None,
                     kernel_size=kernel_size,
+                    halo_radius=fusion_params.get('halo_radius', 0),
                     thread_count=self.thread_count,
                 )
             elif fusion_method == "stackmffv4":

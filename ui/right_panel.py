@@ -58,6 +58,9 @@ class RightPanelComponents:
     slider_smooth: QSlider
     smooth_value_label: QLabel
     smooth_widget: QWidget
+    slider_halo: QSlider
+    halo_value_label: QLabel
+    halo_widget: QWidget
     combo_contrast: QComboBox
     slider_contrast: QSlider
     contrast_value_label: QLabel
@@ -67,6 +70,7 @@ class RightPanelComponents:
     method_group: QGroupBox
     registration_group: QGroupBox
     lbl_kernel: QLabel
+    lbl_halo: QLabel
 
     source_images_label: QLabel
     file_list: QListWidget
@@ -192,6 +196,26 @@ def create_right_panel() -> RightPanelComponents:
     smooth_layout.addLayout(smooth_top)
     smooth_layout.addWidget(slider_smooth)
     config_layout.addWidget(smooth_widget)
+
+    # Halo suppression (depth-map methods only) --------------
+    halo_widget = QWidget()
+    halo_layout = QVBoxLayout(halo_widget)
+    halo_layout.setContentsMargins(0, 5, 0, 5)
+    halo_top = QHBoxLayout()
+    lbl_halo = QLabel(trans.t('label_halo'))
+    halo_top.addWidget(lbl_halo)
+    halo_top.addStretch()
+    lbl_halo_value = QLabel(trans.t('halo_off'))
+    halo_top.addWidget(lbl_halo_value)
+    slider_halo = QSlider(Qt.Orientation.Horizontal)
+    slider_halo.setRange(0, 30)
+    slider_halo.setSingleStep(1)
+    slider_halo.setPageStep(2)
+    slider_halo.setValue(0)
+    halo_layout.addLayout(halo_top)
+    halo_layout.addWidget(slider_halo)
+    halo_widget.setEnabled(False)  # only the depth-map methods use it
+    config_layout.addWidget(halo_widget)
 
     # Contrast (post-fusion output enhancement) --------------
     contrast_widget = QWidget()
@@ -369,6 +393,9 @@ def create_right_panel() -> RightPanelComponents:
         slider_smooth=slider_smooth,
         smooth_value_label=lbl_smooth_value,
         smooth_widget=smooth_widget,
+        slider_halo=slider_halo,
+        halo_value_label=lbl_halo_value,
+        halo_widget=halo_widget,
         combo_contrast=combo_contrast,
         slider_contrast=slider_contrast,
         contrast_value_label=contrast_value_label,
@@ -377,6 +404,7 @@ def create_right_panel() -> RightPanelComponents:
         method_group=method_group,
         registration_group=registration_group,
         lbl_kernel=lbl_kernel,
+        lbl_halo=lbl_halo,
 
         source_images_label=source_images_label,
         file_list=file_list,
@@ -417,6 +445,7 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
     components.btn_reset.clicked.connect(window.reset_to_default)
 
     components.slider_smooth.valueChanged.connect(window.handle_kernel_slider_change)
+    components.slider_halo.valueChanged.connect(window.handle_halo_slider_change)
 
     # Contrast is a post-fusion output step, so both controls just re-apply it
     # to the already-rendered result via handle_contrast_change - no re-render.
