@@ -8,8 +8,9 @@ import cv2
 import numpy as np
 import concurrent.futures
 import time
+from collections import OrderedDict
 from datetime import datetime
-from typing import Callable, List, Tuple, Optional, Dict, Any
+from typing import Callable, List, Tuple, Optional, Dict, Any, Sequence
 
 # Called as (completed, total) while a stack is being decoded.
 ProgressCallback = Callable[[int, int], None]
@@ -30,11 +31,86 @@ from PyQt6.QtGui import QPixmap, QImage
 
 from utils import bitdepth
 from utils.image_utils import read_image_any_depth
-from core import gpu_decode
+from core import gpu_decode, memory
 
 # Progress lines are throttled to this interval so a large stack does not
 # flood the Qt console redirect, which is far slower than the decode itself.
 _PRINT_INTERVAL = 0.1
+
+
+def _bgra_to_pixmap(bgra: np.ndarray) -> QPixmap:
+    """Wrap a contiguous BGRA buffer as a QPixmap.
+
+    BGRA maps straight onto QImage.Format_RGB32, so this is a copy without a
+    per-pixel conversion. The .copy() is essential: fromImage() on an already
+    RGB32 image may share the buffer instead of copying, and this buffer is
+    numpy memory that dies with `bgra` - the pixmap would dangle. The copy is
+    Qt-owned and still a straight memcpy, no swizzle.
+    """
+    h, w = bgra.shape[:2]
+    qimg = QImage(bgra.data, w, h, 4 * w, QImage.Format.Format_RGB32)
+    return QPixmap.fromImage(qimg.copy())
+
+
+def _to_display_bgra(img: np.ndarray) -> np.ndarray:
+    """Full-resolution 8-bit BGRA view of a frame, ready for _bgra_to_pixmap."""
+    disp8 = bitdepth.to_display8(img)
+    h, w = disp8.shape[:2]
+    if h <= 0 or w <= 0:
+        raise ValueError(f"Invalid image dimensions: {w}x{h}")
+    return np.ascontiguousarray(cv2.cvtColor(disp8, cv2.COLOR_BGR2BGRA))
+
+
+class LazyPixmapStack:
+    """Full-resolution display pixmaps, built on access and cached briefly.
+
+    A stack used to be converted to one QPixmap per frame up front. Qt stores
+    those at 32 bits per pixel, so a 24 MP frame costs ~98 MB and a 333-frame
+    stack ~33 GB - all of it to display a single frame at a time. Frames are
+    converted here on demand instead, and only the few most recently viewed
+    are kept, which bounds the display cost at a few hundred MB however large
+    the stack is.
+
+    Nothing on screen changes: the pixmap handed out is still full resolution,
+    so the magnifier zooms into the same pixels it always did. Scrubbing the
+    slider now pays a conversion per frame (tens of ms at 24 MP), which is the
+    same work that used to be done for every frame before the stack opened.
+
+    Holds `images` by reference and caches by index, so anything that mutates
+    that list - the delete and transform paths - has to reload the stack
+    afterwards, which replaces this object. They all already do.
+    """
+
+    # Enough to cover a frame plus its neighbours while stepping through the
+    # stack, without the cache itself becoming the memory problem: 4 frames of
+    # 24 MP is ~390 MB.
+    MAX_CACHED = 4
+
+    def __init__(self, images: Sequence[np.ndarray]):
+        self._images = images
+        self._cache: "OrderedDict[int, QPixmap]" = OrderedDict()
+
+    def __len__(self) -> int:
+        return len(self._images)
+
+    def __bool__(self) -> bool:
+        return len(self._images) > 0
+
+    def __getitem__(self, index: int) -> QPixmap:
+        pixmap = self._cache.get(index)
+        if pixmap is not None:
+            self._cache.move_to_end(index)
+            return pixmap
+
+        pixmap = _bgra_to_pixmap(_to_display_bgra(self._images[index]))
+        self._cache[index] = pixmap
+        while len(self._cache) > self.MAX_CACHED:
+            self._cache.popitem(last=False)
+        return pixmap
+
+    def clear_cache(self) -> None:
+        """Drop the cached pixmaps; the next access rebuilds what it needs."""
+        self._cache.clear()
 
 
 class ImageStackLoader:
@@ -49,6 +125,15 @@ class ImageStackLoader:
     # How many GPU JPEGs to decode per burst. Progress and the stop flag are
     # only serviced between bursts, so this bounds Stop-button latency.
     GPU_CHUNK = 16
+
+    # Full frames a single RAW worker holds at its peak: LibRaw's internal
+    # 4-channel image, the RGB result it hands back, and numpy's copy of it.
+    # Used to size the decode thread pool against free memory.
+    RAW_DECODE_FRAMES = 4
+
+    # Warn once the projected stack passes this share of free memory. Below it
+    # the load is merely large; above it the machine will start swapping.
+    MEMORY_WARN_SHARE = 0.8
 
     def __init__(self):
         self.image_paths = []
@@ -96,10 +181,63 @@ class ImageStackLoader:
                             bgr = None  # any GPU hiccup falls back to LibRaw
                     if bgr is None:
                         rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
-                        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                        # RGB->BGR is a channel swap, so it is done in place:
+                        # a separate destination would double the peak of the
+                        # heaviest allocation in the whole load path.
+                        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR, dst=rgb)
             return bitdepth.apply_load_mode(bgr)
 
         return read_image_any_depth(full_path)
+
+    @classmethod
+    def _probe_frame_bytes(cls, full_path: str, scale_factor: float = 1.0) -> Optional[int]:
+        """Decoded size of one frame in bytes, read from headers only.
+
+        Lets the loader size its thread pool and warn about the stack it is
+        about to build before it allocates any of it. Returns None when the
+        dimensions cannot be read cheaply, in which case callers carry on
+        without the estimate rather than paying a full decode for it.
+        """
+        ext = os.path.splitext(full_path)[1].lower()
+        try:
+            if ext in cls.RAW_FORMATS:
+                if not RAWPY_AVAILABLE:
+                    return None
+                with open(full_path, 'rb') as f:
+                    with rawpy.imread(f) as raw:
+                        width, height = raw.sizes.width, raw.sizes.height
+                # RAW always develops to 16 bits unless the mode forces 8.
+                native = bitdepth.UINT8 if bitdepth.get_mode() == bitdepth.MODE_8 else bitdepth.UINT16
+            elif PIL_AVAILABLE:
+                with PILImage.open(full_path) as im:
+                    width, height = im.size
+                    native = bitdepth.UINT16 if im.mode in ("I", "I;16", "I;16B", "I;16L", "F") else bitdepth.UINT8
+            else:
+                return None
+        except Exception:
+            return None
+
+        if scale_factor != 1.0 and 0 < scale_factor < 1.0:
+            width = int(width * scale_factor)
+            height = int(height * scale_factor)
+        # Frames are stored as 3-channel BGR at the depth the mode resolves to.
+        return width * height * 3 * np.dtype(bitdepth.resolve_load_dtype(native)).itemsize
+
+    def _report_stack_memory(self, frame_bytes: Optional[int], total: int) -> None:
+        """Say up front how much the stack will occupy, and warn if it is too much."""
+        if not frame_bytes:
+            return
+        projected = frame_bytes * total
+        available = memory.available_bytes()
+        line = (f"[Memory] Stack needs about {memory.format_bytes(projected)} "
+                f"({memory.format_bytes(frame_bytes)} x {total} frame(s))")
+        if available is not None:
+            line += f", {memory.format_bytes(available)} free"
+        print(line, flush=True)
+        if available is not None and projected > available * self.MEMORY_WARN_SHARE:
+            print("[Memory] That is more than this machine can comfortably hold. "
+                  "Load fewer frames, or pick a smaller scale in the resize dialog "
+                  "so frames are downsampled as they are decoded.", flush=True)
 
     def _load_files_parallel(
         self,
@@ -127,6 +265,19 @@ class ImageStackLoader:
 
         total = len(entries)
         results: List[Optional[np.ndarray]] = [None] * total
+
+        frame_bytes = self._probe_frame_bytes(entries[0][1], scale_factor) if entries else None
+        self._report_stack_memory(frame_bytes, total)
+
+        # RAW is the only format whose decode holds several full frames per
+        # thread, so it is the only one whose thread count has to answer to
+        # free memory; JPEG and PNG decoders allocate one output buffer.
+        if any(os.path.splitext(filename)[1].lower() in self.RAW_FORMATS for filename, _ in entries):
+            bounded = memory.decode_worker_limit(frame_bytes, self.RAW_DECODE_FRAMES, max_workers)
+            if bounded < max_workers:
+                print(f"[Memory] Limiting RAW decode to {bounded} thread(s) "
+                      f"(was {max_workers}) to keep decode buffers in memory", flush=True)
+                max_workers = bounded
 
         # The count check comes first so tiny stacks never pay for CUDA
         # context creation inside is_available().
@@ -455,62 +606,49 @@ class ImageStackLoader:
 
         return True, message, loaded_images, filenames
 
-    def create_stack_pixmaps(
+    def create_stack_previews(
         self,
         images: List[np.ndarray],
         thumb_size: int = 40,
-    ) -> Tuple[List[QPixmap], List[QPixmap]]:
-        """Full-resolution display pixmap plus a small thumbnail per frame.
+    ) -> Tuple[LazyPixmapStack, List[QPixmap]]:
+        """Source-list thumbnails, plus a lazy view onto the display pixmaps.
 
-        One pass replaces the separate create_pixmaps/create_thumbnails calls
-        after a stack (re)load, sharing a single 8-bit copy per frame. The
-        cv2/numpy work releases the GIL and runs across threads; only the
-        QPixmap wrapping, which must happen on the GUI thread, stays serial.
-        BGRA buffers map straight onto QImage.Format_RGB32, so that wrap is a
-        copy without per-pixel conversion. Processing is chunked to bound how
-        many full-resolution BGRA buffers are alive at once.
+        Only the thumbnails are built here. The full-resolution display pixmap
+        of a frame is produced by LazyPixmapStack when that frame is actually
+        shown, because materialising all of them costs ~98 MB each and only
+        one is ever on screen.
+
+        Thumbnails are downscaled at the frame's own depth and narrowed to 8
+        bits afterwards, so a 16-bit stack never allocates a full-resolution
+        8-bit copy just to produce a 64 px icon. The cv2/numpy work releases
+        the GIL and runs across threads; only the QPixmap wrapping, which must
+        happen on the GUI thread, stays serial.
         """
-        def prepare(img: np.ndarray):
-            disp8 = bitdepth.to_display8(img)
-            h, w = disp8.shape[:2]
+        def prepare(img: np.ndarray) -> np.ndarray:
+            h, w = img.shape[:2]
             if h <= 0 or w <= 0:
                 raise ValueError(f"Invalid image dimensions: {w}x{h}")
-            full = np.ascontiguousarray(cv2.cvtColor(disp8, cv2.COLOR_BGR2BGRA))
             scale = thumb_size / max(h, w)
             small = cv2.resize(
-                disp8,
+                img,
                 (max(1, int(w * scale)), max(1, int(h * scale))),
                 interpolation=cv2.INTER_AREA,
             )
-            thumb = np.ascontiguousarray(cv2.cvtColor(small, cv2.COLOR_BGR2BGRA))
-            return full, thumb
+            return np.ascontiguousarray(cv2.cvtColor(bitdepth.to_display8(small), cv2.COLOR_BGR2BGRA))
 
-        def to_pixmap(bgra: np.ndarray) -> QPixmap:
-            h, w = bgra.shape[:2]
-            qimg = QImage(bgra.data, w, h, 4 * w, QImage.Format.Format_RGB32)
-            # .copy() is essential: fromImage() on an already-RGB32 image may
-            # share the buffer instead of copying, and this buffer is numpy
-            # memory that dies with `bgra` - the pixmap would dangle. The copy
-            # is Qt-owned and still a straight memcpy, no per-pixel swizzle.
-            return QPixmap.fromImage(qimg.copy())
-
-        pixmaps: List[QPixmap] = []
         thumbnails: List[QPixmap] = []
         if not images:
-            return pixmaps, thumbnails
+            return LazyPixmapStack([]), thumbnails
 
         start_time = time.perf_counter()
         max_workers = max(1, min(8, os.cpu_count() or 4, len(images)))
-        chunk = max_workers * 2
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for start in range(0, len(images), chunk):
-                for full, thumb in executor.map(prepare, images[start:start + chunk]):
-                    pixmaps.append(to_pixmap(full))
-                    thumbnails.append(to_pixmap(thumb))
+            for thumb in executor.map(prepare, images):
+                thumbnails.append(_bgra_to_pixmap(thumb))
 
-        print(f"[Stack] Prepared {len(pixmaps)} preview(s) in "
+        print(f"[Stack] Prepared {len(thumbnails)} thumbnail(s) in "
               f"{time.perf_counter() - start_time:.2f} s", flush=True)
-        return pixmaps, thumbnails
+        return LazyPixmapStack(images), thumbnails
 
     def create_pixmaps(self, images: List[np.ndarray], max_size: Tuple[int, int] = (800, 600)) -> List[QPixmap]:
         pixmaps = []
