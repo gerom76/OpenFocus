@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from typing import Any
 
 import cv2
@@ -8,6 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox
 
 from utils import write_image, cv2_to_pixmap, fit_list_rows_to_thumbnails
 from utils import show_error_box, show_message_box, show_success_box, show_warning_box
+from core import render_options
 from locales import trans
 
 
@@ -60,8 +62,31 @@ class OutputManager:
         """
         records = getattr(self.window, "fusion_metadata", None) or []
         if 0 <= row < len(records):
-            return records[row]
+            return self._with_current_contrast(records[row])
         return None
+
+    def metadata_for_current(self) -> Any:
+        """Render metadata of the result `window.fusion_result` holds."""
+        return self._with_current_contrast(getattr(self.window, "fusion_result_metadata", None))
+
+    def _with_current_contrast(self, record: Any) -> Any:
+        """Restate the Contrast option as it is at this moment.
+
+        Contrast is a post-fusion output setting: it is applied when the result
+        is displayed or saved, from whatever the slider says then, so the value
+        frozen at render time would describe the wrong file. The stored record is
+        left untouched - the refreshed copy exists only for this save.
+        """
+        if record is None or not record.options:
+            return record
+
+        window = self.window
+        options = dict(record.options)
+        options["Contrast"] = render_options.describe_contrast(
+            getattr(window, "contrast_method", "off"),
+            getattr(window, "contrast_strength", 0),
+        )
+        return replace(record, options=options)
 
     def sync_output_slider_from_list(self, row: int) -> None:
         if row >= 0:
@@ -170,7 +195,7 @@ class OutputManager:
 
                 success = write_image(
                     file_path, image_to_save, announce=True,
-                    metadata=getattr(window, "fusion_result_metadata", None),
+                    metadata=self.metadata_for_current(),
                 )
                 if success:
                     show_success_box(

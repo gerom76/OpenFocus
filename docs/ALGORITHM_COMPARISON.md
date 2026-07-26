@@ -270,10 +270,12 @@ ARW, RAF, DNG and ORF identically.
 ³ Since 1.8.0 the map drives a fusion method (`Depth Map`) but is still not
 *exported* as a file — see §1 note 1.
 ⁴ **Closed in 1.16.0.** A saved JPEG or PNG inherits the EXIF block of the first
-source frame of the render, and carries OpenFocus' version, render date and
-render duration in an XMP group of its own. Both are spliced into the encoded
-file, so nothing is recompressed — see `utils/metadata.py`. TIFF and BMP outputs
-are still written without metadata.
+source frame of the render, and carries an XMP packet with OpenFocus' version,
+render date, render duration and every option the render ran with
+(`core/render_options.py`), plus a `Camera` section cloning every camera tag of
+that source as text. Both are spliced into the encoded file, so nothing is
+recompressed — see `utils/metadata.py`. TIFF and BMP outputs are still written
+without metadata.
 ⁵ `core/image_loader.py:417`.
 
 ### Findings

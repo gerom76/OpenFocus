@@ -5,6 +5,7 @@ from typing import Any, List, Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox, QDialog
 
 from utils import RenderMetadata, show_custom_message_box, show_message_box, show_warning_box
+from core import render_options
 from core.multi_focus_fusion import is_stackmffv4_available
 from core.workers import RenderWorker
 from dialogs import ROIRenderOptionsDialog  # Import the new dialog
@@ -112,6 +113,45 @@ class RenderManager:
             if 0 <= row < len(paths) and paths[row]:
                 return paths[row]
         return None
+
+    def _describe_render(self, fusion_result: Any, device_name: str) -> dict:
+        """The settings the finished render ran with, for its saved metadata.
+
+        Read off the worker rather than the widgets: a control the user moved
+        while the render was running would otherwise be recorded as if it had
+        taken part in it.
+        """
+        window = self.window
+        worker = self.worker
+        if worker is None:
+            return {}
+
+        return render_options.describe(
+            algorithm=worker.fusion_algorithm(),
+            kernel_size=worker.kernel_slider_value,
+            halo_radius=worker.halo_radius_value,
+            ifcnn_refine=worker.ifcnn_refine,
+            align_scale=worker.need_align_scale,
+            align_homography=worker.need_align_homography,
+            align_ecc=worker.need_align_ecc,
+            reference_mode=worker.reference_mode,
+            reg_downscale_width=worker.reg_downscale_width,
+            ecc_parallel=worker.ecc_parallel,
+            contrast_method=getattr(window, "contrast_method", "off"),
+            contrast_strength=getattr(window, "contrast_strength", 0),
+            source_count=len(worker.raw_images or []),
+            total_count=len(window.raw_images or []),
+            roi_mode=worker.roi_mode if worker.roi_rect is not None else None,
+            roi_base_index=worker.roi_base_index,
+            tile_enabled=worker.tile_enabled,
+            tile_block_size=worker.tile_block_size,
+            tile_overlap=worker.tile_overlap,
+            tile_threshold=worker.tile_threshold,
+            stackmffv4_batch_size=worker.stackmffv4_batch_size,
+            result_dtype=getattr(fusion_result, "dtype", None),
+            device_name=device_name,
+            thread_count=worker.thread_count,
+        )
 
     def start_render(self) -> None:
         window = self.window
@@ -312,6 +352,7 @@ class RenderManager:
                     source_path=self._render_source_path,
                     rendered_at=datetime.now(),
                     duration_s=alignment_time + fusion_time,
+                    options=self._describe_render(fusion_result, device_name),
                 )
 
                 # If this is fusion in ROI mode, exit ROI mode (but keep the aligned images for reuse)

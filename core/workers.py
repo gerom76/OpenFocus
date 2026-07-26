@@ -12,6 +12,7 @@ from core import contrast
 from core.memory import release_render_memory
 from fusion_methods.ifcnn import _ifcnn_refine_impl, get_ifcnn_model_path, is_ifcnn_available
 from utils import resource_path, normalize_kernel_size, write_image, bitdepth, RenderMetadata
+from core import render_options
 from constants import (
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
     DEFAULT_THREAD_COUNT
@@ -495,6 +496,13 @@ class RenderWorker(QThread):
             tile_threshold=self.tile_threshold,
         )
 
+    def fusion_algorithm(self):
+        """The algorithm this render fuses with, or None when it only registers.
+
+        Public because the saved result records it: see core/render_options.py.
+        """
+        return self._get_fusion_algorithm() if self.need_fusion else None
+
     def _get_fusion_algorithm(self):
         """Get the fusion-algorithm name based on the UI selection"""
         if self.rb_a_checked:
@@ -820,7 +828,9 @@ class BatchWorker(QThread):
                 write_image(
                     output_path,
                     result,
-                    metadata=self._render_metadata(original_paths, started_at),
+                    metadata=self._render_metadata(
+                        original_paths, started_at, result, len(images)
+                    ),
                 )
 
             if self.processing_settings.get('save_aligned'):
@@ -829,16 +839,45 @@ class BatchWorker(QThread):
                     aligned_path = os.path.join(output_dir, aligned_filename)
                     write_image(aligned_path, img)
     
-    def _render_metadata(self, source_paths, started_at):
-        """Metadata for a batch result: its first source frame, and the timing.
+    def _render_metadata(self, source_paths, started_at, result=None, frame_count=None):
+        """Metadata for a batch result: source frame, timing, and the settings.
 
         Loading is deliberately outside the measured span, matching what the
-        interactive render records.
+        interactive render records. The options are described through the same
+        vocabulary the interactive path uses, so a batch output and a hand-made
+        one can be compared property by property.
         """
+        settings = self.processing_settings or {}
+        reg_methods = settings.get('reg_methods', []) or []
+        fusion_params = settings.get('fusion_params', {}) or {}
+        fusion_method = settings.get('fusion_method')
+
         return RenderMetadata(
             source_path=source_paths[0] if source_paths else None,
             rendered_at=datetime.now(),
             duration_s=time.perf_counter() - started_at,
+            options=render_options.describe(
+                algorithm=fusion_method,
+                kernel_size=fusion_params.get('kernel_size'),
+                halo_radius=fusion_params.get('halo_radius', 0),
+                ifcnn_refine=bool(settings.get('ifcnn_refine')),
+                align_scale="scale" in reg_methods,
+                align_homography="homography" in reg_methods,
+                align_ecc="ecc" in reg_methods,
+                reference_mode=self.reference_mode,
+                reg_downscale_width=self.reg_downscale_width,
+                ecc_parallel=self.ecc_parallel,
+                contrast_method=settings.get('contrast_method', contrast.METHOD_OFF),
+                contrast_strength=settings.get('contrast_strength', 0),
+                source_count=frame_count,
+                tile_enabled=self.tile_enabled,
+                tile_block_size=self.tile_block_size,
+                tile_overlap=self.tile_overlap,
+                tile_threshold=self.tile_threshold,
+                stackmffv4_batch_size=self.stackmffv4_batch_size,
+                result_dtype=getattr(result, "dtype", None),
+                thread_count=self.thread_count,
+            ),
         )
 
     def process_single_folder(self, folder_path):
@@ -905,7 +944,9 @@ class BatchWorker(QThread):
         # 4. Save the result
         if fusion_result is not None:
             self.save_fusion_result(
-                folder_path, fusion_result, self._render_metadata(source_paths, started_at)
+                folder_path,
+                fusion_result,
+                self._render_metadata(source_paths, started_at, fusion_result, len(images)),
             )
         
         # 5. If needed, save the registered image stack

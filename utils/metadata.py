@@ -6,6 +6,11 @@ survive the fusion instead of being dropped. What OpenFocus itself contributed -
 its version, when the render happened and how long it took - has no EXIF
 equivalent, so it goes into an XMP packet under a namespace of its own.
 
+That packet also carries a Camera section: every camera tag of the source block
+cloned as plain text. It is deliberately redundant with the EXIF block, which
+stays the authoritative binary copy - the section exists so the shot's settings
+can be read straight out of the packet, without an EXIF parser.
+
 Both are spliced into the already-encoded file rather than written by re-saving
 it through an imaging library. Re-saving a JPEG would recompress pixels that
 were just written at quality 100, and a 16-bit RGB PNG would not survive the
@@ -16,17 +21,20 @@ Only JPEG and PNG are handled here; TIFF and BMP saves are left alone.
 """
 
 import os
+import re
 import zlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 from xml.sax.saxutils import escape
 
-# Namespace and prefix of the OpenFocus group inside the XMP packet. The URI is
-# only an identifier - it is never fetched - but it has to stay stable, because
-# readers key their fields on it.
+# Namespaces and prefixes of the two groups inside the XMP packet. The URIs are
+# only identifiers - they are never fetched - but they have to stay stable,
+# because readers key their fields on them.
 OPENFOCUS_NS = "https://github.com/Xinzhe99/OpenFocus/ns/1.0/"
 OPENFOCUS_PREFIX = "OpenFocus"
+CAMERA_NS = "https://github.com/Xinzhe99/OpenFocus/ns/camera/1.0/"
+CAMERA_PREFIX = "Camera"
 
 # Containers that can carry the metadata. Everything else is written as-is.
 TAGGABLE_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif", ".png"}
@@ -46,6 +54,19 @@ _PNG_XMP_KEYWORD = b"XML:com.adobe.xmp"
 # Byte order marks of a TIFF header, which is what an EXIF block really is.
 _TIFF_HEADERS = (b"II*\x00", b"MM\x00*")
 
+# EXIF IFDs cloned into the Camera section, in the order they are written.
+# Their tag names come from Pillow, which uses the names of the EXIF standard.
+_EXIF_IFD_POINTER = 0x8769
+_GPS_IFD_POINTER = 0x8825
+# Pointers to the sub-IFDs themselves, and the offsets of the embedded
+# thumbnail: plumbing of the EXIF block rather than anything about the camera.
+_STRUCTURAL_TAGS = {_EXIF_IFD_POINTER, _GPS_IFD_POINTER, 0xA005, 0x0201, 0x0202}
+# An XMP property name has to be a legal XML name.
+_INVALID_NAME_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+# Long values are binary blobs that lost their type somewhere; the EXIF block
+# still carries them intact, so the readable copy skips them.
+_MAX_TAG_CHARS = 512
+
 _XMP_TEMPLATE = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="OpenFocus {version}">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -56,10 +77,15 @@ _XMP_TEMPLATE = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
    <{prefix}:Version>{version}</{prefix}:Version>
    <{prefix}:RenderDate>{render_date}</{prefix}:RenderDate>
    <{prefix}:RenderDuration>{duration}</{prefix}:RenderDuration>
-  </rdf:Description>
- </rdf:RDF>
+{options}  </rdf:Description>
+{camera_section} </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end="w"?>
+"""
+
+_CAMERA_SECTION_TEMPLATE = """  <rdf:Description rdf:about=""
+    xmlns:{prefix}="{namespace}">
+{properties}  </rdf:Description>
 """
 
 
@@ -70,11 +96,17 @@ class RenderMetadata:
     `source_path` is the first source image of the stack that was rendered; its
     EXIF is read at save time rather than kept here, so the record stays cheap
     to hold alongside every entry in the output list.
+
+    `options` are the settings the render ran with - which stages, which method,
+    which parameters - as already-formatted name/value pairs in the order they
+    should be read. The producer of the render decides what belongs in there;
+    this module only writes them out.
     """
 
     source_path: Optional[str] = None
     rendered_at: Optional[datetime] = None
     duration_s: float = 0.0
+    options: Optional[Dict[str, str]] = None
 
 
 def app_version() -> str:
@@ -133,8 +165,142 @@ def read_source_exif(path: Optional[str]) -> Optional[bytes]:
     return blob
 
 
-def build_xmp(metadata: RenderMetadata) -> bytes:
-    """Serialise the OpenFocus group of `metadata` as a UTF-8 XMP packet."""
+def _properties(prefix: str, pairs: Iterable[Tuple[str, str]]) -> str:
+    """Render name/value pairs as XMP simple properties under `prefix`.
+
+    A name that cannot be a legal XML element is dropped rather than allowed to
+    break the packet; values are escaped.
+    """
+    lines = []
+    for name, value in pairs:
+        safe_name = _INVALID_NAME_CHARS.sub("", str(name))
+        if not safe_name or safe_name[0].isdigit():
+            continue
+        lines.append(f"   <{prefix}:{safe_name}>{escape(str(value))}"
+                     f"</{prefix}:{safe_name}>\n")
+    return "".join(lines)
+
+
+def _tag_name(tag_id: int, names: dict) -> str:
+    """XMP property name for an EXIF tag.
+
+    Tags Pillow has no name for keep their number, so a rare or vendor-specific
+    one is still readable rather than silently dropped.
+    """
+    return str(names.get(tag_id) or f"Tag{tag_id:04X}")
+
+
+def _tag_value(value) -> Optional[str]:
+    """Render one EXIF value as text, or None if it does not belong in XMP.
+
+    Rationals below 1 keep their fraction, because that is how a shutter speed
+    is read - 1/200, not 0.005 - while the rest become decimals, because an
+    aperture is an f/5.6 and not a 28/5. Byte strings are left to the EXIF
+    block, which stores them losslessly and is copied across anyway.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        return None
+
+    if isinstance(value, (tuple, list)):
+        parts = []
+        for item in value:
+            part = _tag_value(item)
+            if part is None:
+                return None
+            parts.append(part)
+        text = ", ".join(parts)
+    elif hasattr(value, "numerator") and hasattr(value, "denominator"):
+        numerator, denominator = value.numerator, value.denominator
+        if denominator == 0:
+            # Cameras write 0/0 for "not recorded"; there is nothing to say.
+            return None
+        if denominator == 1:
+            text = str(numerator)
+        elif abs(numerator) < abs(denominator):
+            text = f"{numerator}/{denominator}"
+        else:
+            text = f"{numerator / denominator:g}"
+    else:
+        text = str(value)
+
+    # Trailing NULs and stray control characters are common in EXIF strings and
+    # are not valid XML content.
+    text = "".join(ch for ch in text if ch == "\t" or ch >= " ").strip()
+    if not text or len(text) > _MAX_TAG_CHARS:
+        return None
+    return text
+
+
+def read_camera_tags(exif_blob: Optional[bytes]) -> List[Tuple[str, str]]:
+    """Every camera tag of an EXIF block, as ordered (name, value) pairs.
+
+    Written IFD by IFD - the main image IFD, then the EXIF sub-IFD, then GPS -
+    and within each one in the order the source file stored them, so the section
+    mirrors the block it was cloned from. Structural tags, meaning the pointers
+    between IFDs and the offsets of the embedded thumbnail, are left out: they
+    describe the source file's layout rather than the shot.
+
+    A name is only emitted once. Where two IFDs disagree on a tag the main image
+    IFD wins, since that is the one a reader of the block sees first.
+    """
+    if not exif_blob:
+        return []
+
+    try:
+        from PIL import Image
+        from PIL.ExifTags import GPSTAGS, TAGS
+    except ImportError:
+        return []
+
+    try:
+        exif = Image.Exif()
+        exif.load(exif_blob)
+        groups = [
+            (exif, TAGS),
+            (exif.get_ifd(_EXIF_IFD_POINTER), TAGS),
+            (exif.get_ifd(_GPS_IFD_POINTER), GPSTAGS),
+        ]
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"[Metadata] EXIF could not be read into the Camera section: {exc}", flush=True)
+        return []
+
+    tags: List[Tuple[str, str]] = []
+    seen = set()
+    for group, names in groups:
+        for tag_id, raw in (group or {}).items():
+            if tag_id in _STRUCTURAL_TAGS:
+                continue
+            name = _tag_name(tag_id, names)
+            value = _tag_value(raw)
+            if value is None or name in seen:
+                continue
+            seen.add(name)
+            tags.append((name, value))
+
+    return tags
+
+
+def _camera_section(camera_tags: Optional[List[Tuple[str, str]]]) -> str:
+    """The Camera rdf:Description, or an empty string when there is nothing to say."""
+    if not camera_tags:
+        return ""
+
+    return _CAMERA_SECTION_TEMPLATE.format(
+        prefix=CAMERA_PREFIX,
+        namespace=escape(CAMERA_NS),
+        properties=_properties(CAMERA_PREFIX, camera_tags),
+    )
+
+
+def build_xmp(metadata: RenderMetadata,
+              camera_tags: Optional[List[Tuple[str, str]]] = None) -> bytes:
+    """Serialise `metadata` and the camera tags as a UTF-8 XMP packet.
+
+    Two groups: OpenFocus' own record of the render - version, timing and every
+    option the render ran with - and a Camera section holding the source's EXIF
+    tags in readable form. The binary EXIF block travels with the file as well,
+    but nothing has to be decoded to read either group.
+    """
     rendered_at = metadata.rendered_at or datetime.now()
     if rendered_at.tzinfo is None:
         # XMP dates carry a UTC offset; naive timestamps are local time.
@@ -145,7 +311,10 @@ def build_xmp(metadata: RenderMetadata) -> bytes:
         prefix=OPENFOCUS_PREFIX,
         namespace=escape(OPENFOCUS_NS),
         render_date=escape(rendered_at.isoformat(timespec="seconds")),
-        duration=f"{max(0.0, float(metadata.duration_s)):.2f}",
+        # The unit travels with the number so the value reads on its own.
+        duration=f"{max(0.0, float(metadata.duration_s)):.2f} s",
+        options=_properties(OPENFOCUS_PREFIX, (metadata.options or {}).items()),
+        camera_section=_camera_section(camera_tags),
     )
     return packet.encode("utf-8")
 
@@ -164,8 +333,10 @@ def embed(file_path: str, metadata: Optional[RenderMetadata]) -> bool:
     if ext not in TAGGABLE_EXTENSIONS:
         return False
 
+    # The source file is opened once: the same block is embedded verbatim and
+    # cloned into the readable Camera section of the packet.
     exif = read_source_exif(metadata.source_path)
-    xmp = build_xmp(metadata)
+    xmp = build_xmp(metadata, read_camera_tags(exif))
 
     try:
         with open(file_path, "rb") as handle:

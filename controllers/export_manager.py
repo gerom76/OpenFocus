@@ -223,7 +223,7 @@ class ExportManager:
                 content = window.apply_output_contrast(result_to_save)
                 # Only a fused result carries render metadata; a bare aligned
                 # frame is saved the way it always was.
-                metadata = getattr(window, "fusion_result_metadata", None)
+                metadata = window.output_manager.metadata_for_current()
             image_to_save = window.label_manager.prepare_bgr_image("registered", content, index)
             if write_image(file_path, image_to_save, announce=True, metadata=metadata):
                 show_message_box(
