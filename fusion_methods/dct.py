@@ -21,9 +21,8 @@ ArraySource = Sequence[np.ndarray]
 # variance than the fine, low-amplitude texture that is genuinely in focus
 # there. The blurred frame then wins whole regions, which is what produced the
 # flat homogeneous patches this measure replaces. Dropping the lowest AC band -
-# everything coarser than a block -
-# leaves only detail a block can actually resolve, so a defocused wash scores
-# near zero however bright it is.
+# everything coarser than a block - leaves only detail a block can actually
+# resolve, so a defocused wash scores near zero however bright it is.
 #
 # The cutoff is the block itself: the high-pass window is the block size, so
 # structure spanning more than one block is subtracted off before the energy is
@@ -77,6 +76,7 @@ _NOISE_FLOOR = 1e-7
 # defocused regions come out uniform instead of patchwork. The field it produces
 # is continuous, so neighbouring blocks land on neighbouring frames, which look
 # alike.
+#
 # The width matters as much as the idea, and it is a two-sided choice.
 #
 # Too narrow and the plateau is measured against a noise outlier wherever
@@ -268,6 +268,8 @@ def dct_focus_stack_fusion(
     output_path: str = None,
     block_size: int = 8,
     kernel_size: int = 7,
+    plateau: float = None,
+    blend: bool = None,
 ) -> np.ndarray:
     """
     DCT-domain multi-focus fusion.
@@ -286,12 +288,24 @@ def dct_focus_stack_fusion(
     followed by a block mean of the squared result, both done with cv2 filters
     and cv2.resize(INTER_AREA), replaces the originally extremely slow per-block
     DCT loop.
+
+    Args:
+        block_size: Side of the block every decision is made over.
+        kernel_size: Median filter applied to the focal-plane map.
+        plateau: How far below the peak a frame still counts as in focus.
+            None uses _PLATEAU. Clamped: above ~0.85 detail-free regions start
+            being decided by grain again (item 17), which is a defect rather
+            than a preference, so the range stops short of it.
+        blend: Composite by weighting neighbouring frames (the default) or copy
+            each block from one frame verbatim. None uses _BLEND.
     """
-    
+
     # --- 1. Parameter validation and preparation ---
     if kernel_size % 2 == 0:
         kernel_size += 1
     block_size = max(2, int(block_size))
+    plateau = _PLATEAU if plateau is None else min(max(float(plateau), 0.1), 0.85)
+    blend = _BLEND if blend is None else bool(blend)
 
     if isinstance(source, str):
         images, _ = _collect_images_from_folder(source)
@@ -341,7 +355,7 @@ def dct_focus_stack_fusion(
     # Pass 2: the middle of the frames that clear that bar - the block's focal
     # plane. Summing indices and counts is all that is needed, so this stays
     # O(1) in stack depth too.
-    threshold = peak_energy * _PLATEAU
+    threshold = peak_energy * plateau
     in_focus_count = np.zeros((map_h, map_w), dtype=np.float32)
     index_total = np.zeros((map_h, map_w), dtype=np.float32)
     for idx in range(len(normalized_images)):
@@ -362,7 +376,7 @@ def dct_focus_stack_fusion(
 
     # --- 4. Reconstruction ---
     out_dtype = bitdepth.stack_dtype(normalized_images)
-    if _BLEND:
+    if blend:
         fused_image = _compose(normalized_images, index_map, block_size,
                                (h, w), out_dtype)
     else:

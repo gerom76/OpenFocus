@@ -840,6 +840,13 @@ GFG-FGF.
   territory - a dial that no longer changes anything - and should either be
   hidden for this method or given something to do.
 
+  **Overtaken by item 18 (1.17.1).** The rewrite made this the slider that
+  regularises the focal-plane map, and it is now the method's main quality
+  control rather than a spare part - the paragraph above describes code that no
+  longer exists. Measured on a 274-frame stack, the share of flat-area blocks
+  standing out from their neighbours runs 0.385% unfiltered, 0.333% at 7,
+  0.304% at 31 and 0.281% at 51. See "Tuning DCT" below.
+
 Both paths landed together, as item 11 requires. `dct_torch.py` reproduces the
 box blur with a reflect-padded `avg_pool2d`, and the decision stage - normalise,
 gate, propagate, median-filter - runs on the host through the CPU path's own
@@ -939,6 +946,69 @@ contract that holds: every pixel stays inside the envelope its sources span.
 
 **Guarded by** `tests/test_fusion_regression.py` - see below. Both halves of
 this fix trip it when removed.
+
+---
+
+## Tuning DCT
+
+What the method exposes, and what it deliberately does not. Measured on the
+274-frame 2048x1364 stack from item 18. "Speckle" is the share of flat-area
+blocks standing far outside their neighbours (`fusion_metrics.block_speckle`) -
+the lone mismatched squares a block method produces, which the seam metrics
+average away; the pyramid scores 0.103% on the same image.
+
+**`kernel_size` (Smoothing slider).** Median-filters the focal-plane map. Since
+item 18 this is the method's main quality control:
+
+| kernel | speckle | background step | detail |
+|---|---|---|---|
+| 1 (off) | 0.385% | 0.236 | 16.32 |
+| 7 | 0.333% | 0.286 | 16.13 |
+| 31 (default) | 0.304% | 0.309 | 15.93 |
+| 51 | 0.281% | 0.319 | 15.88 |
+| 101 | 0.281% | 0.325 | 15.82 |
+| 301 | 0.281% | 0.330 | 15.80 |
+
+Two things follow. The default moved from 7 to 31: at 7 the lattice still shows.
+And the ceiling moved from 51 to 151 - not because this image needs it (it is
+flat from 51 onwards) but because the kernel counts *blocks*, so its reach as a
+fraction of the frame shrinks as the frame grows. 51 spans a fifth of the map
+here and a fourteenth of it on a 6000-wide stack, which is the size real macro
+work runs at. The ceiling is per method (`_set_kernel_range` in `main.py`): the
+pixel-domain methods that share the slider keep 51, where their own usefulness
+ends.
+
+Note the trade in the table: more smoothing removes speckle and costs a little
+fine detail, because the map that stops flickering also stops following small
+in-focus features. 31 is where that stops being worth it.
+
+**`block_size` (DCT block).** Exposed at 1.18.0, having been fixed at 8 since
+the method was written. It is the grid every decision is made on: 4 follows fine
+detail and is noisier, 16 and 32 are steadier but step harder where near meets
+far. `tests/fusion_registry.py` sweeps it 4 to 64.
+
+**`plateau` (Focus tolerance).** Three presets - Crisp 0.85, Balanced 0.80,
+Smooth 0.70 - and deliberately not a slider. It is the number behind item 18's
+trade between a flat background and item 17's veil artefact, and the usable
+range ends abruptly: 0.85 is clean, 0.90 fails outright. A raw control whose top
+fifth reintroduces a fixed bug is a trap, so the value is clamped to 0.85 in
+`dct.py` as well - the presets are the safe range, and the clamp is what
+enforces it for any caller. Higher keeps a never-in-focus background nearer its
+sharpest frame; lower averages more frames there, smoother and flatter.
+
+**`blend` (Blend block seams).** On by default. Off restores the pre-1.17.1
+behaviour of copying each block from a single frame, so every output pixel is
+exactly some input pixel, at the cost of the lattice showing again
+(`seam_excess` 0.683 -> 1.153 on `deep_stack`).
+
+**`_POOL_WINDOW`, `_NOISE_PERCENTILE` and `_HIGHPASS_SCALE` stay internal.**
+All three are load-bearing for items 17 and 18 and none has a meaning a user
+could act on.
+
+The three exposed controls are inherited by batch jobs from the main window, the
+way the kernel and the registration checkboxes already are, and any that is not
+at its default is written into the output filename so two renders that differ
+only in tuning cannot collide.
 
 ---
 

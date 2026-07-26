@@ -465,6 +465,9 @@ class MultiFocusFusion:
                   img_resize: Optional[Tuple[int, int]] = None,
                   block_size: int = 8,
                   kernel_size: int = 7,
+                  plateau: Optional[float] = None,
+                  blend: Optional[bool] = None,
+                  dct_block_size: Optional[int] = None,
                   **kwargs) -> np.ndarray:
         """
         DCT block-energy fusion.
@@ -474,7 +477,16 @@ class MultiFocusFusion:
             img_resize: Target size (currently unsupported; raises if specified)
             block_size: DCT block size; also the scale below which detail counts
                         towards the sharpness decision
+            dct_block_size: The same thing under a name that survives tiling.
+                        `block_size` means the *tile* side to fuse() and is
+                        stripped before the per-tile call, so a caller that has
+                        to work with tiling on must use this one; it wins when
+                        both are given.
             kernel_size: Median filter kernel size for consistency verification
+            plateau: How far below the peak a frame still counts as in focus;
+                     None keeps the method default
+            blend: Blend neighbouring frames across the block lattice, or copy
+                   each block from one frame; None keeps the method default
 
         Returns:
             Fused image
@@ -482,10 +494,15 @@ class MultiFocusFusion:
         if img_resize is not None:
             raise ValueError("DCT fusion does not support dynamic resizing. Resize images before processing.")
 
+        if dct_block_size is not None:
+            block_size = int(dct_block_size)
+
         if self.use_gpu:
             try:
                 from fusion_methods.dct_torch import dct_torch_impl
-                return dct_torch_impl(input_source, block_size=block_size, kernel_size=kernel_size)
+                return dct_torch_impl(input_source, block_size=block_size,
+                                      kernel_size=kernel_size,
+                                      plateau=plateau, blend=blend)
             except Exception as exc:
                 print(f"Warning: GPU DCT fusion failed ({exc}); falling back to CPU.")
                 try:
@@ -500,7 +517,9 @@ class MultiFocusFusion:
             input_source,
             output_path=None,
             block_size=block_size,
-            kernel_size=kernel_size
+            kernel_size=kernel_size,
+            plateau=plateau,
+            blend=blend
         )
     
     def _fuse_dtcwt(self,

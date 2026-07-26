@@ -44,7 +44,45 @@ STACKMFFV4_BATCH_SIZE_MAX = 16
 
 KERNEL_SIZE_MIN = 3
 KERNEL_SIZE_MAX = 51
-KERNEL_SIZE_DEFAULT_DCT = 7
+
+# DCT's kernel median-filters its focal-plane map, which holds one entry per
+# block rather than per pixel, so at the default block size each step reaches
+# eight times further than it does for the pixel-domain methods - and the
+# distance it must cover grows with the frame: 51 spans a fifth of the map on a
+# 2048-wide image and a fourteenth of it on a 6000-wide one. Measured on a
+# 274-frame 2048x1364 stack, quality stops improving around 51 and is flat out
+# to 301; the higher ceiling exists for the larger frames, where the same reach
+# needs a larger number.
+KERNEL_SIZE_MAX_DCT = 151
+
+# Raised from 7 at 1.17.2. The rewrite in item 18 of docs/ALGORITHM_IMPROVEMENTS
+# made this slider DCT's main regulariser rather than the near-inert control it
+# had become, and 7 leaves isolated blocks showing: on the stack above, the
+# share of flat-area blocks standing out from their neighbours runs 0.385% with
+# no filtering, 0.333% at 7, 0.304% here and 0.281% at 51, against 0.103% for
+# the pyramid. Past 31 the gain is small and fine in-focus detail starts being
+# smoothed away with the speckle.
+KERNEL_SIZE_DEFAULT_DCT = 31
 KERNEL_SIZE_DEFAULT_GFF = 31
 KERNEL_SIZE_DEFAULT_GFG = 7
 KERNEL_SIZE_DEFAULT_DMAP = 9
+
+# --- DCT tuning exposed in the UI ---------------------------------------
+# The grid every DCT decision is made over. Smaller follows fine detail and is
+# noisier; larger is steadier but steps harder where near meets far.
+DCT_BLOCK_SIZES = (4, 8, 16, 32)
+DCT_BLOCK_SIZE_DEFAULT = 8
+
+# How far below the peak energy a frame still counts as in focus on a block.
+# Presets rather than a slider: the usable range ends at 0.85, and above it
+# detail-free regions go back to being decided by grain (item 17 in
+# docs/ALGORITHM_IMPROVEMENTS.md), which is a defect, not a preference.
+# Higher keeps a never-in-focus background closer to its sharpest frame; lower
+# averages more frames there and comes out smoother and flatter.
+DCT_PLATEAU_PRESETS = (("crisp", 0.85), ("balanced", 0.80), ("smooth", 0.70))
+DCT_PLATEAU_DEFAULT = "balanced"
+
+# Blend neighbouring frames across the block lattice (default), or copy each
+# block from a single frame. Off restores verbatim source pixels at the cost of
+# the lattice showing again.
+DCT_BLEND_DEFAULT = True

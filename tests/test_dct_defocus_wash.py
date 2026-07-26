@@ -284,6 +284,82 @@ def test_gpu_path_agrees_on_the_wash(scene):
     assert _wrong_frame_share(gpu, stack, backdrop) < 8.0
 
 
+# --------------------------------------------------------------------------
+# The exposed tuning has to do what it says
+# --------------------------------------------------------------------------
+
+def test_plateau_and_blend_change_the_result(veiled):
+    """Each exposed control must move the picture, or it is a decoration."""
+    stack, _, _ = veiled
+    base = dct_focus_stack_fusion(list(stack))
+    for name, kwargs in (("block_size", {"block_size": 16}),
+                         ("plateau", {"plateau": 0.5}),
+                         ("blend", {"blend": False})):
+        other = dct_focus_stack_fusion(list(stack), **kwargs)
+        assert other.shape == base.shape
+        moved = float(np.abs(other.astype(np.int32)
+                             - base.astype(np.int32)).mean())
+        assert moved > 0.01, f"{name} changed nothing ({moved:.4f} levels)"
+
+
+def test_plateau_is_clamped_below_the_veil_cliff(veiled):
+    """
+    The plateau is clamped, not merely defaulted.
+
+    Above ~0.85 detail-free regions go back to being decided by grain, which is
+    item 17's artefact returning - a defect rather than a preference, so a
+    caller cannot ask for it however it reaches the parameter.
+    """
+    stack, reference, interior = veiled
+    for asked in (0.9, 0.99, 1.0, 5.0):
+        fused = dct_focus_stack_fusion(list(stack), plateau=asked)
+        share = _veil_patch_share(fused, reference, interior)
+        assert share < 5.0, (
+            f"plateau={asked} let {share:.1f}% of the smooth body come from a "
+            "veil frame; the clamp is not holding")
+
+
+def test_tiling_does_not_discard_the_block_size(veiled):
+    """
+    `block_size` means the tile side to the dispatcher and the DCT block to the
+    method. The tiled path strips the caller's `block_size` before the per-tile
+    call, so a DCT block passed under that name silently reverted to 8 as soon
+    as an image was large enough to tile - which is every large render.
+    `dct_block_size` is the name that survives, and this is what checks it does.
+    """
+    from core.multi_focus_fusion import MultiFocusFusion
+
+    stack, _, _ = veiled
+    small = [s[:192, :192] for s in stack]
+
+    def run(tile_threshold, **kwargs):
+        fusion = MultiFocusFusion(algorithm="dct", use_gpu=False,
+                                  tile_enabled=True, tile_block_size=128,
+                                  tile_overlap=32, tile_threshold=tile_threshold)
+        return fusion.fuse(input_source=small, img_resize=None, **kwargs)
+
+    # 10000 keeps tiling off, 64 forces it on for this 192 px fixture.
+    for threshold in (10000, 64):
+        default = run(threshold, dct_block_size=8)
+        coarse = run(threshold, dct_block_size=32)
+        moved = float(np.abs(coarse.astype(np.int32)
+                             - default.astype(np.int32)).mean())
+        assert moved > 0.01, (
+            f"dct_block_size had no effect with tile_threshold={threshold} "
+            f"({moved:.4f} levels) - it is being dropped on the way through")
+
+
+def test_blend_off_returns_source_pixels(veiled):
+    """With blending off, every pixel is exactly one source frame's pixel."""
+    stack, _, _ = veiled
+    fused = dct_focus_stack_fusion(list(stack), blend=False)
+    closest = np.min(np.stack(
+        [np.abs(fused.astype(np.int32) - s.astype(np.int32)).sum(2)
+         for s in stack]), axis=0)
+    assert closest.max() == 0, (
+        "blend=False must copy blocks verbatim, but some pixel matches no frame")
+
+
 def test_gpu_path_agrees_on_the_veil(veiled):
     _require_gpu()
     from fusion_methods.dct_torch import dct_torch_impl

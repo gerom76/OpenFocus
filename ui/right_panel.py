@@ -21,6 +21,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from constants import (
+    DCT_BLEND_DEFAULT,
+    DCT_BLOCK_SIZES,
+    DCT_BLOCK_SIZE_DEFAULT,
+    DCT_PLATEAU_DEFAULT,
+    DCT_PLATEAU_PRESETS,
+    KERNEL_SIZE_MAX_DCT,
+)
 from dialogs import RegistrationHelpDialog, RenderMethodHelpDialog
 from ui.styles import (
     HELP_BUTTON_STYLE,
@@ -61,6 +69,12 @@ class RightPanelComponents:
     slider_halo: QSlider
     halo_value_label: QLabel
     halo_widget: QWidget
+    combo_dct_block: QComboBox
+    combo_dct_plateau: QComboBox
+    cb_dct_blend: QCheckBox
+    dct_widget: QWidget
+    lbl_dct_block: QLabel
+    lbl_dct_plateau: QLabel
     combo_contrast: QComboBox
     slider_contrast: QSlider
     contrast_value_label: QLabel
@@ -189,7 +203,7 @@ def create_right_panel() -> RightPanelComponents:
     lbl_smooth_value = QLabel("31")
     smooth_top.addWidget(lbl_smooth_value)
     slider_smooth = QSlider(Qt.Orientation.Horizontal)
-    slider_smooth.setRange(1, 51)
+    slider_smooth.setRange(1, KERNEL_SIZE_MAX_DCT)
     slider_smooth.setSingleStep(2)
     slider_smooth.setPageStep(2)
     slider_smooth.setValue(31)
@@ -216,6 +230,43 @@ def create_right_panel() -> RightPanelComponents:
     halo_layout.addWidget(slider_halo)
     halo_widget.setEnabled(False)  # only the depth-map methods use it
     config_layout.addWidget(halo_widget)
+
+    # DCT tuning (DCT only) ---------------------------------
+    dct_widget = QWidget()
+    dct_layout = QVBoxLayout(dct_widget)
+    dct_layout.setContentsMargins(0, 5, 0, 5)
+
+    dct_block_row = QHBoxLayout()
+    lbl_dct_block = QLabel(trans.t('label_dct_block'))
+    dct_block_row.addWidget(lbl_dct_block)
+    dct_block_row.addStretch()
+    combo_dct_block = QComboBox()
+    for size in DCT_BLOCK_SIZES:
+        combo_dct_block.addItem(f"{size} px", size)
+    combo_dct_block.setCurrentIndex(
+        list(DCT_BLOCK_SIZES).index(DCT_BLOCK_SIZE_DEFAULT))
+    dct_block_row.addWidget(combo_dct_block)
+    dct_layout.addLayout(dct_block_row)
+
+    dct_plateau_row = QHBoxLayout()
+    lbl_dct_plateau = QLabel(trans.t('label_dct_plateau'))
+    dct_plateau_row.addWidget(lbl_dct_plateau)
+    dct_plateau_row.addStretch()
+    combo_dct_plateau = QComboBox()
+    # userData carries the stable preset key; the label is translated.
+    for key, _value in DCT_PLATEAU_PRESETS:
+        combo_dct_plateau.addItem(trans.t(f'dct_plateau_{key}'), key)
+    combo_dct_plateau.setCurrentIndex(
+        [k for k, _ in DCT_PLATEAU_PRESETS].index(DCT_PLATEAU_DEFAULT))
+    dct_plateau_row.addWidget(combo_dct_plateau)
+    dct_layout.addLayout(dct_plateau_row)
+
+    cb_dct_blend = QCheckBox(trans.t('label_dct_blend'))
+    cb_dct_blend.setChecked(DCT_BLEND_DEFAULT)
+    dct_layout.addWidget(cb_dct_blend)
+
+    dct_widget.setEnabled(False)  # only DCT uses these
+    config_layout.addWidget(dct_widget)
 
     # Contrast (post-fusion output enhancement) --------------
     contrast_widget = QWidget()
@@ -396,6 +447,12 @@ def create_right_panel() -> RightPanelComponents:
         slider_halo=slider_halo,
         halo_value_label=lbl_halo_value,
         halo_widget=halo_widget,
+        combo_dct_block=combo_dct_block,
+        combo_dct_plateau=combo_dct_plateau,
+        cb_dct_blend=cb_dct_blend,
+        dct_widget=dct_widget,
+        lbl_dct_block=lbl_dct_block,
+        lbl_dct_plateau=lbl_dct_plateau,
         combo_contrast=combo_contrast,
         slider_contrast=slider_contrast,
         contrast_value_label=contrast_value_label,

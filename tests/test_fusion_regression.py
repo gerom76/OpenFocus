@@ -55,6 +55,7 @@ METRICS = {
     "seam_excess": (-1, 0.25),             # 8-bit levels on the block lattice
     "defocus_seam_excess": (-1, 0.25),
     "defocus_seam_visible": (-1, 2.0),     # percent of the lattice showing
+    "block_speckle": (-1, 0.15),           # percent of flat blocks standing out
 }
 
 # A metric beating its baseline by more than this many tolerances means the

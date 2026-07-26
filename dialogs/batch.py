@@ -27,6 +27,29 @@ from locales import trans
 from utils import jxl, log_message_box, show_warning_box
 
 
+def _dct_params(window) -> dict:
+    """The DCT tuning the main window is showing, for a batch job.
+
+    A batch run has no controls of its own: it inherits whatever the main
+    window is set to, the same way it already inherits the kernel and the
+    registration checkboxes. Anything missing is left out so the method keeps
+    its own default rather than being handed None.
+    """
+    if window is None:
+        return {}
+    params = {}
+    combo = getattr(window, "combo_dct_block", None)
+    if combo is not None and combo.currentData():
+        params["dct_block_size"] = int(combo.currentData())
+    if getattr(window, "combo_dct_plateau", None) is not None:
+        from controllers.render_manager import dct_plateau_value
+        params["plateau"] = dct_plateau_value(window)
+    checkbox = getattr(window, "cb_dct_blend", None)
+    if checkbox is not None:
+        params["blend"] = bool(checkbox.isChecked())
+    return params
+
+
 class BatchProcessingDialog(QDialog):
     """Batch-processing settings dialog"""
     
@@ -757,6 +780,7 @@ class BatchProcessingDialog(QDialog):
             elif rb_b and rb_b.isChecked():
                 fusion_method = "dct"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
+                fusion_params.update(_dct_params(self.parent_window))
             elif rb_c and rb_c.isChecked():
                 fusion_method = "dtcwt"
             elif getattr(self.parent_window, 'rb_gfg', None) and self.parent_window.rb_gfg.isChecked():

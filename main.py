@@ -60,6 +60,10 @@ from constants import (
     REG_DOWNSCALE_WIDTH, DEFAULT_THREAD_COUNT,
     STACKMFFV4_BATCH_SIZE, ECC_PARALLEL,
     REFERENCE_FRAME_MODE,
+    KERNEL_SIZE_MAX, KERNEL_SIZE_MAX_DCT,
+    KERNEL_SIZE_DEFAULT_DCT, KERNEL_SIZE_DEFAULT_GFF,
+    KERNEL_SIZE_DEFAULT_GFG, KERNEL_SIZE_DEFAULT_DMAP,
+    DCT_PLATEAU_PRESETS,
 )
 
 class OpenFocus(QMainWindow):
@@ -271,6 +275,10 @@ class OpenFocus(QMainWindow):
         self.slider_halo = right_panel_components.slider_halo
         self.lbl_halo_value = right_panel_components.halo_value_label
         self.halo_widget = right_panel_components.halo_widget
+        self.combo_dct_block = right_panel_components.combo_dct_block
+        self.combo_dct_plateau = right_panel_components.combo_dct_plateau
+        self.cb_dct_blend = right_panel_components.cb_dct_blend
+        self.dct_widget = right_panel_components.dct_widget
         self.combo_contrast = right_panel_components.combo_contrast
         self.slider_contrast = right_panel_components.slider_contrast
         self.lbl_contrast_value = right_panel_components.contrast_value_label
@@ -596,6 +604,28 @@ class OpenFocus(QMainWindow):
         else:
             self.lbl_halo_value.setText(f"{radius} px")
 
+    def _set_kernel_range(self, maximum):
+        """Point the shared kernel slider at one method's usable range.
+
+        The slider drives a different quantity per method, so its ceiling is not
+        one number. The pixel-domain methods stop being useful well before 51.
+        DCT's kernel median-filters its focal-plane map, one entry per block, so
+        at the default block size it reaches eight times further per step - and
+        the distance it has to cover scales with the image: 51 spans a fifth of
+        the map on a 2048-wide frame and a fourteenth of it on a 6000-wide one.
+        Measured on a 274-frame 2048x1364 stack, quality stops improving at
+        about 51 and is flat to 301; the wider ceiling is there for the larger
+        frames where the same reach needs a larger number.
+        """
+        if self.slider_smooth.maximum() == maximum:
+            return
+        current = self.slider_smooth.value()
+        self.slider_smooth.blockSignals(True)
+        self.slider_smooth.setMaximum(maximum)
+        self.slider_smooth.setValue(min(current, maximum))
+        self.slider_smooth.blockSignals(False)
+        self.handle_kernel_slider_change(self.slider_smooth.value())
+
     def update_slider_availability(self):
         """Update slider availability and default value based on the selected fusion method"""
         # Guided Filter/DCT: shared kernel slider
@@ -606,29 +636,40 @@ class OpenFocus(QMainWindow):
         self.halo_widget.setEnabled(
             self.rb_dmap_max.isChecked() or self.rb_dmap_avg.isChecked())
 
+        # The DCT tuning block keeps its values while disabled, so switching
+        # away and back does not forget them.
+        self.dct_widget.setEnabled(self.rb_b.isChecked())
+
         if self.rb_a.isChecked():
             self.smooth_widget.setEnabled(True)
+            self._set_kernel_range(KERNEL_SIZE_MAX)
             if self.current_kernel_mode != "guided":
-                self.slider_smooth.setValue(31)
+                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_GFF)
             self.current_kernel_mode = "guided"
         elif self.rb_b.isChecked():
             self.smooth_widget.setEnabled(True)
+            # DCT's kernel smooths its focal-plane map, which is one entry per
+            # block rather than per pixel, so the same number reaches eight
+            # times further than it does for the pixel-domain methods - and how
+            # far it needs to reach grows with the image. See _set_kernel_range.
+            self._set_kernel_range(KERNEL_SIZE_MAX_DCT)
             if self.current_kernel_mode != "dct":
-                self.slider_smooth.setValue(7)
+                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_DCT)
             self.current_kernel_mode = "dct"
         elif self.rb_gfg.isChecked():
+            self._set_kernel_range(KERNEL_SIZE_MAX)
             # GFG-FGF uses the initial mean/blur kernel controlled by the same slider
             self.smooth_widget.setEnabled(True)
             if self.current_kernel_mode != "gfg":
-                # GFG-FGF uses kernel=7 by default
-                self.slider_smooth.setValue(7)
+                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_GFG)
             self.current_kernel_mode = "gfg"
         elif self.rb_dmap_max.isChecked() or self.rb_dmap_avg.isChecked():
             # Both depth-map modes pool the focus measure over the same slider-
             # controlled window; 9 px is the method default.
             self.smooth_widget.setEnabled(True)
+            self._set_kernel_range(KERNEL_SIZE_MAX)
             if self.current_kernel_mode != "dmap":
-                self.slider_smooth.setValue(9)
+                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_DMAP)
             self.current_kernel_mode = "dmap"
         else:
             self.smooth_widget.setEnabled(False)
@@ -1162,6 +1203,11 @@ class OpenFocus(QMainWindow):
         
         c.lbl_kernel.setText(trans.t('label_kernel'))
         c.lbl_halo.setText(trans.t('label_halo'))
+        c.lbl_dct_block.setText(trans.t('label_dct_block'))
+        c.lbl_dct_plateau.setText(trans.t('label_dct_plateau'))
+        c.cb_dct_blend.setText(trans.t('label_dct_blend'))
+        for i, (key, _value) in enumerate(DCT_PLATEAU_PRESETS):
+            c.combo_dct_plateau.setItemText(i, trans.t(f'dct_plateau_{key}'))
         self.handle_halo_slider_change(self.slider_halo.value())
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))

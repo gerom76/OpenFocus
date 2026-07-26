@@ -6,6 +6,7 @@ import cv2
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 
+from constants import DCT_BLOCK_SIZE_DEFAULT, DCT_PLATEAU_DEFAULT
 from core import contrast
 from dialogs import DurationDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
@@ -165,6 +166,31 @@ class ExportManager:
                 return ""
         return ""
 
+    def _dct_suffix(self) -> str:
+        """Return the DCT tuning that changes the result, for the filename.
+
+        The block size and the focus-tolerance preset both change what comes
+        out, so two renders that differ only in those must not land on the same
+        name. Only non-default values are emitted, so existing filenames are
+        unchanged for anyone who leaves the controls alone.
+        """
+        window = self.window
+        if not window.rb_b.isChecked():
+            return ""
+        parts = []
+        try:
+            block = int(window.combo_dct_block.currentData())
+            if block != DCT_BLOCK_SIZE_DEFAULT:
+                parts.append(f"b{block}")
+            preset = window.combo_dct_plateau.currentData()
+            if preset and preset != DCT_PLATEAU_DEFAULT:
+                parts.append(str(preset))
+            if not window.cb_dct_blend.isChecked():
+                parts.append("hard")
+        except Exception:
+            return ""
+        return f"_{'+'.join(parts)}" if parts else ""
+
     def _halo_suffix(self) -> str:
         """Return a '_h<radius>' suffix when depth-map halo suppression is on."""
         window = self.window
@@ -201,6 +227,7 @@ class ExportManager:
             fusion_method = "None"
 
         fusion_method += self._kernel_suffix()
+        fusion_method += self._dct_suffix()
         fusion_method += self._halo_suffix()
 
         # The IFCNN stage runs on top of the method above, so it reads as an addition

@@ -15,7 +15,7 @@ from utils import resource_path, normalize_kernel_size, write_image, bitdepth, R
 from core import render_options
 from constants import (
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
-    DEFAULT_THREAD_COUNT
+    DEFAULT_THREAD_COUNT, DCT_BLOCK_SIZE_DEFAULT
 )
 
 
@@ -145,6 +145,9 @@ class RenderWorker(QThread):
         ifcnn_refine: bool = False,
         need_align_scale: bool = False,
         reference_mode: str = "first",
+        dct_block_size=None,
+        dct_plateau=None,
+        dct_blend=None,
     ):
         super().__init__()
         # Set by cancel() from the GUI thread to request an early, cooperative
@@ -182,6 +185,10 @@ class RenderWorker(QThread):
         self.kernel_slider_value = kernel_slider_value
         # Halo-suppression radius for the depth-map methods; 0 = off
         self.halo_radius_value = max(0, int(halo_radius_value or 0))
+        # DCT tuning; None on any of them keeps the method's own default
+        self.dct_block_size = dct_block_size
+        self.dct_plateau = dct_plateau
+        self.dct_blend = dct_blend
         # Optional IFCNN refinement stage, applied to the fusion result
         self.ifcnn_refine = bool(ifcnn_refine)
         # Tile params passed from UI (may be None -> use fusion defaults)
@@ -436,8 +443,10 @@ class RenderWorker(QThread):
             result = fusion.fuse(
                 input_source=images,
                 img_resize=None,
-                block_size=8,
+                dct_block_size=self.dct_block_size or DCT_BLOCK_SIZE_DEFAULT,
                 kernel_size=kernel_size,
+                plateau=self.dct_plateau,
+                blend=self.dct_blend,
                 thread_count=self.thread_count,
             )
         elif algorithm == "dtcwt":
@@ -759,8 +768,10 @@ class BatchWorker(QThread):
                 result = fusion.fuse(
                     input_source=aligned_images,
                     img_resize=None,
-                    block_size=8,
+                    dct_block_size=fusion_params.get('dct_block_size', DCT_BLOCK_SIZE_DEFAULT),
                     kernel_size=kernel_size,
+                    plateau=fusion_params.get('plateau'),
+                    blend=fusion_params.get('blend'),
                     thread_count=self.thread_count,
                 )
             elif fusion_method == "dtcwt":

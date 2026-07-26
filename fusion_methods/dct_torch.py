@@ -62,6 +62,8 @@ def dct_torch_impl(
     block_size: int = 8,
     kernel_size: int = 7,
     device: str = None,
+    plateau: float = None,
+    blend: bool = None,
 ) -> np.ndarray:
     """
     DCT/variance fusion on a torch device.
@@ -71,6 +73,10 @@ def dct_torch_impl(
         block_size: Block size for the variance measure
         kernel_size: Median filter kernel size for consistency verification (odd)
         device: 'cuda', 'mps', or None to auto-select
+        plateau: How far below the peak a frame still counts as in focus;
+            None uses dct._PLATEAU. Clamped as on the CPU path.
+        blend: Weight neighbouring frames together, or copy blocks verbatim;
+            None uses dct._BLEND.
 
     Returns:
         Fused BGR uint8 image
@@ -86,6 +92,8 @@ def dct_torch_impl(
     if kernel_size % 2 == 0:
         kernel_size += 1
     block_size = max(2, int(block_size))
+    plateau = _PLATEAU if plateau is None else min(max(float(plateau), 0.1), 0.85)
+    blend = _BLEND if blend is None else bool(blend)
 
     if isinstance(source, str):
         images, _ = _collect_images_from_folder(source)
@@ -162,7 +170,7 @@ def dct_torch_impl(
             peak = torch.maximum(peak, chunk_energy(start).amax(dim=0))
 
         # Pass 2: the middle of the frames that clear it - the focal plane.
-        threshold = peak * _PLATEAU
+        threshold = peak * plateau
         in_focus_count = torch.zeros((map_h, map_w), device=dev)
         index_total = torch.zeros((map_h, map_w), device=dev)
         for start in range(0, n, CHUNK_SIZE):
@@ -184,7 +192,7 @@ def dct_torch_impl(
         # on the host through the CPU path's own helper: that keeps the two
         # implementations from drifting and keeps peak device memory to the
         # measurement pass.
-        if _BLEND:
+        if blend:
             return _compose(normalized_images, index_np, block_size, (h, w),
                             out_dtype)
 

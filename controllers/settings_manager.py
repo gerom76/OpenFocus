@@ -201,6 +201,9 @@ class SettingsManager:
             "align_ecc": window.cb_align_ecc.isChecked(),
             "smooth_kernel": window.slider_smooth.value(),
             "halo_radius": window.slider_halo.value(),
+            "dct_block_size": window.combo_dct_block.currentData(),
+            "dct_plateau": window.combo_dct_plateau.currentData(),
+            "dct_blend": window.cb_dct_blend.isChecked(),
             "show_status_console": getattr(window, "status_console", None) is not None
                                    and window.status_console.isVisible(),
             "recent_folders": list(self.recent_folders),
@@ -397,3 +400,15 @@ class SettingsManager:
                 window.slider_halo.setValue(int(data["halo_radius"]))
             except (TypeError, ValueError):
                 pass
+
+        # DCT tuning. Each is matched by value/key, so a settings file written
+        # by a build with different presets falls back to the current default
+        # rather than selecting nothing.
+        index = window.combo_dct_block.findData(data.get("dct_block_size"))
+        if index >= 0:
+            window.combo_dct_block.setCurrentIndex(index)
+        index = window.combo_dct_plateau.findData(data.get("dct_plateau"))
+        if index >= 0:
+            window.combo_dct_plateau.setCurrentIndex(index)
+        if "dct_blend" in data:
+            window.cb_dct_blend.setChecked(bool(data["dct_blend"]))

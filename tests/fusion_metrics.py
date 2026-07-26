@@ -274,6 +274,42 @@ def defocus_seams(fused, block=8, quiet_percentile=40.0):
     return excess, visible
 
 
+def block_speckle(fused, block=8, factor=4.0, quiet_percentile=40.0):
+    """
+    Percentage of flat-area blocks standing far outside their neighbours.
+
+    The seam metrics above average over the lattice, which is the wrong shape
+    for the other artefact a block method produces: a *lone* block taken from
+    the wrong frame - a speck of dust that is sharp in exactly one frame winning
+    its block, say. One square contributes almost nothing to a mean and is
+    immediately obvious to a viewer. Measured only where there is no detail, so
+    genuine fine texture is not counted as speckle.
+
+    This was added after a mean-based seam score ranked an obviously speckled
+    render as the best of a sweep.
+    """
+    grey = _gray32(fused)
+    if fused.dtype == np.uint16:
+        grey = grey / 257.0   # score 16-bit stacks on the same 8-bit scale
+    h = (grey.shape[0] // block) * block
+    w = (grey.shape[1] // block) * block
+    if h < block * 5 or w < block * 5:
+        return 0.0
+
+    small = cv2.resize(grey[:h, :w], (w // block, h // block),
+                       interpolation=cv2.INTER_AREA)
+    detail = cv2.blur(np.abs(small - cv2.blur(small, (5, 5))), (17, 17))
+    quiet = detail <= np.percentile(detail, quiet_percentile)
+    if not quiet.any():
+        return 0.0
+
+    deviation = np.abs(small - cv2.medianBlur(small, 5))
+    spread = cv2.blur(deviation, (9, 9)) + 0.5     # half a level, so flat
+                                                   # areas do not divide by ~0
+    return float((deviation > factor * spread)[quiet].sum()
+                 / quiet.sum() * 100.0)
+
+
 def evaluate(fused, sources, reference=None, block=8):
     """Collect every applicable metric into one dict."""
     seam_excess, seam_visible = block_seams(fused, block)
@@ -287,6 +323,7 @@ def evaluate(fused, sources, reference=None, block=8):
         "seam_visible": seam_visible,
         "defocus_seam_excess": bg_excess,
         "defocus_seam_visible": bg_visible,
+        "block_speckle": block_speckle(fused, block),
     }
     if reference is not None:
         scores["psnr"] = psnr(fused, reference)

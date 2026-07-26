@@ -5,11 +5,24 @@ from typing import Any, List, Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox, QDialog
 
 from utils import RenderMetadata, show_custom_message_box, show_message_box, show_warning_box
+from constants import DCT_PLATEAU_DEFAULT, DCT_PLATEAU_PRESETS
 from core import render_options
 from core.multi_focus_fusion import is_stackmffv4_available
 from core.workers import RenderWorker
 from dialogs import ROIRenderOptionsDialog  # Import the new dialog
 from locales import trans
+
+_PLATEAU_BY_KEY = dict(DCT_PLATEAU_PRESETS)
+
+
+def dct_plateau_value(window) -> float:
+    """The plateau width behind the selected focus-tolerance preset.
+
+    The combo carries the preset key rather than the number, so a retuned preset
+    changes here and not in every saved settings file.
+    """
+    key = window.combo_dct_plateau.currentData() or DCT_PLATEAU_DEFAULT
+    return _PLATEAU_BY_KEY.get(key, _PLATEAU_BY_KEY[DCT_PLATEAU_DEFAULT])
 
 
 class RenderManager:
@@ -305,6 +318,9 @@ class RenderManager:
             window.rb_d.isChecked(),
             kernel_slider_value,
             halo_radius_value=window.slider_halo.value(),
+            dct_block_size=window.combo_dct_block.currentData(),
+            dct_plateau=dct_plateau_value(window),
+            dct_blend=window.cb_dct_blend.isChecked(),
             rb_pyramid_checked=window.rb_pyramid.isChecked(),
             rb_dmap_max_checked=window.rb_dmap_max.isChecked(),
             rb_dmap_avg_checked=window.rb_dmap_avg.isChecked(),
