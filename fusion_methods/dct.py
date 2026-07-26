@@ -37,26 +37,41 @@ _HIGHPASS_SCALE = 1.0
 # reason pyramid.py pools its band energy before choosing (_ENERGY_WINDOW).
 _POOL_WINDOW = 3
 
-# Wider pooling used only to settle blocks the fine measure cannot separate.
-# At this scale the decision is dominated by whichever frame is sharp in the
-# surrounding region, so undecidable blocks inherit their neighbourhood's
-# choice instead of being handed to sensor noise.
-_COARSE_WINDOW = 9
+# Each frame's energies are divided by its own noise level before frames are
+# compared, and that level is read off the frame as this percentile of its block
+# energies - low enough to land in whatever the frame's quietest region is,
+# which in a focus stack is always somewhere out of focus.
+#
+# Without this, sensor noise decides every block that holds no detail, and it
+# does not decide them evenly: photon noise grows with brightness, so a frame
+# that is a bright defocused veil carries 4-12x the high-pass energy of a dark
+# smooth one *in grain alone* (measured on flat patches at 8-bit levels 30 vs
+# 232). The veil then wins every detail-free block by a wide enough margin to
+# look decisive, and its flat tone is copied through - one washed-out frame
+# stamping identically coloured patches across the render. Dividing by the
+# frame's own noise puts every frame at about 1.0 where it resolves nothing, so
+# those blocks tie instead, and the tie is settled below.
+_NOISE_PERCENTILE = 10.0
 
-# A winner must beat the runner-up by this fraction of its own energy to be
-# taken at face value. Below it the two frames are equally sharp here by any
-# honest reading, so the region's choice is taken instead of a coin toss. This
-# takes exact ties off the lowest-index default they used to fall to, but it
-# does not settle item 4 in docs/ALGORITHM_IMPROVEMENTS.md: the coarse scale
-# breaks its own near-ties the same way, and agreement across orderings
-# measured 29.7 dB against the old 30.2 dB - unchanged.
+# Guards the division above when a frame is perfectly flat (a synthetic or
+# fully clipped frame percentiles to zero). Well under the energy of a flat
+# 8-bit patch dithering by half a level, so it never displaces a real estimate.
+_NOISE_FLOOR = 1e-7
+
+# How far above its own noise the winner must be for the block to count as
+# holding real detail. The measure is a signal-to-noise ratio once normalised,
+# so this reads directly: below 2 the best frame is no more than twice its own
+# grain. Measured on the fixtures, the winner's SNR sits at 1.1-2.2 across
+# genuinely featureless regions and never below 93 in the detailed scenarios,
+# so the two populations are far apart and the exact value is not delicate.
+_DETAIL_SNR = 2.0
+
+# A winner must also beat the runner-up by this fraction of its own energy.
+# Below it the two frames are equally sharp here by any honest reading, so the
+# block is left to the neighbourhood rather than a coin toss. This takes exact
+# ties off the lowest-index default they used to fall to, but it does not settle
+# item 4 in docs/ALGORITHM_IMPROVEMENTS.md.
 _DECISION_MARGIN = 0.10
-
-# Energy at or below this is indistinguishable from quantisation noise: it is
-# the energy of a flat 8-bit patch dithering by half a level (0.5/255 squared,
-# rounded down), in the [0, 1] scale the measure works in. Such a block carries
-# no focus information at any bit depth, so it goes to the coarse scale too.
-_NOISE_FLOOR = 1e-6
 
 
 def _odd(value: int, limit: int) -> int:
@@ -117,6 +132,58 @@ def _normalize_image_stack(images: Sequence[np.ndarray]) -> Tuple[List[np.ndarra
         raise ValueError("Image size is too small")
 
     return normalized, (target_h, target_w)
+
+def _normalised_energy(gray: np.ndarray, hp_window: int, pool_window: int,
+                       map_w: int, map_h: int) -> np.ndarray:
+    """One frame's per-block detail energy, in units of its own noise.
+
+    High-pass, block-mean the squared detail, pool over neighbouring blocks,
+    then divide by the frame's own noise level. The result is a signal-to-noise
+    ratio: about 1 wherever the frame resolves nothing, far above it wherever
+    the frame is in focus, and - the point of the division - on the same scale
+    for a dark frame and a bright one.
+    """
+    # A box blur is used rather than a Gaussian because it costs the same per
+    # pixel at any window size and is reproduced exactly by an average pool on
+    # the GPU side (dct_torch.py).
+    detail = gray - cv2.blur(gray, (hp_window, hp_window))
+
+    # cv2.resize with INTER_AREA over an integer ratio is exactly a block mean,
+    # and much faster than a per-block loop. The detail image has zero mean by
+    # construction, so the mean of squares is already the variance - no E[X]^2
+    # term to subtract.
+    energy = cv2.resize(detail * detail, (map_w, map_h),
+                        interpolation=cv2.INTER_AREA)
+    pooled = cv2.boxFilter(energy, -1, (pool_window, pool_window),
+                           normalize=True, borderType=cv2.BORDER_DEFAULT)
+    noise = max(float(np.percentile(pooled, _NOISE_PERCENTILE)), _NOISE_FLOOR)
+    return pooled / noise
+
+
+def _fill_undecided(index_map: np.ndarray, undecided: np.ndarray) -> np.ndarray:
+    """Give each undecided block the choice of the nearest decided one.
+
+    Where no frame resolves anything there is no focus information to decide on,
+    and asking the energies anyway just hands the block to whichever frame has
+    the most grain. Taking the nearest confident neighbour's frame instead keeps
+    such regions continuous with their surroundings, which is what stops a
+    detail-free area from being stamped out in one frame's flat tone.
+
+    The seed-to-label mapping is read back out of the transform's own output -
+    a seed is its own nearest seed - so nothing here depends on the order
+    OpenCV happens to number labels in.
+    """
+    if not undecided.any() or undecided.all():
+        return index_map
+
+    _, labels = cv2.distanceTransformWithLabels(
+        undecided.astype(np.uint8), cv2.DIST_L2, 3,
+        labelType=cv2.DIST_LABEL_PIXEL)
+    lookup = np.zeros(int(labels.max()) + 1, dtype=index_map.dtype)
+    decided = ~undecided
+    lookup[labels[decided]] = index_map[decided]
+    return lookup[labels]
+
 
 def _median_filter_index_map(index_map: np.ndarray, kernel_size: int) -> np.ndarray:
     """Median-filter a uint16 index map.
@@ -184,7 +251,6 @@ def dct_focus_stack_fusion(
     # --- 2. Quickly compute the block energy map (core optimization) ---
     hp_window = _odd(round(block_size * _HIGHPASS_SCALE), min(h_trim, w_trim))
     pool_window = _odd(_POOL_WINDOW, min(map_h, map_w))
-    coarse_window = _odd(_COARSE_WINDOW, min(map_h, map_w))
 
     # Running top two energies per block, and the frame that holds the top one.
     # Only the top two are kept, so memory stays independent of stack depth.
@@ -194,8 +260,6 @@ def dct_focus_stack_fusion(
     # indices at 256 frames; medianBlur (apertures 3/5) and INTER_NEAREST
     # resize both accept it, so the map stays uint16 end to end.
     best_index_map = np.zeros((map_h, map_w), dtype=np.uint16)
-    coarse_best = np.full((map_h, map_w), -1.0, dtype=np.float32)
-    coarse_index_map = np.zeros((map_h, map_w), dtype=np.uint16)
 
     for idx, bgr_img in enumerate(normalized_images):
         # Crop the edges to match the block tiling
@@ -205,29 +269,11 @@ def dct_focus_stack_fusion(
         # makes the energy measure usable at 16 bits: squaring raw 16-bit
         # levels reaches 4.3e9, where float32's 24-bit mantissa has a ULP of
         # ~256, so everything below that would quantise away. Working in [0, 1]
-        # gives both depths the same headroom, and the thresholds above are
-        # expressed on that scale. Fusion decisions are unaffected by the
-        # rescaling itself: scaling every frame by the same constant leaves the
-        # per-block ranking unchanged.
+        # gives both depths the same headroom. Fusion decisions are unaffected
+        # by the rescaling itself: scaling every frame by the same constant
+        # leaves the per-block ranking unchanged.
         gray = bitdepth.to_float01(cv2.cvtColor(img_trim, cv2.COLOR_BGR2GRAY))
-
-        # High-pass: subtract everything coarser than a block. A box blur is
-        # used rather than a Gaussian because it costs the same per pixel at any
-        # window size and is reproduced exactly by an average pool on the GPU
-        # side (dct_torch.py).
-        detail = gray - cv2.blur(gray, (hp_window, hp_window))
-
-        # Block energy E[detail^2]. cv2.resize with INTER_AREA over an integer
-        # ratio is exactly a block mean, and much faster than a per-block loop.
-        # The detail image has zero mean by construction, so the mean of squares
-        # is already the variance - no E[X]^2 term to subtract.
-        energy = cv2.resize(detail * detail, (map_w, map_h),
-                            interpolation=cv2.INTER_AREA)
-
-        pooled = cv2.boxFilter(energy, -1, (pool_window, pool_window),
-                               normalize=True, borderType=cv2.BORDER_DEFAULT)
-        coarse = cv2.boxFilter(energy, -1, (coarse_window, coarse_window),
-                               normalize=True, borderType=cv2.BORDER_DEFAULT)
+        pooled = _normalised_energy(gray, hp_window, pool_window, map_w, map_h)
 
         # Running top-two update: the previous best is demoted to runner-up when
         # it is beaten, otherwise the new frame competes for the runner-up slot.
@@ -237,17 +283,14 @@ def dct_focus_stack_fusion(
         np.copyto(best_index_map, np.uint16(idx), where=wins)
         np.copyto(second_energy, pooled, where=~wins & (pooled > second_energy))
 
-        coarse_wins = coarse > coarse_best
-        np.copyto(coarse_best, coarse, where=coarse_wins)
-        np.copyto(coarse_index_map, np.uint16(idx), where=coarse_wins)
-
-    # Blocks where no frame is meaningfully sharper than the next take the
-    # surrounding region's choice instead of a coin toss between near-identical
-    # energies. An exact tie lands here too (margin of zero), so the winner no
-    # longer depends on which frame happened to be passed first.
-    undecided = (best_energy <= _NOISE_FLOOR) | (
+    # Two ways a block can fail to decide itself: no frame holds real detail
+    # there, or two frames hold the same amount. Either way the energies have
+    # nothing left to say, so the block takes its neighbourhood's choice rather
+    # than a coin toss. An exact tie lands here too (margin of zero), so the
+    # winner no longer depends on which frame happened to be passed first.
+    undecided = (best_energy < _DETAIL_SNR) | (
         (best_energy - second_energy) <= _DECISION_MARGIN * best_energy)
-    np.copyto(best_index_map, coarse_index_map, where=undecided)
+    best_index_map = _fill_undecided(best_index_map, undecided)
 
     # --- 3. Consistency verification (median filtering) ---
     # Two passes of median filtering to remove noise

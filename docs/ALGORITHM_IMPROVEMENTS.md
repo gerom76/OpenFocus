@@ -41,7 +41,7 @@ remains.
 | 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders | Low | Trivial | 0% |
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
 | 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift - *fixed in 1.11.3* | Low | Medium | 100% |
-| 17 | DCT | Quality | Focus measured as total block contrast, so a defocused wash beats real detail and blanks whole regions - *fixed in 1.15.1* | High | Low | 100% |
+| 17 | DCT | Quality | Focus measured as total block contrast, and grain deciding the rest, so blurred frames blank whole regions - *fixed in 1.15.1 and 1.15.2* | High | Low | 100% |
 
 **Overall: 60% done** - 10 of 17 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched), 6 untouched.
@@ -698,12 +698,16 @@ together.
 
 ## 17. DCT scores contrast rather than sharpness, so defocused washes win
 
-**Category: quality. Impact: high. Effort: low. Fixed in 1.15.1.**
+**Category: quality. Impact: high. Effort: low. Fixed in 1.15.1 and 1.15.2.**
 
 Reported from a macro render: next to the pyramid result, DCT was visibly
 sharper but carried large flat patches of a single tone where the pyramid had
 background detail. The patches sat on the block grid and had stepped edges, so
 they were selection failures, not a filtering artefact.
+
+Two independent causes turned out to produce the same artefact, and the second
+only became visible once the first was fixed. Both are below, in the order they
+were found.
 
 The measure was the cause. `dct.py` scored a block by its plain pixel variance,
 which by Parseval is the energy of *all* its AC coefficients:
@@ -735,9 +739,9 @@ it:
 | Pyramid | 29.85 dB | 20.6% |
 | **DCT, after** | **29.35 dB** | **2.0%** |
 
-**Fix.** Band-limit the measure from below and pool it before choosing, which is
-what `pyramid.py` already does (`_band_energy`) and why it does not show this
-failure. Three changes, all in the measure:
+**Fix, part one (1.15.1).** Band-limit the measure from below and pool it before
+choosing, which is what `pyramid.py` already does (`_band_energy`) and why it
+does not show this failure:
 
 - **High-pass first.** Subtract a box blur the width of one block, then take the
   block mean of the squared detail. Structure coarser than a block - exactly the
@@ -746,45 +750,107 @@ failure. Three changes, all in the measure:
   by construction, so the `E[X]^2` term is no longer computed at all.
 - **Pool over 3x3 blocks** before the choose-max, so the decision is regional
   rather than per-block and grain cannot flip it.
-- **Settle undecidable blocks regionally.** The top two energies are tracked per
-  block; where the winner does not beat the runner-up by 10%, or where the
-  energy is at quantisation-noise level, the block takes the winner at a 9-block
-  pooling scale instead - whichever frame is sharp in the surrounding region -
-  rather than a coin toss between near-identical energies.
+
+**What part one missed.** Re-rendered on the reporter's stack, the large patches
+were gone but small flat ones remained - and they all shared a single cream
+tone, which is the tell: they were coming from one frame, not from many wrong
+decisions. That frame was a near-uniform bright veil, one of the frames focused
+far in front of the subject, holding no detail anywhere.
+
+It was winning on grain. Photon noise variance grows with signal, so in a block
+where nothing is in focus a bright frame carries more high-pass energy than a
+dark one purely as noise. Measured on flat 8-bit patches with a realistic sensor
+model, energy ratios of bright to dark:
+
+| dark level | veil level | high-pass energy ratio |
+|---|---|---|
+| 30 | 232 | 7.8x |
+| 55 | 210 | 3.8x |
+| 20 | 245 | 12.2x |
+
+Nothing in part one catches that. The veil wins by 4-12x, which reads as a
+decisive result rather than a tie, and its energy is ten to a hundred times the
+absolute noise floor the code was testing against. The regional fallback made it
+worse: it decided undecidable blocks by the same energies at a wider scale, so
+it re-ran the same noise contest and merely smoothed the outline of the answer.
+
+**Fix, part two (1.15.2).** Make the comparison fair, then stop asking the
+energies once they have nothing to say:
+
+- **Score each frame against its own noise.** Divide a frame's block energies by
+  the 10th percentile of those energies - the level of its own quietest region,
+  which in a focus stack is always somewhere out of focus. The measure becomes a
+  signal-to-noise ratio, about 1.0 wherever a frame resolves nothing, whatever
+  its brightness. The veil's advantage disappears, and blocks that hold no
+  detail tie instead of being won.
+- **Treat "no detail" as its own outcome.** A block is undecided when the winner
+  is under 2x its own noise, or when it fails to beat the runner-up by 10%. On
+  the fixtures the winner's SNR runs 1.1-2.2 across genuinely featureless
+  regions and never drops below 93 in the detailed scenarios, so the threshold
+  sits in a wide empty gap rather than on a slope.
+- **Propagate rather than re-decide.** Undecided blocks take the choice of the
+  nearest decided block (`cv2.distanceTransformWithLabels`, seed labels read
+  back out of the transform's own output so nothing depends on OpenCV's
+  numbering). Where no frame resolves anything there is no focus information to
+  recover, and continuity with the surroundings is the only defensible answer.
+  The 9-block fallback that part one added is gone.
+
+Both mechanisms are needed; neither works alone. Ablated on the veil fixture,
+percentage of the smooth dark body covered by veil patches:
+
+| | veil patches | PSNR |
+|---|---|---|
+| Neither | 97.7% | 11.67 dB |
+| Normalisation only | 80.4% | 14.57 dB |
+| Propagation only | 48.7% | 6.76 dB |
+| **Both** | **0.0%** | **31.30 dB** |
 
 The whole change is O(1) in stack depth: only the running top two energies and
-two index maps are held, never a per-frame stack.
+one index map are held, never a per-frame stack.
 
 **Effect on the rest of the suite.** Better on five of the six scenarios and
-level on the sixth: depth_edge 31.93 -> 35.10 dB, low_contrast 51.61 -> 59.75,
-saturated_colour 24.81 -> 30.41, long_stack 27.62 -> 28.10, fine_texture 31.64
-unchanged. sensor_noise costs 0.5 dB (38.62 -> 38.13) - a high-pass measure sees
-grain more clearly than a variance measure does, so the method stays the weakest
-of the classical three on a noisy stack, as
+level on the sixth: low_contrast 51.61 -> 60.33 dB, depth_edge 31.93 -> 35.40,
+saturated_colour 24.81 -> 30.03, long_stack 27.62 -> 27.83, fine_texture 31.64
+unchanged. sensor_noise costs 0.45 dB (38.62 -> 38.17) - a high-pass measure
+sees grain more clearly than a variance measure does, so the method stays the
+weakest of the classical three on a noisy stack, as
 `test_dct_struggles_most_with_noise` still asserts.
 
-**Cost.** 226 -> 309 ms for 8 frames of 1600x2400 on CPU (+37%): one extra
-full-resolution box blur, against one fewer block resize. DCT remains by far the
-fastest method - the same stack takes 852 ms through the guided filter, 965 ms
-through the pyramid and 1031 ms through GFG-FGF.
+**Cost.** 217 -> 306 ms for 8 frames of 1600x2400 on CPU (+41%): one extra
+full-resolution box blur and a percentile per frame, against one fewer block
+resize. DCT remains by far the fastest method - the same stack takes 852 ms
+through the guided filter, 965 ms through the pyramid and 1031 ms through
+GFG-FGF.
 
-**Two things this does not fix**, both measured rather than assumed:
+**Side effects on two other items**, both measured rather than assumed:
 
-- **Order dependence (item 4) survives.** Exact ties no longer fall to the
-  lowest index, but the coarse scale breaks its own near-ties the same way:
-  agreement across four shuffles of a 12-frame stack is 29.7 dB, against 30.2 dB
-  before.
-- **`kernel_size` now does even less.** The decision map arrives at the median
-  filter already regionally coherent, so the consistency step has little left to
-  remove: across kernels 3 to 31 the result varies by 0.05 dB on `long_stack`
-  (was 0.61 dB) and not at all on `fine_texture` or `sensor_noise`. The slider is
-  approaching item 9's territory - a dial that no longer changes anything - and
-  is worth re-examining.
+- **Item 4 improves but is not settled.** Agreement across four shuffles of a
+  12-frame stack rises from 30.2 to 33.6 dB: exact ties no longer fall to the
+  lowest index, and propagated blocks are decided by position rather than by
+  which frame arrived first. What remains order-dependent is the near-tie that
+  clears the 10% margin, so the item stays open.
+- **`kernel_size` no longer does anything on these fixtures.** The decision map
+  now reaches the median filter already regionally coherent, so the consistency
+  step has nothing left to remove: across kernels 3 to 31 the result is
+  identical on `long_stack` (the old code varied by 0.61 dB there),
+  `fine_texture` and `sensor_noise`. The slider has arrived in item 9's
+  territory - a dial that no longer changes anything - and should either be
+  hidden for this method or given something to do.
 
-Both paths landed together, as item 11 requires: `dct_torch.py` reproduces the
-box blur with a reflect-padded `avg_pool2d` and agrees with the CPU path bit for
-bit on the fixture (`test_gpu_matches_cpu[dct]` passes, and CPU/GPU agreement on
-260 random frames improves from 7.7 to 12.5 dB).
+Both paths landed together, as item 11 requires. `dct_torch.py` reproduces the
+box blur with a reflect-padded `avg_pool2d`, and the decision stage - normalise,
+gate, propagate, median-filter - runs on the host through the CPU path's own
+helpers, on a map of a few thousand entries, so the two cannot drift apart
+there. `test_gpu_matches_cpu[dct]` passes; CPU and GPU are bit-identical on the
+quality fixture and on the wash fixture, agree at 41.5 dB on the veil fixture
+(`torch.quantile` and `np.percentile` estimate the noise level slightly
+differently, which flips a handful of near-tied blocks), and agreement on 260
+random frames - an input made entirely of near-ties - improves from 7.8 to
+16.0 dB.
+
+**Guarded by** `tests/test_dct_defocus_wash.py`, which carries both fixtures and
+fails on the pre-1.15.1 code (35.7% and 99.9% of the respective regions taken
+from the wrong frame) and on the 1.15.1 code for the veil fixture (37.2%).
 
 ---
 

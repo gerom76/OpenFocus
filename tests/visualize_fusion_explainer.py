@@ -154,12 +154,15 @@ def figures_dct(stack, block=8):
     mh, mw = h // block, w // block
 
     # Mirrors fusion_methods/dct.py: fine detail only - anything spread over
-    # more than one block is subtracted off first - then pooled over 3x3 blocks.
+    # more than one block is subtracted off first - pooled over 3x3 blocks, then
+    # divided by the frame's own noise level so a bright frame's grain cannot
+    # outbid a dark frame's detail.
     energies = []
     for g in grays:
         detail = g - cv2.blur(g, (block | 1, block | 1))
         e = cv2.resize(detail * detail, (mw, mh), interpolation=cv2.INTER_AREA)
-        energies.append(cv2.boxFilter(e, -1, (3, 3)))
+        e = cv2.boxFilter(e, -1, (3, 3))
+        energies.append(e / max(float(np.percentile(e, 10)), 1e-7))
 
     small = np.argmax(np.stack(energies), axis=0).astype(np.uint8)
     cleaned = cv2.medianBlur(small, 7)
@@ -170,8 +173,9 @@ def figures_dct(stack, block=8):
          "Sharpness is judged one square at a time, not one pixel at a time."),
         (b64(heat(cv2.resize(energies[0], (w, h), interpolation=cv2.INTER_NEAREST))),
          "Fine detail per block",
-         "How much fine detail sits inside each square. Broad shading is ignored, so a "
-         "blurred bright area does not read as sharp just for being bright."),
+         "How much fine detail sits inside each square, measured against this frame's own "
+         "grain. Broad shading is ignored, so a blurred bright area does not read as sharp "
+         "just for being bright or for being noisy."),
         (b64(decision_image(up(small), len(stack))), "Winning frame per block",
          "Blocky by nature - this is why edges between near and far can look stepped."),
         (b64(decision_image(up(cleaned), len(stack))), "After clean-up",

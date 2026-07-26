@@ -23,12 +23,14 @@ import torch
 import torch.nn.functional as F
 
 from fusion_methods.dct import (
-    _COARSE_WINDOW,
     _DECISION_MARGIN,
+    _DETAIL_SNR,
     _HIGHPASS_SCALE,
     _NOISE_FLOOR,
+    _NOISE_PERCENTILE,
     _POOL_WINDOW,
     _collect_images_from_folder,
+    _fill_undecided,
     _median_filter_index_map,
     _normalize_image_stack,
     _odd,
@@ -134,13 +136,10 @@ def dct_torch_impl(
         # Pass 1: per-block detail energy, running top two per block
         hp_window = _odd(round(block_size * _HIGHPASS_SCALE), min(h_trim, w_trim))
         pool_window = _odd(_POOL_WINDOW, min(map_h, map_w))
-        coarse_window = _odd(_COARSE_WINDOW, min(map_h, map_w))
 
         best_energy = torch.full((map_h, map_w), -1.0, device=dev)
         second_energy = torch.full((map_h, map_w), -1.0, device=dev)
         best_index = torch.zeros((map_h, map_w), dtype=torch.long, device=dev)
-        coarse_best = torch.full((map_h, map_w), -1.0, device=dev)
-        coarse_index = torch.zeros((map_h, map_w), dtype=torch.long, device=dev)
 
         for start in range(0, n, CHUNK_SIZE):
             chunk = normalized_images[start:start + CHUNK_SIZE]
@@ -153,7 +152,13 @@ def dct_torch_impl(
             detail = gray - _box_blur(gray, hp_window)
             energy = F.avg_pool2d(detail * detail, block_size)
             pooled = _box_blur(energy, pool_window)[:, 0]      # (B, map_h, map_w)
-            coarse = _box_blur(energy, coarse_window)[:, 0]
+
+            # Each frame in units of its own noise, so grain in a bright veil
+            # cannot outbid detail in a dark frame (see the note in dct.py).
+            for j in range(pooled.shape[0]):
+                noise = torch.quantile(pooled[j].flatten(),
+                                       _NOISE_PERCENTILE / 100.0)
+                pooled[j] = pooled[j] / torch.clamp(noise, min=_NOISE_FLOOR)
 
             # Sequential update keeps the reduction order identical to the CPU path
             for j in range(pooled.shape[0]):
@@ -164,19 +169,18 @@ def dct_torch_impl(
                 best_energy = torch.where(wins, pooled[j], best_energy)
                 best_index = torch.where(wins, idx, best_index)
 
-                coarse_wins = coarse[j] > coarse_best
-                coarse_best = torch.where(coarse_wins, coarse[j], coarse_best)
-                coarse_index = torch.where(coarse_wins, idx, coarse_index)
-
-        # Blocks no frame wins by a clear margin take the surrounding region's
-        # choice rather than a coin toss between near-identical energies.
-        undecided = (best_energy <= _NOISE_FLOOR) | (
+        # Blocks that decide nothing - no real detail, or two frames equally
+        # sharp - take their neighbourhood's choice. Done on the host with the
+        # CPU path's own helpers, on a map of a few thousand entries, so the two
+        # implementations cannot drift apart here.
+        undecided = ((best_energy < _DETAIL_SNR) | (
             (best_energy - second_energy) <= _DECISION_MARGIN * best_energy)
-        best_index = torch.where(undecided, coarse_index, best_index)
+        ).cpu().numpy()
 
         # Consistency verification: double median filter on the tiny index map
         # (CPU/cv2). uint16 end to end so indices never wrap at 256 frames.
         index_np = best_index.cpu().numpy().astype(np.uint16)
+        index_np = _fill_undecided(index_np, undecided)
         filtered = _median_filter_index_map(index_np, kernel_size)
         filtered = _median_filter_index_map(filtered, kernel_size)
         final_index = torch.from_numpy(filtered.astype(np.int64)).to(dev)

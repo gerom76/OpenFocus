@@ -303,7 +303,7 @@ METHODS = [
              "pooled, so there is little speckle left for it to remove."),
         ),
         supports_resize=False,
-        min_psnr=27.0,      # measured 36.3 (32.3 before item 17 reworked the
+        min_psnr=27.0,      # measured 35.6 (32.3 before item 17 reworked the
                             # focus measure); block decisions are still the
                             # coarsest of the classical methods
     ),
@@ -361,7 +361,7 @@ METHODS = [
         sweeps=(("block_size", [4, 8, 16, 32, 64], "Same dial as the CPU DCT."),
                 ("kernel_size", [3, 5, 7, 11, 15], "Same dial as the CPU DCT.")),
         gpu=True, supports_resize=False,
-        min_psnr=27.0,      # measured 36.3, matching the CPU path exactly
+        min_psnr=27.0,      # measured 35.6, matching the CPU path exactly
     ),
     FusionMethod(
         key="dtcwt_gpu", label="DTCWT (GPU)", fuse=_dtcwt_torch,
