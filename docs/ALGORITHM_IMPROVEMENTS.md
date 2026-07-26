@@ -42,9 +42,12 @@ remains.
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
 | 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift - *fixed in 1.11.3* | Low | Medium | 100% |
 | 17 | DCT | Quality | Focus measured as total block contrast, and grain deciding the rest, so blurred frames blank whole regions - *fixed in 1.15.1 and 1.15.2* | High | Low | 100% |
+| 18 | DCT | Quality | Per-block winner never clears its margin in a deep stack, so 91% of blocks fell to a fallback that tore the background - *fixed in 1.17.1* | High | Medium | 100% |
 
-**Overall: 60% done** - 10 of 17 items fully fixed, item 8 partially (the GPU
-default shipped; the CPU cost itself is untouched), 6 untouched.
+**Overall: 61% done** - 11 of 18 items fully fixed, item 8 partially (the GPU
+default shipped; the CPU cost itself is untouched), 6 untouched. Since 1.17.1 a
+quality ratchet (`tests/test_fusion_regression.py`, described after item 18)
+guards every method against silent regressions of the kind items 17 and 18 were.
 
 ---
 
@@ -854,6 +857,140 @@ from the wrong frame) and on the 1.15.1 code for the veil fixture (37.2%).
 
 ---
 
+## 18. DCT's per-block winner stops existing in a deep stack
+
+**Category: quality. Impact: high. Effort: medium. Fixed in 1.17.1.**
+
+Reported against a 274-frame macro stack (2048x1364, no tiling - the longest
+side has to *exceed* `tile_threshold`, and 2048 does not). Item 17's patches
+were gone; in their place the defocused background was torn into chunks with
+stepped edges, while the pyramid rendered the same background smoothly.
+
+Instrumenting the decision map explained it in one line: **91% of blocks were
+undecided**. Item 17 settled a block by requiring the winner to beat the
+runner-up by 10%, and in a stack this deep no frame ever does - neighbouring
+frames are one focus step apart and differ by far less than that. So the margin
+test abstained almost everywhere, and what actually drew the picture was the
+fallback: give the block its nearest decided neighbour's frame.
+
+That fallback is fine when it fires on a few blocks and catastrophic when it
+fires on nine in ten. The nearest decided block can be anywhere in the stack -
+measured neighbour-to-neighbour jumps ran to **271 frames**, with 6.6% of block
+borders jumping more than 10 - and two frames that far apart look nothing alike
+in a defocused area. Every such jump is a visible step, on the block lattice.
+
+The lesson generalises past this bug: **a rule that abstains has to be judged on
+what happens when it abstains**, and the synthetic scenarios could not have
+shown this because the deepest was 12 frames.
+
+**Fix.** Stop asking which single frame wins and ask where the focal plane is.
+
+- **Plateau, not argmax.** Every frame within `_PLATEAU` of the peak energy is
+  in focus on that block - its depth of field - and the middle of that set is
+  the focal plane, to sub-frame accuracy. In focus the set is a short run and
+  the middle is the true plane. Out of focus every frame is equally poor, the
+  set is the whole stack, and the middle is mid-stack: the same answer
+  everywhere, so a defocused region comes out uniform instead of patchwork.
+  There is no abstention and so no fallback to misbehave.
+- **Composite the weights, not the labels.** Each frame is weighted by how close
+  the map is to it, and the *weights* are upsampled from the block lattice to
+  pixels. Upsampling an index can only step from one frame to the next at a
+  block edge; upsampling a weight ramps between them across the block. Where a
+  region shares one frame the weight is exactly 1 and the pixels come through
+  untouched.
+- **Keep the median.** Without it a speck of dust that is sharp in exactly one
+  frame drags its block onto that frame, which shows up as a bright square in an
+  otherwise defocused area - seen, and fixed, during this work.
+
+Measured on the reported stack, against the pyramid the report was compared to.
+"Background step" is the mean step on the block lattice in defocused areas
+beyond what the local content justifies, in 8-bit levels
+(`fusion_metrics.defocus_seams`):
+
+| | background step | lattice visible | detail |
+|---|---|---|---|
+| Pyramid | 0.456 | 1.65% | 18.03 |
+| **DCT, before** | **0.996** | **4.80%** | **15.21** |
+| **DCT, after** | **0.286** | **1.45%** | **16.04** |
+
+The tearing is gone, and on its own complaint the result now beats the pyramid.
+
+**The trade, stated plainly.** A region that is never in focus in *any* frame -
+a background beyond the stack's reach - is now rendered from the middle of the
+stack rather than from whichever frame happens to render it least blurred. It is
+smoother and slightly flatter. On the `deep_stack` scenario, whose reference
+declares the least-blurred rendering to be correct, that costs **2 dB** against
+the old code (34.5 -> 32.6 at plateau 0.7). Widening the plateau buys most of it
+back - 0.80 scores 34.8 - but past 0.85 the veil artefact of item 17 returns
+(22.5% of the fixture at 0.90), so `_PLATEAU` sits at 0.80 with margin on the
+side that produces an artefact rather than a softness.
+
+**Cost.** Two measurement passes instead of one, plus a compositing pass:
+274 frames of 2048x1364 take 14.4 s against 5.3 s, with the pyramid at 18.5 s on
+the same stack. DCT is no longer the fastest method by a wide margin, only a
+modest one.
+
+**Output is no longer verbatim.** DCT used to copy each winning block's pixels
+through untouched. It now blends between neighbouring frames, which is what
+removes the last of the staircase. The frames blended are one focus step apart,
+so no detail is lost to it, but the "every output pixel is exactly some input
+pixel" property is gone and `test_dct_defocus_wash.py` now asserts the weaker
+contract that holds: every pixel stays inside the envelope its sources span.
+
+**Guarded by** `tests/test_fusion_regression.py` - see below. Both halves of
+this fix trip it when removed.
+
+---
+
+## The quality ratchet
+
+Every suite before this one asks "is this method broken", with thresholds far
+below where the methods score. None of them asks "is this method worse than it
+was", which is the question items 17 and 18 were both found by hand.
+
+`tests/test_fusion_regression.py` records every method's scores on every
+scenario in `tests/fusion_quality_baseline.json` and fails when one drops by
+more than its tolerance. It also fails when a method scores *far above* its
+baseline, because a stale baseline protects a quality level the code left behind
+and the next regression slips under it. Re-record deliberately:
+
+```bash
+python -m tests.test_fusion_regression --update   # prints a diff first
+```
+
+Two things had to be added for it to be worth anything:
+
+- **A metric that sees the artefact.** PSNR against a synthetic reference barely
+  notices a block lattice. `fusion_metrics.block_seams` and `defocus_seams`
+  compare the step across each block boundary with the typical step just inside
+  the neighbouring blocks - content raises both, a seam raises only the first -
+  and report severity and extent separately, because a hundred one-level steps
+  and one hundred-level tear are the same number by any mean gradient ratio and
+  only one of them is a defect.
+- **A scenario in the failing regime.** The six report scenarios run 3 to 12
+  frames; item 18 needs tens. `fusion_scenarios.deep_stack` is 64 frames with a
+  background that is never sharp and drifts sideways as it defocuses.
+
+Verified to bite: removing the noise normalisation (item 17) or the weight
+compositing (item 18) both fail the ratchet, the latter on the seam metrics
+across four scenarios.
+
+**What it still does not catch.** `deep_stack` does not reproduce the reported
+tearing - the old code scores *better* on it than the new one. 64 synthetic
+frames of a smoothly drifting background do not put the old fallback in the
+state that 274 real ones did. The check that caught item 18, and the only one
+that confirms it fixed, is the reporter's own stack measured by hand. A fixture
+that reproduces it would be worth having and does not exist yet.
+
+`deep_stack` is deliberately kept out of `SCENARIOS`, so the characteristics
+report and its tests still describe the six they were validated against. It is
+worth a look on its own terms: on a stack this deep the guided filter fails to
+beat a single frame (23.2 dB against 30.2), and StackMFF-V4 loses the colour
+lead it holds everywhere else (18.5 levels of deviation, the worst of the field).
+Neither is investigated here.
+
+---
+
 ## Cross-cutting
 
 **GPU is consistently worth it - and has since become the default.** Speed-ups
@@ -886,6 +1023,8 @@ python -m pytest tests/ -q                                     # the whole suite
 python tests/benchmark_fusion_quality.py --synthetic --all     # cross-method table
 python tests/benchmark_fusion_quality.py --synthetic --method guided_filter --param kernel_size
 python tests/visualize_fusion_characteristics.py --open        # the six scenarios
+python -m tests.test_fusion_regression                         # every method, every metric
+python -m tests.test_fusion_regression --update                # re-record the ratchet
 ```
 
 Scenario definitions are in `tests/fusion_scenarios.py`, metrics in

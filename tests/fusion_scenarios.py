@@ -122,6 +122,63 @@ def long_stack(size=320, slices=12, seed=5):
     return _stack_from_masks(img, masks), img, masks
 
 
+def deep_stack(size=320, slices=64, seed=5):
+    """
+    A macro stack's worth of frames over a subject that does not fill the frame.
+
+    The other scenarios are 3 to 12 frames, which is not the regime the methods
+    are used in and not the regime they fail in. With 64 frames no two
+    neighbours differ by much, so any rule of the form "take the frame that
+    clearly wins this block" stops discriminating and whatever breaks the tie
+    draws the picture. The background here is never in focus in any frame and
+    its appearance drifts steadily across the stack, so a tie broken badly shows
+    up as steps between frames that look nothing alike - which is what a
+    block-selection method tears the defocused background into.
+    """
+    rng = np.random.default_rng(seed)
+    subject = _base_scene(size, size, seed)
+    for _ in range(90):                     # fine detail worth resolving
+        x, y = int(rng.integers(4, size - 8)), int(rng.integers(4, size - 8))
+        cv2.rectangle(subject, (x, y), (x + 3, y + 2), (245, 245, 245), -1)
+
+    # Subject occupies the middle band; everything else is background.
+    near = np.zeros((size, size), np.float32)
+    near[size // 3:2 * size // 3] = 1.0
+    near = cv2.GaussianBlur(near, (0, 0), 3.0)
+
+    # Background: broad soft blobs, bright enough that switching between two
+    # renderings of it is plainly visible.
+    background = np.full((size, size, 3), 40, np.float32)
+    for _ in range(7):
+        c = (int(rng.integers(0, size)), int(rng.integers(0, size)))
+        cv2.circle(background, c, int(rng.integers(30, 70)),
+                   tuple(float(v) for v in rng.integers(120, 235, 3)), -1)
+
+    focus = np.linspace(0.0, 1.0, slices)
+    subject_plane = 0.35
+    stack = []
+    for k, f in enumerate(focus):
+        s_sigma = abs(f - subject_plane) * slices * 0.55
+        b_sigma = 4.0 + f * 26.0            # never sharp, always drifting
+        s = subject if s_sigma < 0.3 else cv2.GaussianBlur(subject, (0, 0), s_sigma)
+        # Focus breathing: the background also drifts sideways through the
+        # stack, so two frames far apart do not merely differ in blur - they
+        # disagree about where things are. Splicing them shows.
+        shift = np.float32([[1, 0, k * 0.35], [0, 1, k * 0.12]])
+        b = cv2.warpAffine(cv2.GaussianBlur(background, (0, 0), b_sigma), shift,
+                           (size, size), borderMode=cv2.BORDER_REFLECT)
+        a = near[:, :, None]
+        img = s.astype(np.float32) * a + b * (1.0 - a)
+        img += rng.normal(0.0, 1.5, img.shape)
+        stack.append(np.clip(img, 0, 255).astype(np.uint8))
+
+    a = near[:, :, None]
+    reference = np.clip(subject.astype(np.float32) * a
+                        + cv2.GaussianBlur(background, (0, 0), 4.0) * (1.0 - a),
+                        0, 255).astype(np.uint8)
+    return stack, reference, [near, 1.0 - near]
+
+
 def low_contrast(size=320, slices=3, seed=5):
     """
     A flat, softly lit subject. With little local variation, focus measures have
@@ -193,7 +250,24 @@ SCENARIOS = [
      "hues or smears colour across the border."),
 ]
 
-BY_KEY = {key: (builder, title, blurb) for key, builder, title, blurb in SCENARIOS}
+# Regimes the quality ratchet tracks but the characteristics report does not.
+# The report's claims are written about the six above and were validated against
+# them; a stack this deep changes where several methods place, so putting it in
+# that list would silently rewrite statements nobody has re-checked. It is worth
+# a look on its own terms - the guided filter fails to beat a single frame here,
+# and StackMFF-V4 loses its colour lead - but that is a separate investigation.
+EXTRA_SCENARIOS = [
+    ("deep_stack", deep_stack,
+     "A real stack's depth, with a background that is never sharp",
+     "Sixty-four frames, and a defocused background that drifts sideways as "
+     "well as in and out of focus. No two neighbouring frames differ by much, "
+     "so a method that needs a clear per-region winner has to fall back on "
+     "something - and if that fallback can pick frames far apart in the stack, "
+     "the background tears into visibly mismatched patches."),
+]
+
+BY_KEY = {key: (builder, title, blurb)
+          for key, builder, title, blurb in SCENARIOS + EXTRA_SCENARIOS}
 
 
 def build(key, **kwargs):

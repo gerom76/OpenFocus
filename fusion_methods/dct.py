@@ -19,9 +19,9 @@ ArraySource = Sequence[np.ndarray]
 # here", not "how sharp is it": a heavily defocused highlight lays a smooth
 # brightness ramp across the frame, and a ramp crossing one block carries more
 # variance than the fine, low-amplitude texture that is genuinely in focus
-# there. The blurred frame then wins whole regions and its pixels are copied
-# verbatim, which is what produced the flat homogeneous patches this measure
-# replaces. Dropping the lowest AC band - everything coarser than a block -
+# there. The blurred frame then wins whole regions, which is what produced the
+# flat homogeneous patches this measure replaces. Dropping the lowest AC band -
+# everything coarser than a block -
 # leaves only detail a block can actually resolve, so a defocused wash scores
 # near zero however bright it is.
 #
@@ -58,20 +58,51 @@ _NOISE_PERCENTILE = 10.0
 # 8-bit patch dithering by half a level, so it never displaces a real estimate.
 _NOISE_FLOOR = 1e-7
 
-# How far above its own noise the winner must be for the block to count as
-# holding real detail. The measure is a signal-to-noise ratio once normalised,
-# so this reads directly: below 2 the best frame is no more than twice its own
-# grain. Measured on the fixtures, the winner's SNR sits at 1.1-2.2 across
-# genuinely featureless regions and never below 93 in the detailed scenarios,
-# so the two populations are far apart and the exact value is not delicate.
-_DETAIL_SNR = 2.0
+# A block is not decided by a single winner but by every frame that comes within
+# this fraction of the peak energy - the block's own depth of field - and it
+# takes the middle of that set as its focal plane.
+#
+# Picking one winner does not survive a deep stack. Neighbouring frames of a
+# 274-frame stack differ by well under any usable margin, so a "is the winner
+# clearly ahead" test fails on 91% of blocks, and whatever settles those blocks
+# is what actually draws the picture. Settling them by their neighbours' choice
+# is worse than it sounds: the nearest decided block can be 200 frames away in
+# the stack, and frames that far apart look nothing alike in a defocused area,
+# so the render tore into chunks along the block lattice.
+#
+# The middle of the in-focus set has no such failure mode. In focus the set is a
+# short run around the true focal plane and its middle is that plane, to
+# sub-frame accuracy. Out of focus every frame is equally poor, the set is the
+# whole stack, and the middle is mid-stack - the same answer everywhere, so
+# defocused regions come out uniform instead of patchwork. The field it produces
+# is continuous, so neighbouring blocks land on neighbouring frames, which look
+# alike.
+# The width matters as much as the idea, and it is a two-sided choice.
+#
+# Too narrow and the plateau is measured against a noise outlier wherever
+# nothing is in focus: frames sit within 7% of each other in such a block
+# (measured on the veil fixture), so a narrow band admits only the frames that
+# happen to be noisiest there, which is how a bright veil frame took every
+# featureless block. At 0.90 that fixture fails outright - 22.5% of a smooth
+# dark body comes back veiled.
+#
+# Too wide and regions that are never quite in focus - a background beyond the
+# stack's reach - average over frames that do resolve them a little, and come
+# out flatter than the best frame would render them. On the deep_stack scenario
+# that costs 1.6 dB between 0.80 and 0.70.
+#
+# 0.80 sits between the two, with margin on the side that produces an artefact
+# rather than a softness: the veil fixture is clean from 0.85 down, and this is
+# comfortably clear of that edge.
+_PLATEAU = 0.8
 
-# A winner must also beat the runner-up by this fraction of its own energy.
-# Below it the two frames are equally sharp here by any honest reading, so the
-# block is left to the neighbourhood rather than a coin toss. This takes exact
-# ties off the lowest-index default they used to fall to, but it does not settle
-# item 4 in docs/ALGORITHM_IMPROVEMENTS.md.
-_DECISION_MARGIN = 0.10
+# The focal-plane field is turned into an image by weighting each frame by how
+# close it is to the field, and upsampling those weights across the block
+# lattice rather than the frame indices. Interpolating between two neighbouring
+# frames costs no meaningful sharpness - they are one focus step apart - and it
+# is what removes the last of the staircase, since the weights vary continuously
+# across a block boundary where a frame index cannot.
+_BLEND = True
 
 
 def _odd(value: int, limit: int) -> int:
@@ -160,29 +191,59 @@ def _normalised_energy(gray: np.ndarray, hp_window: int, pool_window: int,
     return pooled / noise
 
 
-def _fill_undecided(index_map: np.ndarray, undecided: np.ndarray) -> np.ndarray:
-    """Give each undecided block the choice of the nearest decided one.
+def _compose(images: Sequence[np.ndarray], index_map: np.ndarray,
+             block_size: int, shape: Tuple[int, int],
+             out_dtype: np.dtype) -> np.ndarray:
+    """Build the picture from the focal-plane map.
 
-    Where no frame resolves anything there is no focus information to decide on,
-    and asking the energies anyway just hands the block to whichever frame has
-    the most grain. Taking the nearest confident neighbour's frame instead keeps
-    such regions continuous with their surroundings, which is what stops a
-    detail-free area from being stamped out in one frame's flat tone.
+    Each frame is weighted by how close the map is to it, and the weights - not
+    the frame indices - are what gets upsampled from the block lattice to
+    pixels. Upsampling an index can only step from one frame to the next at a
+    block edge, which is a seam; upsampling the weight ramps between them across
+    the block, which is not. Where a whole region shares one frame the weight is
+    exactly 1 and the pixels come through untouched.
 
-    The seed-to-label mapping is read back out of the transform's own output -
-    a seed is its own nearest seed - so nothing here depends on the order
-    OpenCV happens to number labels in.
+    Only frames the map actually names are read, and each is composited over the
+    bounding box of its own weight rather than the whole frame, so a deep stack
+    costs little more than a shallow one.
     """
-    if not undecided.any() or undecided.all():
-        return index_map
+    h, w = shape
+    h_trim, w_trim = index_map.shape[0] * block_size, index_map.shape[1] * block_size
+    field = index_map.astype(np.float32)
 
-    _, labels = cv2.distanceTransformWithLabels(
-        undecided.astype(np.uint8), cv2.DIST_L2, 3,
-        labelType=cv2.DIST_LABEL_PIXEL)
-    lookup = np.zeros(int(labels.max()) + 1, dtype=index_map.dtype)
-    decided = ~undecided
-    lookup[labels[decided]] = index_map[decided]
-    return lookup[labels]
+    accum = np.zeros((h, w, 3), np.float32)
+    weights = np.zeros((h, w), np.float32)
+
+    for idx in np.unique(index_map):
+        block_w = np.clip(1.0 - np.abs(field - float(idx)), 0.0, 1.0)
+        rows, cols = np.nonzero(block_w)
+        if rows.size == 0:
+            continue
+        # Bounding box in blocks, one block of margin for the interpolation ramp
+        r0, r1 = max(int(rows.min()) - 1, 0), min(int(rows.max()) + 2, index_map.shape[0])
+        c0, c1 = max(int(cols.min()) - 1, 0), min(int(cols.max()) + 2, index_map.shape[1])
+        y0, y1 = r0 * block_size, r1 * block_size
+        x0, x1 = c0 * block_size, c1 * block_size
+
+        patch = cv2.resize(block_w[r0:r1, c0:c1], (x1 - x0, y1 - y0),
+                           interpolation=cv2.INTER_LINEAR)
+        # The trimmed edge strip has no blocks of its own; extend the last row
+        # and column of weights over it so the output keeps its full geometry.
+        if y1 == h_trim and h_trim != h:
+            patch = cv2.copyMakeBorder(patch, 0, h - h_trim, 0, 0, cv2.BORDER_REPLICATE)
+            y1 = h
+        if x1 == w_trim and w_trim != w:
+            patch = cv2.copyMakeBorder(patch, 0, 0, 0, w - w_trim, cv2.BORDER_REPLICATE)
+            x1 = w
+
+        source = images[int(idx)][y0:y1, x0:x1]
+        accum[y0:y1, x0:x1] += source.astype(np.float32) * patch[:, :, None]
+        weights[y0:y1, x0:x1] += patch
+
+    np.maximum(weights, 1e-6, out=weights)
+    accum /= weights[:, :, None]
+    ceiling = 65535 if out_dtype == bitdepth.UINT16 else 255
+    return np.clip(np.rint(accum, out=accum), 0, ceiling).astype(out_dtype)
 
 
 def _median_filter_index_map(index_map: np.ndarray, kernel_size: int) -> np.ndarray:
@@ -209,16 +270,22 @@ def dct_focus_stack_fusion(
     kernel_size: int = 7,
 ) -> np.ndarray:
     """
-    DCT-domain multi-focus fusion: each block is taken from the frame carrying
-    the most detail energy there, and its pixels are copied through verbatim.
+    DCT-domain multi-focus fusion.
+
+    Each block's detail energy is measured in every frame; the frames that come
+    within _PLATEAU of the best are the ones in focus there, and the middle of
+    that set is the block's focal plane. The resulting map is median-filtered
+    and then turned back into an image by weighting each frame by its distance
+    from it - see the tuning notes at the top of this module for why a single
+    winner per block does not survive a deep stack.
 
     Optimization notes:
     By Parseval's theorem the energy of a block's DCT coefficients equals the
     energy of its pixels, so the measure needs no transform at all: a box
-    high-pass (which drops the coefficients below the block's own frequency -
-    see the tuning notes at the top of this module) followed by a block mean of
-    the squared result, both done with cv2 filters and cv2.resize(INTER_AREA),
-    replaces the originally extremely slow per-block DCT loop.
+    high-pass (which drops the coefficients below the block's own frequency)
+    followed by a block mean of the squared result, both done with cv2 filters
+    and cv2.resize(INTER_AREA), replaces the originally extremely slow per-block
+    DCT loop.
     """
     
     # --- 1. Parameter validation and preparation ---
@@ -252,19 +319,7 @@ def dct_focus_stack_fusion(
     hp_window = _odd(round(block_size * _HIGHPASS_SCALE), min(h_trim, w_trim))
     pool_window = _odd(_POOL_WINDOW, min(map_h, map_w))
 
-    # Running top two energies per block, and the frame that holds the top one.
-    # Only the top two are kept, so memory stays independent of stack depth.
-    best_energy = np.full((map_h, map_w), -1.0, dtype=np.float32)
-    second_energy = np.full((map_h, map_w), -1.0, dtype=np.float32)
-    # uint16 covers any realistic stack depth and, unlike uint8, does not wrap
-    # indices at 256 frames; medianBlur (apertures 3/5) and INTER_NEAREST
-    # resize both accept it, so the map stays uint16 end to end.
-    best_index_map = np.zeros((map_h, map_w), dtype=np.uint16)
-
-    for idx, bgr_img in enumerate(normalized_images):
-        # Crop the edges to match the block tiling
-        img_trim = bgr_img[:h_trim, :w_trim]
-
+    def block_energy(idx: int) -> np.ndarray:
         # Grayscale, normalised to [0, 1] before squaring. Normalising is what
         # makes the energy measure usable at 16 bits: squaring raw 16-bit
         # levels reaches 4.3e9, where float32's 24-bit mantissa has a ULP of
@@ -272,65 +327,59 @@ def dct_focus_stack_fusion(
         # gives both depths the same headroom. Fusion decisions are unaffected
         # by the rescaling itself: scaling every frame by the same constant
         # leaves the per-block ranking unchanged.
+        img_trim = normalized_images[idx][:h_trim, :w_trim]
         gray = bitdepth.to_float01(cv2.cvtColor(img_trim, cv2.COLOR_BGR2GRAY))
-        pooled = _normalised_energy(gray, hp_window, pool_window, map_w, map_h)
+        return _normalised_energy(gray, hp_window, pool_window, map_w, map_h)
 
-        # Running top-two update: the previous best is demoted to runner-up when
-        # it is beaten, otherwise the new frame competes for the runner-up slot.
-        wins = pooled > best_energy
-        np.copyto(second_energy, best_energy, where=wins)
-        np.copyto(best_energy, pooled, where=wins)
-        np.copyto(best_index_map, np.uint16(idx), where=wins)
-        np.copyto(second_energy, pooled, where=~wins & (pooled > second_energy))
+    # Pass 1: the best any frame manages on each block, which sets the bar for
+    # what counts as in focus there. Running maximum, so memory does not grow
+    # with the stack.
+    peak_energy = np.full((map_h, map_w), -1.0, dtype=np.float32)
+    for idx in range(len(normalized_images)):
+        np.maximum(peak_energy, block_energy(idx), out=peak_energy)
 
-    # Two ways a block can fail to decide itself: no frame holds real detail
-    # there, or two frames hold the same amount. Either way the energies have
-    # nothing left to say, so the block takes its neighbourhood's choice rather
-    # than a coin toss. An exact tie lands here too (margin of zero), so the
-    # winner no longer depends on which frame happened to be passed first.
-    undecided = (best_energy < _DETAIL_SNR) | (
-        (best_energy - second_energy) <= _DECISION_MARGIN * best_energy)
-    best_index_map = _fill_undecided(best_index_map, undecided)
+    # Pass 2: the middle of the frames that clear that bar - the block's focal
+    # plane. Summing indices and counts is all that is needed, so this stays
+    # O(1) in stack depth too.
+    threshold = peak_energy * _PLATEAU
+    in_focus_count = np.zeros((map_h, map_w), dtype=np.float32)
+    index_total = np.zeros((map_h, map_w), dtype=np.float32)
+    for idx in range(len(normalized_images)):
+        hit = (block_energy(idx) >= threshold).astype(np.float32)
+        in_focus_count += hit
+        index_total += hit * idx
+    field = index_total / np.maximum(in_focus_count, 1.0)
 
     # --- 3. Consistency verification (median filtering) ---
-    # Two passes of median filtering to remove noise
-    filtered_map = _median_filter_index_map(best_index_map, kernel_size)
-    final_index_map = _median_filter_index_map(filtered_map, kernel_size)
+    # uint16 covers any realistic stack depth and, unlike uint8, does not wrap
+    # indices at 256 frames; medianBlur (apertures 3/5) accepts it, so the map
+    # stays uint16 end to end. The median runs on the rounded field: without it
+    # a speck of dust that is sharp in exactly one frame drags its block onto
+    # that frame, and the block shows up as a square in a defocused area.
+    index_map = np.clip(np.rint(field), 0, len(normalized_images) - 1).astype(np.uint16)
+    index_map = _median_filter_index_map(index_map, kernel_size)
+    index_map = _median_filter_index_map(index_map, kernel_size)
 
-    # --- 4. Fast reconstruction ---
-    # Scale the small index map back up to the original size in one go (Nearest Neighbor)
-    full_size_indices = cv2.resize(
-        final_index_map,
-        (w_trim, h_trim),
-        interpolation=cv2.INTER_NEAREST
-    )
-
-    # The block grid only covers a multiple of block_size, so an image whose
-    # dimensions do not divide evenly leaves a strip on the right and bottom.
-    # Extend the last row/column of decisions over it rather than returning a
-    # smaller image than we were given.
-    if (h_trim, w_trim) != (h, w):
-        full_size_indices = cv2.copyMakeBorder(
-            full_size_indices, 0, h - h_trim, 0, w - w_trim,
-            cv2.BORDER_REPLICATE
-        )
-
-    # Output pixels are copied verbatim from the source frames, so the result
-    # only has to be allocated at the stack's own depth to stay lossless.
-    fused_image = np.zeros((h, w, 3), dtype=bitdepth.stack_dtype(normalized_images))
-
-    # Iterate only over the source-image indices that are used, to fill in
-    unique_indices = np.unique(final_index_map)
-    
-    for idx in unique_indices:
-        # Generate the mask: True wherever this image is needed
-        mask = (full_size_indices == idx)
-        
-        # Even though this is a Python loop, it operates on whole-image masks, so it is fast
-        source_layer = normalized_images[idx]
-
-        # Assign
-        fused_image[mask] = source_layer[mask]
+    # --- 4. Reconstruction ---
+    out_dtype = bitdepth.stack_dtype(normalized_images)
+    if _BLEND:
+        fused_image = _compose(normalized_images, index_map, block_size,
+                               (h, w), out_dtype)
+    else:
+        full_size_indices = cv2.resize(index_map, (w_trim, h_trim),
+                                       interpolation=cv2.INTER_NEAREST)
+        # The block grid only covers a multiple of block_size, so an image whose
+        # dimensions do not divide evenly leaves a strip on the right and bottom.
+        # Extend the last row/column of decisions over it rather than returning a
+        # smaller image than we were given.
+        if (h_trim, w_trim) != (h, w):
+            full_size_indices = cv2.copyMakeBorder(
+                full_size_indices, 0, h - h_trim, 0, w - w_trim,
+                cv2.BORDER_REPLICATE)
+        fused_image = np.zeros((h, w, 3), dtype=out_dtype)
+        for idx in np.unique(index_map):
+            mask = (full_size_indices == idx)
+            fused_image[mask] = normalized_images[idx][mask]
 
     if output_path:
         cv2.imwrite(output_path, fused_image)

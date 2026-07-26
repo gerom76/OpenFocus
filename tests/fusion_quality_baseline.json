@@ -1,0 +1,425 @@
+{
+  "metrics": {
+    "defocus_seam_excess": {
+      "higher_is_better": false,
+      "tolerance": 0.25
+    },
+    "defocus_seam_visible": {
+      "higher_is_better": false,
+      "tolerance": 2.0
+    },
+    "psnr": {
+      "higher_is_better": true,
+      "tolerance": 0.75
+    },
+    "qabf": {
+      "higher_is_better": true,
+      "tolerance": 0.03
+    },
+    "seam_excess": {
+      "higher_is_better": false,
+      "tolerance": 0.25
+    },
+    "spatial_frequency": {
+      "higher_is_better": true,
+      "tolerance": 1.0
+    },
+    "ssim": {
+      "higher_is_better": true,
+      "tolerance": 0.02
+    }
+  },
+  "note": "Recorded fusion quality. Regenerate with `python -m tests.test_fusion_regression --update` after a deliberate change, and review the printed diff before committing.",
+  "scores": {
+    "dct": {
+      "deep_stack": {
+        "defocus_seam_excess": 0.3316003978252411,
+        "defocus_seam_visible": 1.8552497451580021,
+        "psnr": 32.60765242812433,
+        "qabf": 0.34612975731918544,
+        "seam_excess": 0.6830974221229553,
+        "spatial_frequency": 8.45514965057373,
+        "ssim": 0.9748889207839966
+      },
+      "depth_edge": {
+        "defocus_seam_excess": 0.2099955677986145,
+        "defocus_seam_visible": 24.18015774180158,
+        "psnr": 34.38821843389667,
+        "qabf": 0.8447861674843052,
+        "seam_excess": 6.04050350189209,
+        "spatial_frequency": 37.82188415527344,
+        "ssim": 0.9881829619407654
+      },
+      "fine_texture": {
+        "defocus_seam_excess": 25.15459632873535,
+        "defocus_seam_visible": 30.210526315789473,
+        "psnr": 33.59236425564263,
+        "qabf": 0.794671897625114,
+        "seam_excess": 21.16685676574707,
+        "spatial_frequency": 89.94129180908203,
+        "ssim": 0.9933979511260986
+      },
+      "long_stack": {
+        "defocus_seam_excess": 10.790283203125,
+        "defocus_seam_visible": 15.962157809983896,
+        "psnr": 28.323605511456165,
+        "qabf": 0.36874734806015425,
+        "seam_excess": 10.4863920211792,
+        "spatial_frequency": 51.11217498779297,
+        "ssim": 0.9521454572677612
+      },
+      "low_contrast": {
+        "defocus_seam_excess": 0.31798112392425537,
+        "defocus_seam_visible": 2.017525983289179,
+        "psnr": 61.00225773115533,
+        "qabf": 0.6091270803300604,
+        "seam_excess": 0.39801403880119324,
+        "spatial_frequency": 2.4378139972686768,
+        "ssim": 0.9995548725128174
+      },
+      "saturated_colour": {
+        "defocus_seam_excess": 0.0,
+        "defocus_seam_visible": 0.0,
+        "psnr": 29.92441724103765,
+        "qabf": 0.5544027943193359,
+        "seam_excess": 0.028245123103260994,
+        "spatial_frequency": 22.458818435668945,
+        "ssim": 0.9862440228462219
+      },
+      "sensor_noise": {
+        "defocus_seam_excess": 4.975484848022461,
+        "defocus_seam_visible": 2.280594583587864,
+        "psnr": 38.18033185760888,
+        "qabf": 0.7859804456526873,
+        "seam_excess": 5.151863098144531,
+        "spatial_frequency": 29.37436866760254,
+        "ssim": 0.9875512719154358
+      }
+    },
+    "depthmap_max": {
+      "deep_stack": {
+        "defocus_seam_excess": 0.4887186884880066,
+        "defocus_seam_visible": 2.3116615067079462,
+        "psnr": 22.604743053207894,
+        "qabf": 0.2677963673571767,
+        "seam_excess": 2.280430316925049,
+        "spatial_frequency": 17.352588653564453,
+        "ssim": 0.7492365837097168
+      },
+      "depth_edge": {
+        "defocus_seam_excess": 0.2114768922328949,
+        "defocus_seam_visible": 24.35791217895609,
+        "psnr": 35.90852871474538,
+        "qabf": 0.8381432076785724,
+        "seam_excess": 6.114068984985352,
+        "spatial_frequency": 37.95894241333008,
+        "ssim": 0.9912568926811218
+      },
+      "fine_texture": {
+        "defocus_seam_excess": 25.525833129882812,
+        "defocus_seam_visible": 31.326367982999827,
+        "psnr": 34.94024411804034,
+        "qabf": 0.8011219362414931,
+        "seam_excess": 21.35748863220215,
+        "spatial_frequency": 90.73030090332031,
+        "ssim": 0.9957414865493774
+      },
+      "long_stack": {
+        "defocus_seam_excess": 13.718920707702637,
+        "defocus_seam_visible": 20.417257443791776,
+        "psnr": 44.44653034944967,
+        "qabf": 0.4009336363073253,
+        "seam_excess": 11.66700267791748,
+        "spatial_frequency": 55.87416458129883,
+        "ssim": 0.9988970756530762
+      },
+      "low_contrast": {
+        "defocus_seam_excess": 0.3236960172653198,
+        "defocus_seam_visible": 1.3781921361978111,
+        "psnr": 69.74165711298633,
+        "qabf": 0.6156096230739957,
+        "seam_excess": 0.4050354063510895,
+        "spatial_frequency": 2.4709599018096924,
+        "ssim": 0.9999411106109619
+      },
+      "saturated_colour": {
+        "defocus_seam_excess": 0.0,
+        "defocus_seam_visible": 0.0,
+        "psnr": 32.23349850387469,
+        "qabf": 0.5632645077408843,
+        "seam_excess": 0.0020230282098054886,
+        "spatial_frequency": 23.302976608276367,
+        "ssim": 0.9935535192489624
+      },
+      "sensor_noise": {
+        "defocus_seam_excess": 5.011510848999023,
+        "defocus_seam_visible": 1.658374792703151,
+        "psnr": 49.81881110984759,
+        "qabf": 0.8016253202681863,
+        "seam_excess": 5.234553337097168,
+        "spatial_frequency": 29.903440475463867,
+        "ssim": 0.9992825984954834
+      }
+    },
+    "dtcwt": {
+      "deep_stack": {
+        "defocus_seam_excess": 0.30882540345191956,
+        "defocus_seam_visible": 2.5153374233128836,
+        "psnr": 26.008331588534965,
+        "qabf": 0.35877208023631135,
+        "seam_excess": 0.6307426691055298,
+        "spatial_frequency": 8.438091278076172,
+        "ssim": 0.9572793841362
+      },
+      "depth_edge": {
+        "defocus_seam_excess": 0.20959743857383728,
+        "defocus_seam_visible": 24.1875,
+        "psnr": 37.421127216994925,
+        "qabf": 0.8246164403995961,
+        "seam_excess": 6.105490207672119,
+        "spatial_frequency": 38.01359176635742,
+        "ssim": 0.9916062951087952
+      },
+      "fine_texture": {
+        "defocus_seam_excess": 25.6236572265625,
+        "defocus_seam_visible": 30.937279774489078,
+        "psnr": 37.658584953320606,
+        "qabf": 0.7793635952319249,
+        "seam_excess": 21.28933334350586,
+        "spatial_frequency": 90.54899597167969,
+        "ssim": 0.9981989860534668
+      },
+      "long_stack": {
+        "defocus_seam_excess": 13.389949798583984,
+        "defocus_seam_visible": 20.19754081838339,
+        "psnr": 32.646174035790374,
+        "qabf": 0.3521612354035421,
+        "seam_excess": 11.058958053588867,
+        "spatial_frequency": 54.30425262451172,
+        "ssim": 0.9825003147125244
+      },
+      "low_contrast": {
+        "defocus_seam_excess": 0.3192017078399658,
+        "defocus_seam_visible": 1.3942210547585372,
+        "psnr": 64.422050476935,
+        "qabf": 0.6103074012169176,
+        "seam_excess": 0.40360593795776367,
+        "spatial_frequency": 2.4629464149475098,
+        "ssim": 0.9997798204421997
+      },
+      "saturated_colour": {
+        "defocus_seam_excess": 0.01705680415034294,
+        "defocus_seam_visible": 1.8667714678718805,
+        "psnr": 33.49094105591104,
+        "qabf": 0.5206920239396067,
+        "seam_excess": 0.040203772485256195,
+        "spatial_frequency": 23.104747772216797,
+        "ssim": 0.9924474954605103
+      },
+      "sensor_noise": {
+        "defocus_seam_excess": 5.008505344390869,
+        "defocus_seam_visible": 1.7971493493079942,
+        "psnr": 44.20264946099376,
+        "qabf": 0.7939050061111547,
+        "seam_excess": 5.229494571685791,
+        "spatial_frequency": 29.771413803100586,
+        "ssim": 0.9976567029953003
+      }
+    },
+    "gfgfgf": {
+      "deep_stack": {
+        "defocus_seam_excess": 0.2701113820075989,
+        "defocus_seam_visible": 3.661280425444876,
+        "psnr": 31.643733807954,
+        "qabf": 0.3360075935713778,
+        "seam_excess": 0.6492664217948914,
+        "spatial_frequency": 8.06187915802002,
+        "ssim": 0.9773085117340088
+      },
+      "depth_edge": {
+        "defocus_seam_excess": 0.21346509456634521,
+        "defocus_seam_visible": 24.575569358178054,
+        "psnr": 35.94592637537991,
+        "qabf": 0.8443048893529989,
+        "seam_excess": 6.066431522369385,
+        "spatial_frequency": 37.830108642578125,
+        "ssim": 0.99178147315979
+      },
+      "fine_texture": {
+        "defocus_seam_excess": 23.88516616821289,
+        "defocus_seam_visible": 28.874621009452472,
+        "psnr": 32.09671340318002,
+        "qabf": 0.7830278833349156,
+        "seam_excess": 21.08509635925293,
+        "spatial_frequency": 88.73173522949219,
+        "ssim": 0.9916302561759949
+      },
+      "long_stack": {
+        "defocus_seam_excess": 9.784388542175293,
+        "defocus_seam_visible": 14.917675064471336,
+        "psnr": 28.594388463320335,
+        "qabf": 0.34534478837129223,
+        "seam_excess": 9.839448928833008,
+        "spatial_frequency": 48.25284957885742,
+        "ssim": 0.9543371796607971
+      },
+      "low_contrast": {
+        "defocus_seam_excess": 0.3140440285205841,
+        "defocus_seam_visible": 1.8779342723004695,
+        "psnr": 61.29360421199003,
+        "qabf": 0.6072039941978,
+        "seam_excess": 0.39847224950790405,
+        "spatial_frequency": 2.426649332046509,
+        "ssim": 0.9995691180229187
+      },
+      "saturated_colour": {
+        "defocus_seam_excess": 0.0,
+        "defocus_seam_visible": 0.0,
+        "psnr": 31.881867669570276,
+        "qabf": 0.5512403026218917,
+        "seam_excess": 0.004772636108100414,
+        "spatial_frequency": 22.56283187866211,
+        "ssim": 0.9929800629615784
+      },
+      "sensor_noise": {
+        "defocus_seam_excess": 4.841735363006592,
+        "defocus_seam_visible": 2.057864710676447,
+        "psnr": 40.76609417749842,
+        "qabf": 0.7923595893975464,
+        "seam_excess": 5.108457088470459,
+        "spatial_frequency": 29.230192184448242,
+        "ssim": 0.9934003353118896
+      }
+    },
+    "guided_filter": {
+      "deep_stack": {
+        "defocus_seam_excess": 0.26567572355270386,
+        "defocus_seam_visible": 3.6112801785352,
+        "psnr": 23.229679963425095,
+        "qabf": 0.4239609537894887,
+        "seam_excess": 0.5308387279510498,
+        "spatial_frequency": 8.143926620483398,
+        "ssim": 0.9390579462051392
+      },
+      "depth_edge": {
+        "defocus_seam_excess": 0.20954319834709167,
+        "defocus_seam_visible": 24.15800415800416,
+        "psnr": 36.17972391890511,
+        "qabf": 0.8410895810666387,
+        "seam_excess": 6.096275329589844,
+        "spatial_frequency": 37.94325637817383,
+        "ssim": 0.9916365146636963
+      },
+      "fine_texture": {
+        "defocus_seam_excess": 23.84967803955078,
+        "defocus_seam_visible": 28.36298932384342,
+        "psnr": 33.936015070666656,
+        "qabf": 0.7747499856738793,
+        "seam_excess": 21.065223693847656,
+        "spatial_frequency": 88.55475616455078,
+        "ssim": 0.9949328899383545
+      },
+      "long_stack": {
+        "defocus_seam_excess": 12.175698280334473,
+        "defocus_seam_visible": 19.564779367318156,
+        "psnr": 30.15621660562626,
+        "qabf": 0.344569626816249,
+        "seam_excess": 9.6084566116333,
+        "spatial_frequency": 47.4567756652832,
+        "ssim": 0.9707202315330505
+      },
+      "low_contrast": {
+        "defocus_seam_excess": 0.31160449981689453,
+        "defocus_seam_visible": 1.5908627370997348,
+        "psnr": 63.604834172197215,
+        "qabf": 0.6061401191177939,
+        "seam_excess": 0.39543238282203674,
+        "spatial_frequency": 2.429826259613037,
+        "ssim": 0.9997071623802185
+      },
+      "saturated_colour": {
+        "defocus_seam_excess": 0.0,
+        "defocus_seam_visible": 0.0,
+        "psnr": 32.704710557907575,
+        "qabf": 0.539320805389222,
+        "seam_excess": 0.0233902707695961,
+        "spatial_frequency": 22.83024024963379,
+        "ssim": 0.9933760166168213
+      },
+      "sensor_noise": {
+        "defocus_seam_excess": 4.742298126220703,
+        "defocus_seam_visible": 1.809310835535678,
+        "psnr": 41.6395031781753,
+        "qabf": 0.7956086463205739,
+        "seam_excess": 5.080493927001953,
+        "spatial_frequency": 29.144824981689453,
+        "ssim": 0.9947521090507507
+      }
+    },
+    "pyramid": {
+      "deep_stack": {
+        "defocus_seam_excess": 0.4662976562976837,
+        "defocus_seam_visible": 1.5151515151515151,
+        "psnr": 32.85150620173919,
+        "qabf": 0.33073753512946774,
+        "seam_excess": 0.7697353363037109,
+        "spatial_frequency": 8.844857215881348,
+        "ssim": 0.9735562801361084
+      },
+      "depth_edge": {
+        "defocus_seam_excess": 0.21184396743774414,
+        "defocus_seam_visible": 24.452252997106243,
+        "psnr": 35.771061637587316,
+        "qabf": 0.8305664652084132,
+        "seam_excess": 6.110485553741455,
+        "spatial_frequency": 38.044857025146484,
+        "ssim": 0.9905062913894653
+      },
+      "fine_texture": {
+        "defocus_seam_excess": 25.66472816467285,
+        "defocus_seam_visible": 31.555712519865796,
+        "psnr": 45.45277884284101,
+        "qabf": 0.7967190019098643,
+        "seam_excess": 21.4248104095459,
+        "spatial_frequency": 90.81585693359375,
+        "ssim": 0.999727189540863
+      },
+      "long_stack": {
+        "defocus_seam_excess": 13.65239429473877,
+        "defocus_seam_visible": 20.303643724696357,
+        "psnr": 45.68328232567672,
+        "qabf": 0.3930392473170133,
+        "seam_excess": 11.661032676696777,
+        "spatial_frequency": 55.887657165527344,
+        "ssim": 0.9990326166152954
+      },
+      "low_contrast": {
+        "defocus_seam_excess": 0.32450106739997864,
+        "defocus_seam_visible": 1.3615118878276773,
+        "psnr": 68.05096009081191,
+        "qabf": 0.6169262744090988,
+        "seam_excess": 0.40525153279304504,
+        "spatial_frequency": 2.4747114181518555,
+        "ssim": 0.9998888969421387
+      },
+      "saturated_colour": {
+        "defocus_seam_excess": 0.0019016654696315527,
+        "defocus_seam_visible": 0.19580967299784607,
+        "psnr": 33.11990194157388,
+        "qabf": 0.5313266534390694,
+        "seam_excess": 0.01793132722377777,
+        "spatial_frequency": 23.21848487854004,
+        "ssim": 0.9934077262878418
+      },
+      "sensor_noise": {
+        "defocus_seam_excess": 5.022444248199463,
+        "defocus_seam_visible": 1.665972511453561,
+        "psnr": 51.15177610955938,
+        "qabf": 0.8010744862491821,
+        "seam_excess": 5.232959747314453,
+        "spatial_frequency": 29.905519485473633,
+        "ssim": 0.999522864818573
+      }
+    }
+  }
+}

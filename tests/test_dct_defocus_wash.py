@@ -1,11 +1,11 @@
 """
 Flat-patch tests for the DCT fusion method (dct.py, dct_torch.py).
 
-DCT copies its winning blocks through verbatim, so any block awarded to a frame
-that is blurred there puts a piece of that blur into the render. Where such
-blocks join up, the result is a flat homogeneous patch on the block grid - the
-artefact item 17 in docs/ALGORITHM_IMPROVEMENTS.md is about. Two different
-mistakes produce it, and there is a fixture for each:
+Any block whose focal plane lands on a frame that is blurred there puts a piece
+of that blur into the render. Where such blocks join up, the result is a flat
+homogeneous patch on the block grid - the artefact item 17 in
+docs/ALGORITHM_IMPROVEMENTS.md is about. Two different mistakes produce it, and
+there is a fixture for each:
 
 * `_wash_stack` - a bright object standing clear of its backdrop, its defocus
   spread as a broad smooth wash over faint fine markings. A measure that scores
@@ -144,8 +144,9 @@ def _veil_patch_share(fused, reference, interior):
 def _wrong_frame_share(fused, stack, backdrop):
     """Percentage of the backdrop taken from the frame that is blurred there.
 
-    DCT copies pixels verbatim, so each output pixel can be attributed to the
-    source it is closest to.
+    Each output pixel is attributed to whichever source it lands closest to.
+    Compositing blends neighbouring frames, but a pixel drawn from the wrong end
+    of the stack is still far closer to that end than to the right one.
     """
     d_near = np.abs(fused.astype(np.int16) - stack[0].astype(np.int16)).sum(2)
     d_far = np.abs(fused.astype(np.int16) - stack[1].astype(np.int16)).sum(2)
@@ -249,14 +250,16 @@ def test_veil_frames_still_win_where_they_are_the_sharp_ones(veiled):
     fused = dct_focus_stack_fusion(veil_frames)
     assert fused.shape == stack[0].shape
 
-    # DCT copies its winning blocks verbatim, so every pixel must be exactly
-    # some input frame's pixel - the result is a mosaic of these frames, not a
-    # blend of them and not a fallback to something else.
-    closest = np.min(np.stack(
-        [np.abs(fused.astype(np.int16) - s.astype(np.int16)).sum(2)
-         for s in veil_frames]), axis=0)
-    assert closest.max() == 0, (
-        "output does not come from the frames it was given")
+    # DCT composites neighbouring frames rather than copying one verbatim, so
+    # the contract is that every pixel stays inside the envelope its sources
+    # span - the result is built from these frames, not from anything else.
+    lo = np.min(np.stack(veil_frames), axis=0).astype(np.int16)
+    hi = np.max(np.stack(veil_frames), axis=0).astype(np.int16)
+    out = fused.astype(np.int16)
+    outside = np.maximum(lo - out, 0) + np.maximum(out - hi, 0)
+    assert outside.max() <= 1, (
+        "output does not come from the frames it was given "
+        f"(off the source envelope by {outside.max()} levels)")
 
 
 # --------------------------------------------------------------------------

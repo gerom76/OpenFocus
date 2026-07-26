@@ -23,14 +23,14 @@ import torch
 import torch.nn.functional as F
 
 from fusion_methods.dct import (
-    _DECISION_MARGIN,
-    _DETAIL_SNR,
+    _BLEND,
     _HIGHPASS_SCALE,
     _NOISE_FLOOR,
     _NOISE_PERCENTILE,
+    _PLATEAU,
     _POOL_WINDOW,
     _collect_images_from_folder,
-    _fill_undecided,
+    _compose,
     _median_filter_index_map,
     _normalize_image_stack,
     _odd,
@@ -110,9 +110,8 @@ def dct_torch_impl(
     n = len(normalized_images)
     dev = torch.device(device)
 
-    # Output pixels are copied verbatim from the source frames, so the result
-    # keeps the depth the stack arrived in. torch has no uint16, so 16-bit
-    # levels are carried through the composition pass as int32 and narrowed back
+    # Output keeps the depth the stack arrived in. torch has no uint16, so the
+    # fallback composition pass carries 16-bit levels as int32 and narrows back
     # on the host at the end.
     out_dtype = bitdepth.stack_dtype(normalized_images)
     compose_dtype = torch.uint8 if out_dtype == bitdepth.UINT8 else torch.int32
@@ -133,15 +132,11 @@ def dct_torch_impl(
                 chunk = [img[:h_trim, :w_trim] for img in chunk]
             return torch_depth.stack_to_float01(chunk, dev)
 
-        # Pass 1: per-block detail energy, running top two per block
         hp_window = _odd(round(block_size * _HIGHPASS_SCALE), min(h_trim, w_trim))
         pool_window = _odd(_POOL_WINDOW, min(map_h, map_w))
 
-        best_energy = torch.full((map_h, map_w), -1.0, device=dev)
-        second_energy = torch.full((map_h, map_w), -1.0, device=dev)
-        best_index = torch.zeros((map_h, map_w), dtype=torch.long, device=dev)
-
-        for start in range(0, n, CHUNK_SIZE):
+        def chunk_energy(start):
+            """Normalised per-block detail energy for one chunk of frames."""
             chunk = normalized_images[start:start + CHUNK_SIZE]
             # Normalised before squaring: at 16 bits, squaring raw levels lands
             # near float32's precision limit (see the note in dct.py).
@@ -159,34 +154,41 @@ def dct_torch_impl(
                 noise = torch.quantile(pooled[j].flatten(),
                                        _NOISE_PERCENTILE / 100.0)
                 pooled[j] = pooled[j] / torch.clamp(noise, min=_NOISE_FLOOR)
+            return pooled
 
-            # Sequential update keeps the reduction order identical to the CPU path
+        # Pass 1: the bar for being in focus on each block.
+        peak = torch.full((map_h, map_w), -1.0, device=dev)
+        for start in range(0, n, CHUNK_SIZE):
+            peak = torch.maximum(peak, chunk_energy(start).amax(dim=0))
+
+        # Pass 2: the middle of the frames that clear it - the focal plane.
+        threshold = peak * _PLATEAU
+        in_focus_count = torch.zeros((map_h, map_w), device=dev)
+        index_total = torch.zeros((map_h, map_w), device=dev)
+        for start in range(0, n, CHUNK_SIZE):
+            pooled = chunk_energy(start)
             for j in range(pooled.shape[0]):
-                idx = torch.tensor(start + j, device=dev)
-                wins = pooled[j] > best_energy
-                second_energy = torch.where(wins, best_energy,
-                                            torch.maximum(second_energy, pooled[j]))
-                best_energy = torch.where(wins, pooled[j], best_energy)
-                best_index = torch.where(wins, idx, best_index)
+                hit = (pooled[j] >= threshold).to(torch.float32)
+                in_focus_count += hit
+                index_total += hit * float(start + j)
+        field = index_total / torch.clamp(in_focus_count, min=1.0)
 
-        # Blocks that decide nothing - no real detail, or two frames equally
-        # sharp - take their neighbourhood's choice. Done on the host with the
-        # CPU path's own helpers, on a map of a few thousand entries, so the two
-        # implementations cannot drift apart here.
-        undecided = ((best_energy < _DETAIL_SNR) | (
-            (best_energy - second_energy) <= _DECISION_MARGIN * best_energy)
-        ).cpu().numpy()
+        # Consistency verification: double median filter on the tiny focal-plane
+        # map (CPU/cv2). uint16 end to end so indices never wrap at 256 frames.
+        index_np = torch.clamp(torch.round(field), 0, n - 1).cpu().numpy().astype(np.uint16)
+        index_np = _median_filter_index_map(index_np, kernel_size)
+        index_np = _median_filter_index_map(index_np, kernel_size)
 
-        # Consistency verification: double median filter on the tiny index map
-        # (CPU/cv2). uint16 end to end so indices never wrap at 256 frames.
-        index_np = best_index.cpu().numpy().astype(np.uint16)
-        index_np = _fill_undecided(index_np, undecided)
-        filtered = _median_filter_index_map(index_np, kernel_size)
-        filtered = _median_filter_index_map(filtered, kernel_size)
-        final_index = torch.from_numpy(filtered.astype(np.int64)).to(dev)
+        # Reconstruction. Compositing is a weighted sum over a handful of full
+        # frames, which is memory-bound rather than arithmetic-bound, so it runs
+        # on the host through the CPU path's own helper: that keeps the two
+        # implementations from drifting and keeps peak device memory to the
+        # measurement pass.
+        if _BLEND:
+            return _compose(normalized_images, index_np, block_size, (h, w),
+                            out_dtype)
 
-        # Pass 2: reconstruction — nearest-neighbor upscale of the index map, then
-        # copy each source image into its selected blocks
+        final_index = torch.from_numpy(index_np.astype(np.int64)).to(dev)
         full_index = final_index.repeat_interleave(block_size, dim=0).repeat_interleave(block_size, dim=1)
 
         # The block grid only covers a multiple of block_size. Extend the last
