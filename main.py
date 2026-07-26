@@ -80,10 +80,19 @@ class OpenFocus(QMainWindow):
         self.stack_images = []  # List of QPixmap
         self.current_img_index = -1
         self.image_filenames = []  # List of file names
+        # Full paths of the source frames, index-aligned with image_filenames.
+        # A saved result reads its EXIF back from the first of them, so the list
+        # is kept in step with every append, delete and clear of the stack.
+        self.image_paths = []
         self.raw_images = []  # Store the original numpy-array images, used for registration and fusion
         self.base_images = []  # Store the base-size images from the first load, used for restoring and resize calculations
         self.fusion_result = None  # Store the latest fusion result
         self.fusion_results = []  # Store the history of all fusion results
+        # One RenderMetadata per entry of fusion_results, same order: what the
+        # render was based on, when it ran and how long it took. Written into
+        # the file when that result is saved.
+        self.fusion_metadata = []
+        self.fusion_result_metadata = None  # Metadata of the latest fusion result
         self.registration_results = []  # Store the registered image stack
         self.current_result_index = -1  # Index of the currently displayed result image
         self.aligned_images = []  # Store the aligned image stack to avoid re-aligning

@@ -253,7 +253,7 @@ detail still follows the sharpest frame.
 | RAW support | Nikon only² | broad + DNG | via DNG | ✗ | not documented | ✗ |
 | **Depth map output** | **✗**³ | ✓ (3D model) | ✓ | ✓ | ✗ | ✓ core feature |
 | 3D / stereo / anaglyph output | ✗ | ✓ | ✓ | ✓ `--3dview` | ✗ | ✓ core feature |
-| EXIF passthrough | ✗⁴ | ✓ | ✓ | not documented | not documented | not documented |
+| EXIF passthrough | ✓⁴ | ✓ | ✓ | not documented | not documented | not documented |
 | ICC colour management | ✗ | ✓ | ✓ | not documented | not documented | not documented |
 | Video / frame extraction input | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | GPU acceleration | ✓ CUDA/MPS | ✓ | ✗ | ✓ OpenCL | ✗ | ✗ |
@@ -269,8 +269,11 @@ stays 16-bit through alignment, fusion and export. Mode selectable under
 ARW, RAF, DNG and ORF identically.
 ³ Since 1.8.0 the map drives a fusion method (`Depth Map`) but is still not
 *exported* as a file — see §1 note 1.
-⁴ Read for display at `core/image_loader.py:357`, never written back;
-`cv2.imwrite` drops it.
+⁴ **Closed in 1.16.0.** A saved JPEG or PNG inherits the EXIF block of the first
+source frame of the render, and carries OpenFocus' version, render date and
+render duration in an XMP group of its own. Both are spliced into the encoded
+file, so nothing is recompressed — see `utils/metadata.py`. TIFF and BMP outputs
+are still written without metadata.
 ⁵ `core/image_loader.py:417`.
 
 ### Findings

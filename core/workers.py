@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QThread, pyqtSignal
 import time
 import os
+from datetime import datetime
 import cv2
 import numpy as np
 import imageio.v2 as imageio
@@ -10,7 +11,7 @@ from core.cancellation import RenderCancelled
 from core import contrast
 from core.memory import release_render_memory
 from fusion_methods.ifcnn import _ifcnn_refine_impl, get_ifcnn_model_path, is_ifcnn_available
-from utils import resource_path, normalize_kernel_size, write_image, bitdepth
+from utils import resource_path, normalize_kernel_size, write_image, bitdepth, RenderMetadata
 from constants import (
     TILE_BLOCK_SIZE, TILE_OVERLAP, TILE_THRESHOLD,
     DEFAULT_THREAD_COUNT
@@ -711,6 +712,10 @@ class BatchWorker(QThread):
         images = [item[1] for item in stack_images_with_times]
         original_paths = [item[0] for item in stack_images_with_times]
 
+        # Timed from here so the metadata of the saved result covers the same
+        # stages the interactive render reports: registration plus fusion.
+        started_at = time.perf_counter()
+
         reg_methods = self.processing_settings.get('reg_methods', [])
         aligned_images = self._register_batch_stack(images, reg_methods)
 
@@ -812,7 +817,11 @@ class BatchWorker(QThread):
                 # stack saved below.
                 result = self._apply_batch_contrast(result)
                 output_path = os.path.join(output_dir, f"{stack_name}.{output_format}")
-                write_image(output_path, result)
+                write_image(
+                    output_path,
+                    result,
+                    metadata=self._render_metadata(original_paths, started_at),
+                )
 
             if self.processing_settings.get('save_aligned'):
                 for idx, img in enumerate(aligned_images):
@@ -820,13 +829,30 @@ class BatchWorker(QThread):
                     aligned_path = os.path.join(output_dir, aligned_filename)
                     write_image(aligned_path, img)
     
+    def _render_metadata(self, source_paths, started_at):
+        """Metadata for a batch result: its first source frame, and the timing.
+
+        Loading is deliberately outside the measured span, matching what the
+        interactive render records.
+        """
+        return RenderMetadata(
+            source_path=source_paths[0] if source_paths else None,
+            rendered_at=datetime.now(),
+            duration_s=time.perf_counter() - started_at,
+        )
+
     def process_single_folder(self, folder_path):
         """Process a single folder"""
         # 1. Load images
         success, message, images, filenames = self.image_loader.load_from_folder(folder_path)
         if not success or not images:
             raise Exception(f"Failed to load images: {message}")
-        
+
+        # The loader fills image_paths in the same order as the images it
+        # returns; the first of them is what the saved result inherits.
+        source_paths = list(self.image_loader.image_paths)
+        started_at = time.perf_counter()
+
         # 2. Image registration (if needed)
         reg_methods = self.processing_settings.get('reg_methods', [])
         aligned_images = self._register_batch_stack(images, reg_methods)
@@ -878,7 +904,9 @@ class BatchWorker(QThread):
         
         # 4. Save the result
         if fusion_result is not None:
-            self.save_fusion_result(folder_path, fusion_result)
+            self.save_fusion_result(
+                folder_path, fusion_result, self._render_metadata(source_paths, started_at)
+            )
         
         # 5. If needed, save the registered image stack
         save_aligned = self.processing_settings.get('save_aligned', False)
@@ -898,7 +926,7 @@ class BatchWorker(QThread):
             self.processing_settings.get('contrast_strength', 0) / 100.0,
         )
 
-    def save_fusion_result(self, folder_path, fusion_result):
+    def save_fusion_result(self, folder_path, fusion_result, metadata=None):
         """Save the fusion result"""
         # Determine the output path
         if self.output_type == "subfolder":
@@ -919,7 +947,7 @@ class BatchWorker(QThread):
         # Save the image
         fusion_result = self._apply_batch_contrast(fusion_result)
         _warn_if_depth_lost(fusion_result, extension)
-        write_image(output_path, fusion_result)
+        write_image(output_path, fusion_result, metadata=metadata)
     
     def save_registered_stack(self, folder_path, images, filenames):
         """Save the registered image stack"""

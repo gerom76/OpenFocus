@@ -218,10 +218,14 @@ class ExportManager:
             # thing being saved is the fused result - a bare registration result
             # (no fusion run) is saved as aligned.
             content = result_to_save
+            metadata = None
             if window.fusion_result is not None:
                 content = window.apply_output_contrast(result_to_save)
+                # Only a fused result carries render metadata; a bare aligned
+                # frame is saved the way it always was.
+                metadata = getattr(window, "fusion_result_metadata", None)
             image_to_save = window.label_manager.prepare_bgr_image("registered", content, index)
-            if write_image(file_path, image_to_save, announce=True):
+            if write_image(file_path, image_to_save, announce=True, metadata=metadata):
                 show_message_box(
                     window,
                     trans.t("msg_success"),

@@ -8,7 +8,7 @@ from PyQt6.QtCore import QMimeData, Qt, QUrl
 from PyQt6.QtGui import QDrag
 from PyQt6.QtWidgets import QListWidget
 
-from utils import get_imwrite_params
+from utils import get_imwrite_params, metadata as metadata_utils
 
 
 class OutputListWidget(QListWidget):
@@ -41,6 +41,9 @@ class OutputListWidget(QListWidget):
 
             file_path = self._write_temp_jpg(image, item.text())
             if file_path:
+                # A dragged-out file is kept by whatever receives it, so it
+                # gets the same EXIF and render metadata as a saved one.
+                metadata_utils.embed(file_path, self._metadata_for_row(row))
                 urls.append(QUrl.fromLocalFile(file_path))
 
         if not urls:
@@ -66,6 +69,12 @@ class OutputListWidget(QListWidget):
             return None
 
         return window.label_manager.prepare_bgr_image("registered", image, 0)
+
+    def _metadata_for_row(self, row: int):
+        window = self._window
+        if window is None:
+            return None
+        return window.output_manager.metadata_for_row(row)
 
     def _write_temp_jpg(self, image, base_name: str) -> str | None:
         safe_name = self._sanitize_filename(base_name)

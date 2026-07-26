@@ -7,6 +7,7 @@ from typing import Optional
 from PyQt6.QtGui import QPixmap, QImage
 
 from utils import bitdepth
+from utils.metadata import RenderMetadata, embed as embed_metadata
 
 
 def ensure_bgr(img: np.ndarray) -> np.ndarray:
@@ -71,7 +72,12 @@ def get_imwrite_params(extension: str) -> list:
         return []
 
 
-def write_image(file_path: str, image: np.ndarray, announce: bool = False) -> bool:
+def write_image(
+    file_path: str,
+    image: np.ndarray,
+    announce: bool = False,
+    metadata: Optional[RenderMetadata] = None,
+) -> bool:
     """Write an image, narrowing it first if the container cannot hold its depth.
 
     PNG and TIFF store 16 bits per channel; JPEG and BMP do not. Handing 16-bit
@@ -79,13 +85,23 @@ def write_image(file_path: str, image: np.ndarray, announce: bool = False) -> bo
     to be explicit. `announce` prints one line when it happens, which the
     single-image save paths use so the loss is never silent; stack exports log
     once around the loop instead of once per frame.
+
+    `metadata` describes the render behind the image. When given, and when the
+    container is JPEG or PNG, the source EXIF and OpenFocus' XMP group are added
+    to the encoded file afterwards - see utils.metadata. Metadata failures never
+    fail the save: the image is already on disk by then.
     """
     ext = os.path.splitext(file_path)[1]
     if announce and bitdepth.is_high_depth(image) and not bitdepth.supports_16bit(ext):
         print(f"[Depth] {ext or 'this format'} cannot store 16-bit; saving 8-bit. "
               f"Use PNG or TIFF to keep the full depth.", flush=True)
     image = bitdepth.prepare_for_write(image, ext)
-    return cv2.imwrite(file_path, image, get_imwrite_params(ext))
+    if not cv2.imwrite(file_path, image, get_imwrite_params(ext)):
+        return False
+
+    if metadata is not None:
+        embed_metadata(file_path, metadata)
+    return True
 
 
 def pixmap_to_cv2(pixmap: QPixmap) -> Optional[np.ndarray]:

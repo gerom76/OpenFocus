@@ -5,6 +5,7 @@ Modules:
 - image_utils: Image conversion functions (pixmap <-> cv2)
 - bitdepth: 8/16-bit depth policy and conversion
 - ui_utils: UI-related functions (message boxes, dialogs)
+- metadata: EXIF passthrough and OpenFocus XMP for saved results
 - validators: Validation and utility functions
 - platform_utils: Cross-platform utilities (font detection, OS detection)
 - torch_env: PyTorch availability checks, including frozen-build stub handling
@@ -22,6 +23,9 @@ from utils.image_utils import (
     read_image_any_depth,
     write_image,
 )
+
+from utils import metadata
+from utils.metadata import RenderMetadata
 
 from utils import bitdepth
 from utils.bitdepth import (
@@ -93,6 +97,9 @@ __all__ = [
     'ensure_bgr',
     'read_image_any_depth',
     'write_image',
+    # metadata
+    'metadata',
+    'RenderMetadata',
     # bitdepth
     'bitdepth',
     'MODE_AUTO',

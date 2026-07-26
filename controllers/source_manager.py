@@ -29,6 +29,7 @@ from locales import trans
 class LoadOptions:
     scale_factor: float
     filenames: list[str]
+    paths: list[str]
     base_images: list[Any]
     working_images: list[Any]
 
@@ -208,7 +209,9 @@ class SourceManager:
 
             if append and not self._confirm_append_dimensions(full_res_images):
                 return
-            load_options = self._build_load_options(full_res_images, filenames, scale_factor)
+            load_options = self._build_load_options(
+                full_res_images, filenames, scale_factor, window.image_loader.image_paths
+            )
             self._apply_load_options(load_options, append=append)
             window.settings_manager.add_recent_folder(folder_path)
         except Exception as exc:  # pylint: disable=broad-except
@@ -248,7 +251,9 @@ class SourceManager:
 
             if append and not self._confirm_append_dimensions(full_res_images):
                 return
-            load_options = self._build_load_options(full_res_images, filenames, scale_factor)
+            load_options = self._build_load_options(
+                full_res_images, filenames, scale_factor, window.image_loader.image_paths
+            )
             self._apply_load_options(load_options, append=append)
             window.settings_manager.add_recent_video(video_path)
         except Exception as exc:  # pylint: disable=broad-except
@@ -424,7 +429,9 @@ class SourceManager:
             if not self._confirm_append_dimensions(full_res_images):
                 event.ignore()
                 return
-            load_options = self._build_load_options(full_res_images, filenames, scale)
+            load_options = self._build_load_options(
+                full_res_images, filenames, scale, loader.image_paths
+            )
             self._apply_load_options(load_options, append=True)
             event.acceptProposedAction()
         except Exception as exc:  # pylint: disable=broad-except
@@ -444,13 +451,29 @@ class SourceManager:
         full_res_images: list[Any],
         filenames: list[str],
         scale_factor: float,
+        loader_paths: list[str] | None = None,
     ) -> LoadOptions:
         return LoadOptions(
             scale_factor=1.0,
             filenames=list(filenames),
+            paths=self._align_paths(loader_paths, filenames),
             base_images=full_res_images,
             working_images=full_res_images,
         )
+
+    @staticmethod
+    def _align_paths(loader_paths: list[str] | None, filenames: list[str]) -> list[str]:
+        """Source paths for the frames just loaded, one per filename.
+
+        The loader fills both lists in the same pass, so they line up by index.
+        A mismatched count cannot be aligned by guessing, so the paths are
+        dropped instead - the frames still load, they just carry no source to
+        read EXIF from later.
+        """
+        paths = list(loader_paths or [])
+        if len(paths) != len(filenames):
+            return [""] * len(filenames)
+        return paths
 
     def _apply_load_options(self, options: LoadOptions, append: bool = False) -> None:
         window = self.window
@@ -459,12 +482,14 @@ class SourceManager:
             window.base_images = (window.base_images or []) + options.base_images
             window.raw_images = (window.raw_images or []) + options.working_images
             window.image_filenames = (window.image_filenames or []) + options.filenames
+            window.image_paths = (getattr(window, "image_paths", None) or []) + options.paths
             initial_index = window.current_display_index if window.current_display_index >= 0 else 0
         else:
             window.base_images = options.base_images
             window.current_scale_factor = options.scale_factor
             window.raw_images = options.working_images
             window.image_filenames = options.filenames
+            window.image_paths = options.paths
             initial_index = 0
 
         window.label_manager.reset_labels()
@@ -517,6 +542,7 @@ class SourceManager:
         window.base_images = []
         window.stack_images = []
         window.image_filenames = []
+        window.image_paths = []
         window.current_display_index = -1
         
         # Clear the ROI alignment cache
@@ -632,6 +658,7 @@ class SourceManager:
         window.transform_manager.invalidate_processing_results(clear_output_view=False, preserve_outputs=True)
 
         self._pop_sequence(window.image_filenames, row)
+        self._pop_sequence(getattr(window, "image_paths", None), row)
         self._pop_sequence(window.raw_images, row)
         self._pop_sequence(getattr(window, "base_images", None), row)
 
@@ -663,6 +690,7 @@ class SourceManager:
 
         for row in rows:
             self._pop_sequence(window.image_filenames, row)
+            self._pop_sequence(getattr(window, "image_paths", None), row)
             self._pop_sequence(window.raw_images, row)
             self._pop_sequence(getattr(window, "base_images", None), row)
 
@@ -755,5 +783,7 @@ class SourceManager:
             if exec_message_box(msg) != QMessageBox.StandardButton.Yes:
                 return
 
-        load_options = self._build_load_options(full_res_images, filenames, scale)
+        load_options = self._build_load_options(
+            full_res_images, filenames, scale, loader.image_paths
+        )
         self._apply_load_options(load_options, append=True)

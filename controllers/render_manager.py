@@ -1,9 +1,10 @@
 import traceback
+from datetime import datetime
 from typing import Any, List, Optional
 
 from PyQt6.QtWidgets import QApplication, QMessageBox, QDialog
 
-from utils import show_custom_message_box, show_message_box, show_warning_box
+from utils import RenderMetadata, show_custom_message_box, show_message_box, show_warning_box
 from core.multi_focus_fusion import is_stackmffv4_available
 from core.workers import RenderWorker
 from dialogs import ROIRenderOptionsDialog  # Import the new dialog
@@ -19,6 +20,9 @@ class RenderManager:
         # True while the running render covers only the ticked subset of the
         # source list - its result must not be cached as the aligned full stack.
         self._subset_render = False
+        # Source file the running render's result inherits its EXIF from, taken
+        # when the render starts because the source list may change while it runs.
+        self._render_source_path: Optional[str] = None
 
     def _set_stop_enabled(self, enabled: bool) -> None:
         """Enable the Stop button only while a render is interruptible."""
@@ -96,6 +100,19 @@ class RenderManager:
 
         return manager.checked_source_indices()
 
+    def _first_source_path(self, selected_rows: List[int]) -> Optional[str]:
+        """Path of the first source frame taking part in the render.
+
+        That frame is where the result's EXIF comes from, so with only part of
+        the stack ticked it is the first ticked frame rather than the first row
+        of the list.
+        """
+        paths = getattr(self.window, "image_paths", None) or []
+        for row in selected_rows:
+            if 0 <= row < len(paths) and paths[row]:
+                return paths[row]
+        return None
+
     def start_render(self) -> None:
         window = self.window
 
@@ -107,6 +124,8 @@ class RenderManager:
         if len(selected_rows) < 2:
             show_warning_box(window, trans.t("msg_no_images_title"), trans.t("msg_render_need_selected_text"))
             return
+
+        self._render_source_path = self._first_source_path(selected_rows)
 
         window.btn_render.setEnabled(False)
         window.btn_render.setText(trans.t('btn_render_processing'))
@@ -286,6 +305,14 @@ class RenderManager:
             if fusion_result is not None:
                 window.fusion_result = fusion_result
                 window.registration_results = processed_images
+                # Describes this result for as long as it lives in the output
+                # list; written into the file if it is ever saved. The date is
+                # the moment the render finished, next to the time it took.
+                window.fusion_result_metadata = RenderMetadata(
+                    source_path=self._render_source_path,
+                    rendered_at=datetime.now(),
+                    duration_s=alignment_time + fusion_time,
+                )
 
                 # If this is fusion in ROI mode, exit ROI mode (but keep the aligned images for reuse)
                 if getattr(window, 'roi_mode_active', False):
@@ -312,6 +339,8 @@ class RenderManager:
             else:
                 if registration_performed:
                     window.fusion_result = None
+                    # No fused result to describe; the history keeps its own records.
+                    window.fusion_result_metadata = None
                     window.registration_results = processed_images
 
                     window.result_slider.setEnabled(True)

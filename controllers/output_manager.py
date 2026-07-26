@@ -31,6 +31,9 @@ class OutputManager:
 
         if window.fusion_result is not None:
             window.fusion_results.insert(0, window.fusion_result.copy())
+            # Kept in step with fusion_results so row N of the output list always
+            # describes the render behind fusion_results[N].
+            window.fusion_metadata.insert(0, getattr(window, "fusion_result_metadata", None))
 
         item = QListWidgetItem(fusion_filename)
 
@@ -48,6 +51,17 @@ class OutputManager:
         window.output_list.setCurrentRow(0)
         fit_list_rows_to_thumbnails(window.output_list)
         self.update_output_count()
+
+    def metadata_for_row(self, row: int) -> Any:
+        """Render metadata of an output row, or None if it has none.
+
+        Results produced before the stack was reloaded, or by a code path that
+        did not record anything, simply save without the extra metadata.
+        """
+        records = getattr(self.window, "fusion_metadata", None) or []
+        if 0 <= row < len(records):
+            return records[row]
+        return None
 
     def sync_output_slider_from_list(self, row: int) -> None:
         if row >= 0:
@@ -81,16 +95,20 @@ class OutputManager:
 
         if 0 <= row < len(window.fusion_results):
             window.fusion_results.pop(row)
+        if 0 <= row < len(window.fusion_metadata):
+            window.fusion_metadata.pop(row)
 
         self.update_output_count()
 
         if window.fusion_results:
             new_index = min(row, len(window.fusion_results) - 1)
             window.fusion_result = window.fusion_results[new_index]
+            window.fusion_result_metadata = self.metadata_for_row(new_index)
             window.output_list.setCurrentRow(new_index)
             self.display_specific_fusion_result(window.fusion_result)
         else:
             window.fusion_result = None
+            window.fusion_result_metadata = None
             window.lbl_result_img.clear()
             window.result_control_bar.setVisible(False)
 
@@ -128,7 +146,9 @@ class OutputManager:
                     "registered", window.apply_output_contrast(window.fusion_results[row]), 0
                 )
 
-                success = write_image(file_path, image_to_save, announce=True)
+                success = write_image(
+                    file_path, image_to_save, announce=True, metadata=self.metadata_for_row(row)
+                )
                 if success:
                     show_success_box(
                         window,
@@ -148,7 +168,10 @@ class OutputManager:
                     "registered", window.apply_output_contrast(window.fusion_result), 0
                 )
 
-                success = write_image(file_path, image_to_save, announce=True)
+                success = write_image(
+                    file_path, image_to_save, announce=True,
+                    metadata=getattr(window, "fusion_result_metadata", None),
+                )
                 if success:
                     show_success_box(
                         window,
@@ -199,6 +222,8 @@ class OutputManager:
                 window.output_list.takeItem(row)
                 if 0 <= row < len(window.fusion_results):
                     window.fusion_results.pop(row)
+                if 0 <= row < len(window.fusion_metadata):
+                    window.fusion_metadata.pop(row)
 
         self.update_output_count()
 
@@ -206,10 +231,12 @@ class OutputManager:
             min_row = min(rows) if rows else 0
             new_index = min(min_row, len(window.fusion_results) - 1)
             window.fusion_result = window.fusion_results[new_index]
+            window.fusion_result_metadata = self.metadata_for_row(new_index)
             window.output_list.setCurrentRow(new_index)
             self.display_specific_fusion_result(window.fusion_result)
         else:
             window.fusion_result = None
+            window.fusion_result_metadata = None
             window.lbl_result_img.clear()
             window.result_control_bar.setVisible(False)
 

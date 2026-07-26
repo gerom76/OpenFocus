@@ -181,11 +181,15 @@ class TransformManager:
         if preserve_outputs:
             if window.fusion_results:
                 window.fusion_result = window.fusion_results[0]
+                records = getattr(window, "fusion_metadata", None) or []
+                window.fusion_result_metadata = records[0] if records else None
             if hasattr(window, "output_manager"):
                 window.output_manager.update_output_count()
         else:
             window.fusion_result = None
             window.fusion_results = []
+            window.fusion_metadata = []
+            window.fusion_result_metadata = None
 
             if hasattr(window, "output_list"):
                 window.output_list.clear()
