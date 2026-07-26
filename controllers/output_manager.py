@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox
 
 from utils import write_image, cv2_to_pixmap, fit_list_rows_to_thumbnails
 from utils import show_error_box, show_message_box, show_success_box, show_warning_box
-from controllers.export_manager import save_dialog_filter
+from controllers.export_manager import save_dialog_filter, save_dialog_selected_filter
 from core import render_options
 from locales import trans
 
@@ -147,24 +147,28 @@ class OutputManager:
         if row < 0:
             return
 
-        # Propose the name shown in the output list so the saved file matches the entry.
-        default_filename = item.text().strip() or window.export_manager.generate_default_filename()
+        # Propose the name shown in the output list so the saved file matches the
+        # entry, in the format the last export was saved in.
+        export_manager = window.export_manager
+        preferred_ext = export_manager.preferred_export_extension()
+        default_filename = export_manager.with_export_extension(
+            item.text().strip() or export_manager.generate_default_filename(),
+            preferred_ext,
+        )
         file_path, _selected_filter = QFileDialog.getSaveFileName(
             window,
             trans.t("action_save"),
             window.settings_manager.default_output_path(default_filename),
             save_dialog_filter(),
+            save_dialog_selected_filter(preferred_ext),
         )
 
         if not file_path:
             return
 
-        fallback_ext = os.path.splitext(default_filename)[1]
-        file_path = window.export_manager.normalize_export_path(
-            file_path,
-            fallback_extension=fallback_ext if fallback_ext else None,
-        )
+        file_path = export_manager.normalize_export_path(file_path, preferred_ext)
         window.settings_manager.set_output_dir(os.path.dirname(file_path))
+        export_manager.remember_export_format(file_path)
 
         try:
             if row < len(window.fusion_results):

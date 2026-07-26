@@ -43,6 +43,17 @@ EXPORT_EXTENSION_ALIASES = {
 
 DEFAULT_EXPORT_EXTENSION = ".png"
 
+# Which save-dialog entry each extension belongs to, so a remembered format can
+# be pre-selected in the dialog's format dropdown.
+EXPORT_FILTER_LABELS = {
+    ".jpg": "JPG Files (*.jpg)",
+    ".png": "PNG Files (*.png)",
+    ".bmp": "Bitmap Files (*.bmp)",
+    ".tif": "TIFF Files (*.tif *.tiff)",
+    ".tiff": "TIFF Files (*.tif *.tiff)",
+    ".jxl": "JPEG XL Files (*.jxl)",
+}
+
 
 def save_dialog_filter() -> str:
     """Filter string for the save dialogs, with JPEG XL only where it can be written."""
@@ -58,6 +69,18 @@ def save_dialog_filter() -> str:
         entries.append("JPEG XL Files (*.jxl)")
     entries.append("All Files (*)")
     return f"All Supported Formats ({supported});;" + ";;".join(entries)
+
+
+def save_dialog_selected_filter(extension: str) -> str:
+    """Entry to pre-select in the save dialog for a given extension.
+
+    An empty string leaves Qt on the first ("All Supported Formats") entry,
+    which is also what an extension this build cannot write falls back to.
+    """
+    ext = (extension or "").lower()
+    if ext not in ALLOWED_EXPORT_EXTENSION_MAP:
+        return ""
+    return EXPORT_FILTER_LABELS.get(ext, "")
 
 
 class ExportManager:
@@ -91,6 +114,36 @@ class ExportManager:
                 return root + mapped_alias
 
         return root + fallback
+
+    def preferred_export_extension(self) -> str:
+        """Extension the save dialogs should default to.
+
+        The format of the last export is remembered in the settings; a format
+        this build cannot write (a hand-edited config, or a JPEG XL encoder that
+        is no longer installed) falls back to the default.
+        """
+        remembered = getattr(getattr(self.window, "settings_manager", None), "output_format", "")
+        ext = (remembered or "").lower()
+        return ext if ext in ALLOWED_EXPORT_EXTENSION_MAP else DEFAULT_EXPORT_EXTENSION
+
+    def with_export_extension(self, name: str, extension: str) -> str:
+        """Put `extension` on a suggested filename, replacing an image one if present.
+
+        Output names are extensionless, but they come from the output list where a
+        user-renamed entry may carry one; anything else (a dotted name such as
+        "2.5x") is left intact so only the extension is appended.
+        """
+        root, ext = os.path.splitext(name)
+        ext_lower = ext.lower()
+        if ext_lower in ALLOWED_EXPORT_EXTENSION_MAP or ext_lower in EXPORT_EXTENSION_ALIASES:
+            return root + extension
+        return name + extension
+
+    def remember_export_format(self, file_path: str) -> None:
+        """Record the format just exported so the next save dialog offers it again."""
+        settings = getattr(self.window, "settings_manager", None)
+        if settings is not None:
+            settings.set_output_format(os.path.splitext(file_path)[1])
 
     # ------------------------------------------------------------------
     # Filename helpers
@@ -218,19 +271,22 @@ class ExportManager:
             show_warning_box(window, trans.t("msg_no_result_title"), trans.t("msg_no_result_text"))
             return
 
-        default_filename = self._suggested_output_name()
+        preferred_ext = self.preferred_export_extension()
+        default_filename = self.with_export_extension(self._suggested_output_name(), preferred_ext)
         file_path, _ = QFileDialog.getSaveFileName(
             window,
             title,
             window.settings_manager.default_output_path(default_filename),
             save_dialog_filter(),
+            save_dialog_selected_filter(preferred_ext),
         )
 
         if not file_path:
             return
 
-        file_path = self.normalize_export_path(file_path)
+        file_path = self.normalize_export_path(file_path, preferred_ext)
         window.settings_manager.set_output_dir(os.path.dirname(file_path))
+        self.remember_export_format(file_path)
 
         try:
             index = 0 if window.fusion_result is not None else window.current_result_index
@@ -300,6 +356,10 @@ class ExportManager:
         # Remember the parent so the next export starts beside the created stack folder.
         window.settings_manager.set_output_dir(os.path.dirname(folder_path))
 
+        # Source names keep their own writable extension; everything else (an
+        # unwritable source format, or a generated name) uses the chosen format.
+        preferred_ext = self.preferred_export_extension()
+
         try:
             saved_count = 0
             for index, image in enumerate(window.registration_results):
@@ -307,9 +367,9 @@ class ExportManager:
                 if index < len(window.image_filenames):
                     filename = window.image_filenames[index]
                 else:
-                    filename = f"registered_{index + 1:04d}{DEFAULT_EXPORT_EXTENSION}"
+                    filename = f"registered_{index + 1:04d}{preferred_ext}"
                 file_path = os.path.join(folder_path, filename)
-                file_path = self.normalize_export_path(file_path)
+                file_path = self.normalize_export_path(file_path, preferred_ext)
                 if write_image(file_path, image_to_save):
                     saved_count += 1
 
@@ -440,6 +500,8 @@ class ExportManager:
         # Remember the parent so the next export starts beside the created stack folder.
         window.settings_manager.set_output_dir(os.path.dirname(folder_path))
 
+        preferred_ext = self.preferred_export_extension()
+
         try:
             saved_count = 0
             for index, image in enumerate(window.raw_images):
@@ -447,9 +509,9 @@ class ExportManager:
                 if index < len(window.image_filenames):
                     filename = window.image_filenames[index]
                 else:
-                    filename = f"processed_{index + 1:04d}{DEFAULT_EXPORT_EXTENSION}"
+                    filename = f"processed_{index + 1:04d}{preferred_ext}"
                 file_path = os.path.join(folder_path, filename)
-                file_path = self.normalize_export_path(file_path)
+                file_path = self.normalize_export_path(file_path, preferred_ext)
                 if write_image(file_path, image_to_save):
                     saved_count += 1
 

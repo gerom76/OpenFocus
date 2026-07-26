@@ -250,6 +250,7 @@ class BatchProcessingDialog(QDialog):
         if jxl.is_available():
             formats.append("JXL")
         self.format_combo.addItems(formats)
+        self._select_remembered_format()
         self.format_combo.currentTextChanged.connect(self.on_format_changed)
         format_layout.addWidget(self.format_combo)
         
@@ -604,7 +605,33 @@ class BatchProcessingDialog(QDialog):
         self.quality_label.setVisible(is_jpg)
         self.quality_slider.setVisible(is_jpg)
         self.quality_value_label.setVisible(is_jpg)
-    
+
+    # The batch output format is remembered in the same setting the single-image
+    # save dialogs use, so the format chosen once carries over to the next run.
+    def _settings_manager(self):
+        return getattr(self.parent_window, "settings_manager", None)
+
+    def _select_remembered_format(self):
+        """Preselect the last used output format, keeping the default when unknown."""
+        settings = self._settings_manager()
+        remembered = getattr(settings, "output_format", "") if settings else ""
+        if not remembered:
+            return
+
+        # ".tif" and ".tiff" share the single "TIFF" entry.
+        wanted = remembered.lstrip(".").upper()
+        if wanted == "TIF":
+            wanted = "TIFF"
+        index = self.format_combo.findText(wanted)
+        if index >= 0:
+            self.format_combo.setCurrentIndex(index)
+
+    def _remember_format(self):
+        """Record the chosen output format for the next batch run and save dialog."""
+        settings = self._settings_manager()
+        if settings is not None:
+            settings.set_output_format(self.format_combo.currentText().lower())
+
     def update_single_folder_preview(self):
         """Update the single-folder preview"""
         if not self.single_folder_images_with_times:
@@ -889,7 +916,8 @@ class BatchProcessingDialog(QDialog):
 
         output_type, output_path = self.get_output_settings()
         processing_settings = self.get_processing_settings()
-        
+        self._remember_format()
+
         self.accept()
 
 

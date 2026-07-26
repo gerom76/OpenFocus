@@ -30,6 +30,7 @@ class SettingsManager:
         self.recent_folders: list[str] = []
         self.recent_videos: list[str] = []
         self.output_dir: str = ""
+        self.output_format: str = ""
 
     # --- Recently opened paths ---
 
@@ -67,6 +68,31 @@ class SettingsManager:
         self.output_dir = path
         self._persist_recent()
 
+    # --- Output image format ---
+
+    def set_output_format(self, extension: str) -> None:
+        """Remember the image format the user last exported in, e.g. '.jxl'.
+
+        Stored as a bare extension; the export code validates it against the
+        formats this build can actually write before offering it again.
+        """
+        extension = self._sanitize_format(extension)
+        if not extension or extension == self.output_format:
+            return
+
+        self.output_format = extension
+        self._persist_recent()
+
+    @staticmethod
+    def _sanitize_format(value: Any) -> str:
+        """Accept only a plain lower-case file extension from config or callers."""
+        if not isinstance(value, str) or not value.strip():
+            return ""
+        ext = value.strip().lower().lstrip(".")
+        if not ext.isalnum() or len(ext) > 5:
+            return ""
+        return "." + ext
+
     def default_output_path(self, filename: str) -> str:
         """Prefix a suggested filename with the remembered output folder."""
         if self.output_dir and os.path.isdir(self.output_dir):
@@ -102,7 +128,7 @@ class SettingsManager:
         self._persist_recent()
 
     def _persist_recent(self) -> None:
-        """Write only the remembered paths back, leaving other saved settings alone.
+        """Write only the remembered paths/format back, leaving other settings alone.
 
         Recent paths are recorded as soon as a stack loads, which must not
         silently overwrite settings the user has not chosen to save.
@@ -121,6 +147,7 @@ class SettingsManager:
         data["recent_folders"] = list(self.recent_folders)
         data["recent_videos"] = list(self.recent_videos)
         data["output_dir"] = self.output_dir
+        data["output_format"] = self.output_format
 
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -179,6 +206,7 @@ class SettingsManager:
             "recent_folders": list(self.recent_folders),
             "recent_videos": list(self.recent_videos),
             "output_dir": self.output_dir,
+            "output_format": self.output_format,
         }
 
     # --- Save ---
@@ -292,6 +320,7 @@ class SettingsManager:
         self.recent_videos = self._sanitize_recent(data.get("recent_videos"))
         output_dir = data.get("output_dir")
         self.output_dir = os.path.normpath(output_dir) if isinstance(output_dir, str) and output_dir else ""
+        self.output_format = self._sanitize_format(data.get("output_format"))
         refresh = getattr(window, "refresh_recent_menus", None)
         if callable(refresh):
             refresh()
