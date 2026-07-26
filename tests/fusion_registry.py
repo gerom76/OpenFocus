@@ -299,10 +299,13 @@ METHODS = [
             ("kernel_size", [3, 5, 7, 11, 15],
              "Median filter applied to the block decision map to remove isolated "
              "wrong picks. Larger cleans up more speckle but rounds off genuinely "
-             "small in-focus regions."),
+             "small in-focus regions. The decision map now arrives regionally "
+             "pooled, so there is little speckle left for it to remove."),
         ),
         supports_resize=False,
-        min_psnr=27.0,      # measured 32.3; block-variance is the weakest focus measure here
+        min_psnr=27.0,      # measured 36.3 (32.3 before item 17 reworked the
+                            # focus measure); block decisions are still the
+                            # coarsest of the classical methods
     ),
     FusionMethod(
         key="dtcwt", label="DTCWT", fuse=_dtcwt,
@@ -358,7 +361,7 @@ METHODS = [
         sweeps=(("block_size", [4, 8, 16, 32, 64], "Same dial as the CPU DCT."),
                 ("kernel_size", [3, 5, 7, 11, 15], "Same dial as the CPU DCT.")),
         gpu=True, supports_resize=False,
-        min_psnr=27.0,      # measured 32.8
+        min_psnr=27.0,      # measured 36.3, matching the CPU path exactly
     ),
     FusionMethod(
         key="dtcwt_gpu", label="DTCWT (GPU)", fuse=_dtcwt_torch,

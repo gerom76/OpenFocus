@@ -76,7 +76,7 @@ class MultiFocusFusion:
 
     Supported algorithms:
     - 'guided_filter': guided-filter fusion
-    - 'dct': DCT-variance consistency fusion
+    - 'dct': DCT block-energy consistency fusion
     - 'dtcwt': dual-tree complex wavelet fusion
     - 'stackmffv4': StackMFF-V4 neural network fusion
     """
@@ -467,12 +467,13 @@ class MultiFocusFusion:
                   kernel_size: int = 7,
                   **kwargs) -> np.ndarray:
         """
-        DCT-variance fusion.
+        DCT block-energy fusion.
 
         Args:
             input_source: Image source
             img_resize: Target size (currently unsupported; raises if specified)
-            block_size: DCT block size
+            block_size: DCT block size; also the scale below which detail counts
+                        towards the sharpness decision
             kernel_size: Median filter kernel size for consistency verification
 
         Returns:

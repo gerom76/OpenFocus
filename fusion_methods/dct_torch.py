@@ -2,8 +2,11 @@
 GPU implementation of DCT/variance multi-focus fusion (Haghighat et al., 2011).
 
 Mirrors fusion_methods/dct.py: by Parseval's theorem the DCT AC energy of a
-block equals its pixel variance, so the per-block sharpness measure reduces to
-block means of x and x^2 (computed here with avg_pool2d on the GPU). The tiny
+block equals the variance of its pixels, so the per-block sharpness measure
+reduces to block means of a high-passed frame's squared detail (computed here
+with avg_pool2d on the GPU - a box blur, a block mean and the two pooling
+windows are all average pools). See dct.py for why the measure is band-limited
+from below and how undecidable blocks are settled. The tiny
 consistency-verification step (median filtering of the index map) stays on the
 CPU via cv2 for exact behavioral parity with the CPU implementation.
 
@@ -20,15 +23,36 @@ import torch
 import torch.nn.functional as F
 
 from fusion_methods.dct import (
+    _COARSE_WINDOW,
+    _DECISION_MARGIN,
+    _HIGHPASS_SCALE,
+    _NOISE_FLOOR,
+    _POOL_WINDOW,
     _collect_images_from_folder,
     _median_filter_index_map,
     _normalize_image_stack,
+    _odd,
 )
 from fusion_methods import torch_depth
 from utils import bitdepth
 
 # Number of stack images processed per GPU batch (bounds peak memory)
 CHUNK_SIZE = 4
+
+
+def _box_blur(x: torch.Tensor, window: int) -> torch.Tensor:
+    """Box blur with reflected borders - the twin of cv2.blur/cv2.boxFilter.
+
+    cv2's default border is BORDER_REFLECT_101, which is what torch calls
+    'reflect', so padding then average-pooling with stride 1 reproduces the CPU
+    filter. The window is already clamped to the input by _odd, so the pad stays
+    inside torch's limit of one reflection.
+    """
+    if window <= 1:
+        return x
+    pad = window // 2
+    return F.avg_pool2d(F.pad(x, (pad, pad, pad, pad), mode='reflect'),
+                        window, stride=1)
 
 
 def dct_torch_impl(
@@ -107,26 +131,48 @@ def dct_torch_impl(
                 chunk = [img[:h_trim, :w_trim] for img in chunk]
             return torch_depth.stack_to_float01(chunk, dev)
 
-        # Pass 1: per-block variance via Var(X) = E[X^2] - E[X]^2, running max
-        max_variance = torch.full((map_h, map_w), -1.0, device=dev)
+        # Pass 1: per-block detail energy, running top two per block
+        hp_window = _odd(round(block_size * _HIGHPASS_SCALE), min(h_trim, w_trim))
+        pool_window = _odd(_POOL_WINDOW, min(map_h, map_w))
+        coarse_window = _odd(_COARSE_WINDOW, min(map_h, map_w))
+
+        best_energy = torch.full((map_h, map_w), -1.0, device=dev)
+        second_energy = torch.full((map_h, map_w), -1.0, device=dev)
         best_index = torch.zeros((map_h, map_w), dtype=torch.long, device=dev)
+        coarse_best = torch.full((map_h, map_w), -1.0, device=dev)
+        coarse_index = torch.zeros((map_h, map_w), dtype=torch.long, device=dev)
 
         for start in range(0, n, CHUNK_SIZE):
             chunk = normalized_images[start:start + CHUNK_SIZE]
             # Normalised before squaring: at 16 bits, squaring raw levels lands
-            # near float32's precision limit and the E[X^2] - E[X]^2 difference
-            # cancels away small variances (see the note in dct.py).
+            # near float32's precision limit (see the note in dct.py).
             t = to_device_float01(chunk)
             gray = (0.114 * t[:, 0:1] + 0.587 * t[:, 1:2] + 0.299 * t[:, 2:3])
-            mean_sq = F.avg_pool2d(gray * gray, block_size)
-            sq_mean = F.avg_pool2d(gray, block_size) ** 2
-            var = (mean_sq - sq_mean)[:, 0]  # (B, map_h, map_w)
+            # High-pass, then block-mean the squared detail: DCT AC energy with
+            # the sub-block band removed, so a defocused wash scores near zero.
+            detail = gray - _box_blur(gray, hp_window)
+            energy = F.avg_pool2d(detail * detail, block_size)
+            pooled = _box_blur(energy, pool_window)[:, 0]      # (B, map_h, map_w)
+            coarse = _box_blur(energy, coarse_window)[:, 0]
 
-            # Sequential update preserves first-max-wins tie behavior of the CPU path
-            for j in range(var.shape[0]):
-                mask = var[j] > max_variance
-                max_variance = torch.where(mask, var[j], max_variance)
-                best_index = torch.where(mask, torch.tensor(start + j, device=dev), best_index)
+            # Sequential update keeps the reduction order identical to the CPU path
+            for j in range(pooled.shape[0]):
+                idx = torch.tensor(start + j, device=dev)
+                wins = pooled[j] > best_energy
+                second_energy = torch.where(wins, best_energy,
+                                            torch.maximum(second_energy, pooled[j]))
+                best_energy = torch.where(wins, pooled[j], best_energy)
+                best_index = torch.where(wins, idx, best_index)
+
+                coarse_wins = coarse[j] > coarse_best
+                coarse_best = torch.where(coarse_wins, coarse[j], coarse_best)
+                coarse_index = torch.where(coarse_wins, idx, coarse_index)
+
+        # Blocks no frame wins by a clear margin take the surrounding region's
+        # choice rather than a coin toss between near-identical energies.
+        undecided = (best_energy <= _NOISE_FLOOR) | (
+            (best_energy - second_energy) <= _DECISION_MARGIN * best_energy)
+        best_index = torch.where(undecided, coarse_index, best_index)
 
         # Consistency verification: double median filter on the tiny index map
         # (CPU/cv2). uint16 end to end so indices never wrap at 256 frames.

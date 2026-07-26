@@ -153,22 +153,25 @@ def figures_dct(stack, block=8):
     h, w = grays[0].shape
     mh, mw = h // block, w // block
 
-    variances = []
+    # Mirrors fusion_methods/dct.py: fine detail only - anything spread over
+    # more than one block is subtracted off first - then pooled over 3x3 blocks.
+    energies = []
     for g in grays:
-        mean = cv2.resize(g, (mw, mh), interpolation=cv2.INTER_AREA)
-        mean_sq = cv2.resize(g ** 2, (mw, mh), interpolation=cv2.INTER_AREA)
-        variances.append(mean_sq - mean ** 2)
+        detail = g - cv2.blur(g, (block | 1, block | 1))
+        e = cv2.resize(detail * detail, (mw, mh), interpolation=cv2.INTER_AREA)
+        energies.append(cv2.boxFilter(e, -1, (3, 3)))
 
-    small = np.argmax(np.stack(variances), axis=0).astype(np.uint8)
+    small = np.argmax(np.stack(energies), axis=0).astype(np.uint8)
     cleaned = cv2.medianBlur(small, 7)
 
     up = lambda m: cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
     return [
         (b64(grid_overlay(stack[0], block)), f"The {block}-pixel grid",
          "Sharpness is judged one square at a time, not one pixel at a time."),
-        (b64(heat(cv2.resize(variances[0], (w, h), interpolation=cv2.INTER_NEAREST))),
-         "Variation per block",
-         "How much the pixels inside each square differ from each other. More variation is read as sharper."),
+        (b64(heat(cv2.resize(energies[0], (w, h), interpolation=cv2.INTER_NEAREST))),
+         "Fine detail per block",
+         "How much fine detail sits inside each square. Broad shading is ignored, so a "
+         "blurred bright area does not read as sharp just for being bright."),
         (b64(decision_image(up(small), len(stack))), "Winning frame per block",
          "Blocky by nature - this is why edges between near and far can look stepped."),
         (b64(decision_image(up(cleaned), len(stack))), "After clean-up",

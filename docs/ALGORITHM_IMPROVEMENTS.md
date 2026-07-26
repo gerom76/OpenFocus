@@ -41,8 +41,9 @@ remains.
 | 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders | Low | Trivial | 0% |
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
 | 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift - *fixed in 1.11.3* | Low | Medium | 100% |
+| 17 | DCT | Quality | Focus measured as total block contrast, so a defocused wash beats real detail and blanks whole regions - *fixed in 1.15.1* | High | Low | 100% |
 
-**Overall: 58% done** - 9 of 16 items fully fixed, item 8 partially (the GPU
+**Overall: 60% done** - 10 of 17 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched), 6 untouched.
 
 ---
@@ -695,6 +696,98 @@ together.
 
 ---
 
+## 17. DCT scores contrast rather than sharpness, so defocused washes win
+
+**Category: quality. Impact: high. Effort: low. Fixed in 1.15.1.**
+
+Reported from a macro render: next to the pyramid result, DCT was visibly
+sharper but carried large flat patches of a single tone where the pyramid had
+background detail. The patches sat on the block grid and had stepped edges, so
+they were selection failures, not a filtering artefact.
+
+The measure was the cause. `dct.py` scored a block by its plain pixel variance,
+which by Parseval is the energy of *all* its AC coefficients:
+
+```python
+mean_sq = cv2.resize(gray ** 2, (map_w, map_h), interpolation=cv2.INTER_AREA)
+mean_val = cv2.resize(gray, (map_w, map_h), interpolation=cv2.INTER_AREA)
+var_map = mean_sq - mean_val ** 2
+```
+
+That answers "how much contrast is in this block", which is not the same
+question as "how sharp is it". A heavily defocused highlight spreads a smooth
+brightness ramp across the frame, and a ramp crossing one block carries more
+energy than the fine, low-amplitude texture that is genuinely in focus there -
+so the *blurred* frame wins, and its pixels are copied through verbatim. The
+consistency filter cannot undo it: the regions are far larger than a median
+kernel, so it consolidates them into clean-edged blobs instead of removing them.
+This is also why the paper's own consistency step exists at all, and why the
+method has always been described here as the blockiest of the six.
+
+Measured on a fixture built from the reported case - dark background carrying
+faint fine markings, a bright object at another depth whose defocus washes over
+it:
+
+| | PSNR | background taken from the wrong frame |
+|---|---|---|
+| Best single unfused frame | 26.05 dB | - |
+| **DCT, before** | **26.60 dB** | **35.7%** |
+| Pyramid | 29.85 dB | 20.6% |
+| **DCT, after** | **29.35 dB** | **2.0%** |
+
+**Fix.** Band-limit the measure from below and pool it before choosing, which is
+what `pyramid.py` already does (`_band_energy`) and why it does not show this
+failure. Three changes, all in the measure:
+
+- **High-pass first.** Subtract a box blur the width of one block, then take the
+  block mean of the squared detail. Structure coarser than a block - exactly the
+  low AC band a defocused wash lives in - is gone before the energy is measured,
+  so a wash scores near zero however bright it is. The detail image is zero-mean
+  by construction, so the `E[X]^2` term is no longer computed at all.
+- **Pool over 3x3 blocks** before the choose-max, so the decision is regional
+  rather than per-block and grain cannot flip it.
+- **Settle undecidable blocks regionally.** The top two energies are tracked per
+  block; where the winner does not beat the runner-up by 10%, or where the
+  energy is at quantisation-noise level, the block takes the winner at a 9-block
+  pooling scale instead - whichever frame is sharp in the surrounding region -
+  rather than a coin toss between near-identical energies.
+
+The whole change is O(1) in stack depth: only the running top two energies and
+two index maps are held, never a per-frame stack.
+
+**Effect on the rest of the suite.** Better on five of the six scenarios and
+level on the sixth: depth_edge 31.93 -> 35.10 dB, low_contrast 51.61 -> 59.75,
+saturated_colour 24.81 -> 30.41, long_stack 27.62 -> 28.10, fine_texture 31.64
+unchanged. sensor_noise costs 0.5 dB (38.62 -> 38.13) - a high-pass measure sees
+grain more clearly than a variance measure does, so the method stays the weakest
+of the classical three on a noisy stack, as
+`test_dct_struggles_most_with_noise` still asserts.
+
+**Cost.** 226 -> 309 ms for 8 frames of 1600x2400 on CPU (+37%): one extra
+full-resolution box blur, against one fewer block resize. DCT remains by far the
+fastest method - the same stack takes 852 ms through the guided filter, 965 ms
+through the pyramid and 1031 ms through GFG-FGF.
+
+**Two things this does not fix**, both measured rather than assumed:
+
+- **Order dependence (item 4) survives.** Exact ties no longer fall to the
+  lowest index, but the coarse scale breaks its own near-ties the same way:
+  agreement across four shuffles of a 12-frame stack is 29.7 dB, against 30.2 dB
+  before.
+- **`kernel_size` now does even less.** The decision map arrives at the median
+  filter already regionally coherent, so the consistency step has little left to
+  remove: across kernels 3 to 31 the result varies by 0.05 dB on `long_stack`
+  (was 0.61 dB) and not at all on `fine_texture` or `sensor_noise`. The slider is
+  approaching item 9's territory - a dial that no longer changes anything - and
+  is worth re-examining.
+
+Both paths landed together, as item 11 requires: `dct_torch.py` reproduces the
+box blur with a reflect-padded `avg_pool2d` and agrees with the CPU path bit for
+bit on the fixture (`test_gpu_matches_cpu[dct]` passes, and CPU/GPU agreement on
+260 random frames improves from 7.7 to 12.5 dB).
+
+---
+
 ## Cross-cutting
 
 **GPU is consistently worth it - and has since become the default.** Speed-ups
@@ -709,8 +802,10 @@ throws away. Surfacing "how sure was it here" - the margin between the best and
 second-best frame - would let the UI flag regions where the stack simply lacks a
 sharp frame, which is the most common cause of a disappointing render and is
 currently invisible to the user. Still open at 1.11.0; the raw material now
-exists in every method (`max_variance_map` in DCT, `best_energy` in the depth
-map and pyramid, the weight maps in GFF/GFG-FGF), but none of it is returned.
+exists in every method (`best_energy` in DCT, the depth map and pyramid, the
+weight maps in GFF/GFG-FGF), but none of it is returned. Item 17 since gave DCT
+the margin itself - `best_energy - second_energy`, already computed per block -
+so for that method the metric now exists outright and only needs surfacing.
 
 **The neural methods have no CPU fallback path worth using.** StackMFF-V4 on CPU
 is usable but slow, and there is no smaller variant. Not a defect, but it shapes

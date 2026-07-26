@@ -84,7 +84,7 @@ class RenderMethodHelpDialog(HelpDialog):
     Guided-filter fusion tuned for practical edge preservation. Ideal for simpler scenes or moderate focus variations. The kernel slider sets the base/detail split, but this method reconstructs base + detail exactly, so the setting has almost no visible effect - leave it at the default unless you have a reason not to.</p>
 
     <p>DCT<br/>
-    Frequency-domain fusion that evaluates block-wise DCT variance and keeps the sharpest contributor per region. It is fast, fully CPU-based, and works well when you need crisp edges without deploying neural models.</p>
+    Frequency-domain fusion that measures the fine detail in each block of the frame and keeps the sharpest contributor per region. Broad shading is discounted, so a blurred bright area cannot pass for a sharp one. It is fast, fully CPU-based, and works well when you need crisp edges without deploying neural models.</p>
 
     <p>DTCWT<br/>
     Dual-tree complex wavelet fusion that decomposes the stack across scales and orientations before recombining it. It is well suited to intricate, high-frequency content where retaining fine detail is critical.</p>
