@@ -15,9 +15,9 @@ Both are spliced into the already-encoded file rather than written by re-saving
 it through an imaging library. Re-saving a JPEG would recompress pixels that
 were just written at quality 100, and a 16-bit RGB PNG would not survive the
 round trip at all, since Pillow has no matching mode. Inserting a JPEG APP1
-segment or a PNG chunk leaves every encoded pixel byte untouched.
+segment, a PNG chunk or a JPEG XL box leaves every encoded pixel byte untouched.
 
-Only JPEG and PNG are handled here; TIFF and BMP saves are left alone.
+JPEG, PNG and JPEG XL are handled here; TIFF and BMP saves are left alone.
 """
 
 import os
@@ -37,7 +37,7 @@ CAMERA_NS = "https://github.com/Xinzhe99/OpenFocus/ns/camera/1.0/"
 CAMERA_PREFIX = "Camera"
 
 # Containers that can carry the metadata. Everything else is written as-is.
-TAGGABLE_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif", ".png"}
+TAGGABLE_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".jxl"}
 
 _JPEG_SOI = b"\xff\xd8"
 _JPEG_APP0 = b"\xff\xe0"
@@ -50,6 +50,12 @@ _MAX_JPEG_PAYLOAD = 0xFFFF - 2
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PNG_XMP_KEYWORD = b"XML:com.adobe.xmp"
+
+# A JPEG XL container opens with a signature box; a file that starts with the
+# codestream marker instead is a bare codestream and has nowhere to put a box.
+_JXL_CONTAINER_SIGNATURE = b"\x00\x00\x00\x0cJXL \r\n\x87\n"
+_JXL_EXIF_BOX = b"Exif"
+_JXL_XMP_BOX = b"xml "
 
 # Byte order marks of a TIFF header, which is what an EXIF block really is.
 _TIFF_HEADERS = (b"II*\x00", b"MM\x00*")
@@ -344,6 +350,8 @@ def embed(file_path: str, metadata: Optional[RenderMetadata]) -> bool:
 
         if ext == ".png":
             tagged = _png_with_metadata(data, exif, xmp)
+        elif ext == ".jxl":
+            tagged = _jxl_with_metadata(data, exif, xmp)
         else:
             tagged = _jpeg_with_metadata(data, exif, xmp)
 
@@ -447,3 +455,46 @@ def _png_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Option
     chunks.append(_png_chunk(b"iTXt", _PNG_XMP_KEYWORD + b"\x00" * 5 + xmp))
 
     return data[:insert_at] + b"".join(chunks) + data[insert_at:]
+
+
+# ----------------------------------------------------------------------
+# JPEG XL
+# ----------------------------------------------------------------------
+def _jxl_box(box_type: bytes, payload: bytes) -> bytes:
+    """Build one JPEG XL container box: 32-bit size (counting itself), type, data."""
+    return (len(payload) + 8).to_bytes(4, "big") + box_type + payload
+
+
+def _jxl_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Optional[bytes]:
+    """Insert Exif and XMP boxes into a JPEG XL container, ahead of the codestream.
+
+    utils.jxl always writes the container form precisely so this can be done.
+    The boxes go after the header boxes that must come first - the signature box
+    and ftyp - and before whatever follows, which keeps the metadata readable
+    from a stream and leaves the codestream boxes byte-identical.
+
+    An Exif box holds a 32-bit offset to the start of the TIFF header before the
+    block itself; OpenFocus writes the block at the front, so the offset is 0.
+    """
+    if not data.startswith(_JXL_CONTAINER_SIGNATURE):
+        # A bare codestream: valid JPEG XL, but boxless, so there is nothing to
+        # splice into. utils.jxl does not produce these.
+        return None
+
+    # Walk past the leading header boxes to find where a metadata box may start.
+    insert_at = len(_JXL_CONTAINER_SIGNATURE)
+    while True:
+        header = data[insert_at:insert_at + 8]
+        if len(header) < 8 or header[4:8] != b"ftyp":
+            break
+        size = int.from_bytes(header[0:4], "big")
+        if size < 8 or insert_at + size > len(data):
+            return None
+        insert_at += size
+
+    boxes = []
+    if exif:
+        boxes.append(_jxl_box(_JXL_EXIF_BOX, (0).to_bytes(4, "big") + exif))
+    boxes.append(_jxl_box(_JXL_XMP_BOX, xmp))
+
+    return data[:insert_at] + b"".join(boxes) + data[insert_at:]

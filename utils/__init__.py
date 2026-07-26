@@ -4,6 +4,7 @@ Utility modules for OpenFocus.
 Modules:
 - image_utils: Image conversion functions (pixmap <-> cv2)
 - bitdepth: 8/16-bit depth policy and conversion
+- jxl: JPEG XL encoding, optional and off when imagecodecs is absent
 - ui_utils: UI-related functions (message boxes, dialogs)
 - metadata: EXIF passthrough and OpenFocus XMP for saved results
 - validators: Validation and utility functions
@@ -24,6 +25,7 @@ from utils.image_utils import (
     write_image,
 )
 
+from utils import jxl
 from utils import metadata
 from utils.metadata import RenderMetadata
 
@@ -97,6 +99,8 @@ __all__ = [
     'ensure_bgr',
     'read_image_any_depth',
     'write_image',
+    # jxl
+    'jxl',
     # metadata
     'metadata',
     'RenderMetadata',

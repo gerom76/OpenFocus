@@ -10,6 +10,7 @@ from core import contrast
 from dialogs import DurationDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
+    jxl,
     write_image,
     show_error_box,
     show_message_box,
@@ -27,6 +28,12 @@ ALLOWED_EXPORT_EXTENSION_MAP = {
     ".tiff": ".tiff",
 }
 
+# JPEG XL needs an encoder this build may not have; offering it in the dialogs
+# when it cannot be written would only produce failed saves, so it is added to
+# the accepted extensions only once utils.jxl reports a backend.
+if jxl.is_available():
+    ALLOWED_EXPORT_EXTENSION_MAP[".jxl"] = ".jxl"
+
 EXPORT_EXTENSION_ALIASES = {
     ".jpeg": ".jpg",
     ".jpe": ".jpg",
@@ -35,6 +42,22 @@ EXPORT_EXTENSION_ALIASES = {
 }
 
 DEFAULT_EXPORT_EXTENSION = ".png"
+
+
+def save_dialog_filter() -> str:
+    """Filter string for the save dialogs, with JPEG XL only where it can be written."""
+    supported = "*.png *.jpg *.bmp *.tif *.tiff"
+    entries = [
+        "JPG Files (*.jpg)",
+        "PNG Files (*.png)",
+        "Bitmap Files (*.bmp)",
+        "TIFF Files (*.tif *.tiff)",
+    ]
+    if jxl.is_available():
+        supported += " *.jxl"
+        entries.append("JPEG XL Files (*.jxl)")
+    entries.append("All Files (*)")
+    return f"All Supported Formats ({supported});;" + ";;".join(entries)
 
 
 class ExportManager:
@@ -200,8 +223,7 @@ class ExportManager:
             window,
             title,
             window.settings_manager.default_output_path(default_filename),
-            "All Supported Formats (*.png *.jpg *.bmp *.tif *.tiff);;"
-            "JPG Files (*.jpg);;PNG Files (*.png);;Bitmap Files (*.bmp);;TIFF Files (*.tif *.tiff);;All Files (*)",
+            save_dialog_filter(),
         )
 
         if not file_path:

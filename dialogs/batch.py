@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 )
 from ui.styles import PRIMARY_BLUE
 from locales import trans
-from utils import log_message_box, show_warning_box
+from utils import jxl, log_message_box, show_warning_box
 
 
 class BatchProcessingDialog(QDialog):
@@ -243,7 +243,13 @@ class BatchProcessingDialog(QDialog):
         
         format_layout.addWidget(QLabel(trans.t('batch_format_label')))
         self.format_combo = QComboBox()
-        self.format_combo.addItems(["JPG", "PNG", "BMP", "TIFF"])
+        formats = ["JPG", "PNG", "BMP", "TIFF"]
+        # The combo text is lower-cased into the output extension, so the entry
+        # is the extension itself. It is only offered when this build can encode
+        # JPEG XL - see utils.jxl.
+        if jxl.is_available():
+            formats.append("JXL")
+        self.format_combo.addItems(formats)
         self.format_combo.currentTextChanged.connect(self.on_format_changed)
         format_layout.addWidget(self.format_combo)
         

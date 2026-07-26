@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QListWidgetItem, QMenu, QMessageBox
 
 from utils import write_image, cv2_to_pixmap, fit_list_rows_to_thumbnails
 from utils import show_error_box, show_message_box, show_success_box, show_warning_box
+from controllers.export_manager import save_dialog_filter
 from core import render_options
 from locales import trans
 
@@ -152,7 +153,7 @@ class OutputManager:
             window,
             trans.t("action_save"),
             window.settings_manager.default_output_path(default_filename),
-            "PNG Files (*.png);;JPG Files (*.jpg);;Bitmap Files (*.bmp);;TIFF Files (*.tif *.tiff);;All Files (*)",
+            save_dialog_filter(),
         )
 
         if not file_path:

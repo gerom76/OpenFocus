@@ -7,6 +7,7 @@ from typing import Optional
 from PyQt6.QtGui import QPixmap, QImage
 
 from utils import bitdepth
+from utils import jxl
 from utils.metadata import RenderMetadata, embed as embed_metadata
 
 
@@ -69,6 +70,8 @@ def get_imwrite_params(extension: str) -> list:
         # BMP: No quality parameters needed (always lossless)
         return []
     else:
+        # JPEG XL lands here too: it is not encoded by OpenCV at all, so it has
+        # no imwrite parameters - see utils.jxl for its quality settings.
         return []
 
 
@@ -80,23 +83,29 @@ def write_image(
 ) -> bool:
     """Write an image, narrowing it first if the container cannot hold its depth.
 
-    PNG and TIFF store 16 bits per channel; JPEG and BMP do not. Handing 16-bit
-    data to a JPEG encoder does not produce a 16-bit JPEG, so the narrowing has
-    to be explicit. `announce` prints one line when it happens, which the
-    single-image save paths use so the loss is never silent; stack exports log
-    once around the loop instead of once per frame.
+    PNG, TIFF and JPEG XL store 16 bits per channel; JPEG and BMP do not.
+    Handing 16-bit data to a JPEG encoder does not produce a 16-bit JPEG, so the
+    narrowing has to be explicit. `announce` prints one line when it happens,
+    which the single-image save paths use so the loss is never silent; stack
+    exports log once around the loop instead of once per frame.
+
+    JPEG XL is encoded by utils.jxl rather than OpenCV, whose wheels are not
+    built with libjxl; everything else goes through cv2.imwrite.
 
     `metadata` describes the render behind the image. When given, and when the
-    container is JPEG or PNG, the source EXIF and OpenFocus' XMP group are added
-    to the encoded file afterwards - see utils.metadata. Metadata failures never
-    fail the save: the image is already on disk by then.
+    container is JPEG, PNG or JPEG XL, the source EXIF and OpenFocus' XMP group
+    are added to the encoded file afterwards - see utils.metadata. Metadata
+    failures never fail the save: the image is already on disk by then.
     """
     ext = os.path.splitext(file_path)[1]
     if announce and bitdepth.is_high_depth(image) and not bitdepth.supports_16bit(ext):
         print(f"[Depth] {ext or 'this format'} cannot store 16-bit; saving 8-bit. "
-              f"Use PNG or TIFF to keep the full depth.", flush=True)
+              f"Use PNG, TIFF or JPEG XL to keep the full depth.", flush=True)
     image = bitdepth.prepare_for_write(image, ext)
-    if not cv2.imwrite(file_path, image, get_imwrite_params(ext)):
+    if jxl.is_jxl(ext):
+        if not jxl.write(file_path, image):
+            return False
+    elif not cv2.imwrite(file_path, image, get_imwrite_params(ext)):
         return False
 
     if metadata is not None:

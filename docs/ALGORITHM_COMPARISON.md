@@ -269,9 +269,9 @@ stays 16-bit through alignment, fusion and export. Mode selectable under
 ARW, RAF, DNG and ORF identically.
 ³ Since 1.8.0 the map drives a fusion method (`Depth Map`) but is still not
 *exported* as a file — see §1 note 1.
-⁴ **Closed in 1.16.0.** A saved JPEG or PNG inherits the EXIF block of the first
-source frame of the render, and carries an XMP packet with OpenFocus' version,
-render date, render duration and every option the render ran with
+⁴ **Closed in 1.16.0.** A saved JPEG, PNG or JPEG XL inherits the EXIF block of
+the first source frame of the render, and carries an XMP packet with OpenFocus'
+version, render date, render duration and every option the render ran with
 (`core/render_options.py`), plus a `Camera` section cloning every camera tag of
 that source as text. Both are spliced into the encoded file, so nothing is
 recompressed — see `utils/metadata.py`. TIFF and BMP outputs are still written

@@ -13,6 +13,10 @@ cupy-cuda13x
 pytorch_wavelets
 PyWavelets
 
+# JPEG XL output; without it utils/jxl.py reports the format as unavailable and
+# the save dialogs, batch format list and export filters leave it out.
+imagecodecs
+
 # FLOP counting, used only by the __main__ block of core/models/stackmffv4_network.py
 fvcore
 

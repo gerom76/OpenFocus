@@ -41,7 +41,7 @@ OpenFocus is a professional multi-focus image fusion desktop application designe
 
 ### Supported Output Formats
 
-- Individual images: JPG, PNG, BMP, TIFF
+- Individual images: JPG, PNG, BMP, TIFF, JXL (JPEG XL, with `imagecodecs` installed)
 - Image sequences: Saved as folders
 - Animations: GIF format
 
@@ -458,6 +458,7 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 - **PNG**: Lossless, supports transparency
 - **BMP**: Uncompressed, maximum quality
 - **TIFF**: High quality, supports layers
+- **JXL** (JPEG XL): Lossless and much smaller than PNG, keeps 16-bit depth and carries the EXIF/XMP metadata. Requires `pip install imagecodecs`; without it the format is not offered
 - **GIF**: Animation format
 
 ---

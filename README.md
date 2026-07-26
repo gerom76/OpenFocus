@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.26**: **JPEG XL output.** Results can be saved as `.jxl` — lossless, typically half the size of the equivalent PNG, and 16-bit throughout, with the same EXIF/XMP metadata written into the container's boxes. Available in the save dialogs, drag-out and the batch format list; needs `pip install imagecodecs`, and is simply not offered without it.
+
 > 🎉 **2026.07.26**: **Metadata on saved results.** A fused JPEG or PNG now inherits the **EXIF** block of the first source frame of the render — camera, lens and exposure survive the stack — and carries an **XMP** packet with two groups: `OpenFocus`, holding the program version, render date, render duration and **every option the render ran with** (registration stages and reference frame, fusion method, kernel and halo size, IFCNN, contrast, ROI, tiling, bit depth, processing unit), and `Camera`, every camera tag of the source cloned as plain text so the shot's settings read without an EXIF parser. Both are spliced into the encoded file, so pixels are never recompressed and 16-bit PNG stays 16-bit. Applies to single saves, drag-out and batch output.
 
 > 🎉 **2026.07.24**: Selectable **Reference Frame** for registration — choose which frame the alignment chain is anchored to: *First* (frame 0, the historical default), *Middle*, or *Last*. Anchoring on the middle frame halves the longest chain, spreading accumulated drift symmetrically instead of piling it up at the far end of long stacks. The reference frame is held fixed (cropped, never warped); set it under **Settings → Registration**.
@@ -83,8 +85,8 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **Beginner-Friendly**: Plug-and-play workflows with unapologetically simple, guided operations.
 - **Flexible Processing Flows**: Run fusion-only, registration-only, or combined registration + fusion pipelines depending on your workload.
 - **Batch Automation**: Kick off batch jobs across multiple folders with live progress, cancellation, and automatic output organization.
-- **Annotation & Export Toolkit**: Overlay labels, export GIF animations, and save processed stacks in JPG/PNG/BMP/TIFF with consistent metadata handling.
-- **Metadata Passthrough**: A saved JPG/PNG result keeps the EXIF of the first source frame, clones its camera tags into a readable XMP `Camera` section, and records the OpenFocus version, render date, render duration and the full set of options the render used in an `OpenFocus` group — enough to reproduce the render, all added without recompressing the image.
+- **Annotation & Export Toolkit**: Overlay labels, export GIF animations, and save processed stacks in JPG/PNG/BMP/TIFF/JXL with consistent metadata handling.
+- **Metadata Passthrough**: A saved JPG/PNG/JXL result keeps the EXIF of the first source frame, clones its camera tags into a readable XMP `Camera` section, and records the OpenFocus version, render date, render duration and the full set of options the render used in an `OpenFocus` group — enough to reproduce the render, all added without recompressing the image.
 - **AI-Assisted Fusion**: Ship with StackMFF V4 to unlock deep-learning-quality fusion alongside classic signal-processing methods.
 - **16-bit Processing**: RAW and 16-bit TIFF/PNG stacks stay at full depth from load through alignment, fusion and export — no banding in smooth gradients, and headroom left for blending. Auto-engages on >8-bit sources, or force 8/16-bit from *Settings → Bit Depth*.
 - **Contrast Enhancement**: Optional post-fusion tone control — *Auto* (color-safe global curve) or *Local* (CLAHE) with a strength slider. Applies after fusion and previews live without re-rendering, so it never alters the stored result. Color-safe and depth-aware.
