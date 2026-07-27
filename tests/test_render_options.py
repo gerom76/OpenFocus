@@ -57,6 +57,17 @@ class TestParameterRelevance:
         assert "StackMffBatchSize" not in render_options.describe(
             algorithm="pyramid", stackmffv4_batch_size=4)
 
+    def test_pyramid_tuning_is_only_reported_for_the_pyramid(self):
+        options = render_options.describe(algorithm="pyramid")
+        # Quoted even when nothing was chosen: what ran is the method default,
+        # and an absent property would read as "this build had no such control".
+        assert set(options) >= {
+            "PyramidLevels", "PyramidSelectivity", "PyramidCoherence",
+            "PyramidBaseWeighting", "PyramidNoiseGate", "PyramidEnvelopeClip",
+        }
+        assert not any(name.startswith("Pyramid") for name in
+                       render_options.describe(algorithm="dct", pyramid_levels=4))
+
     def test_registration_details_are_dropped_when_nothing_was_aligned(self):
         options = render_options.describe(reference_mode="middle", reg_downscale_width=1024)
         assert options["Registration"] == "Off"
@@ -119,6 +130,41 @@ class TestWording:
 
         bitdepth.set_mode(bitdepth.MODE_8)
         assert render_options.describe()["BitDepth"] == "Forced 8-bit"
+
+    def test_pyramid_presets_read_as_a_name_and_the_number_behind_it(self):
+        options = render_options.describe(
+            algorithm="pyramid", kernel_size=5, pyramid_levels=6,
+            pyramid_selectivity=32.0, pyramid_coherence=0.25, pyramid_base=0.0,
+            pyramid_noise_gate=False, pyramid_envelope=True,
+        )
+        assert options["KernelSize"] == "5 px"
+        assert options["PyramidLevels"] == "6"
+        assert options["PyramidSelectivity"] == "Strict (32)"
+        assert options["PyramidCoherence"] == "Light (0.25)"
+        assert options["PyramidBaseWeighting"] == "Mean (0)"
+        assert options["PyramidNoiseGate"] == "Off"
+        assert options["PyramidEnvelopeClip"] == "On"
+
+    def test_pyramid_defaults_are_named_rather_than_left_blank(self):
+        options = render_options.describe(algorithm="pyramid")
+        # Depth 0 is the UI's "let the method decide" and resolves at render
+        # time against the image size, so there is no number to quote.
+        assert options["PyramidLevels"] == "Auto"
+        assert options["PyramidSelectivity"] == "Balanced (8)"
+        assert options["PyramidCoherence"] == "Off (0)"
+        assert options["PyramidBaseWeighting"] == "Balanced (3)"
+        assert options["PyramidNoiseGate"] == "On"
+        assert options["PyramidEnvelopeClip"] == "On"
+
+    def test_choose_max_selectivity_is_spelled_out(self):
+        """inf is the published choose-max rule; 'inf' would name nothing."""
+        assert render_options.describe(
+            algorithm="pyramid",
+            pyramid_selectivity=float("inf"))["PyramidSelectivity"] == "Winner (choose-max)"
+
+    def test_a_pyramid_value_no_preset_holds_is_quoted_on_its_own(self):
+        assert render_options.describe(
+            algorithm="pyramid", pyramid_selectivity=12.5)["PyramidSelectivity"] == "12.5"
 
     def test_every_value_is_a_string(self):
         """The XMP writer escapes strings; a stray int would slip through it."""

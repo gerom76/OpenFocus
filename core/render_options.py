@@ -12,8 +12,14 @@ months later: units are spelled out, and a stage that did not run says so
 instead of being absent.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence, Tuple
 
+from constants import (
+    PYRAMID_BASE_DEFAULT, PYRAMID_BASE_PRESETS,
+    PYRAMID_COHERENCE_DEFAULT, PYRAMID_COHERENCE_PRESETS,
+    PYRAMID_ENVELOPE_DEFAULT, PYRAMID_NOISE_GATE_DEFAULT,
+    PYRAMID_SELECTIVITY_DEFAULT, PYRAMID_SELECTIVITY_PRESETS,
+)
 from utils import bitdepth
 
 # Display names of the fusion algorithms, keyed by the internal algorithm id
@@ -46,6 +52,67 @@ _OFF = "Off"
 
 def _on_off(flag: Any) -> str:
     return _ON if flag else _OFF
+
+
+def _preset(value: Any,
+            presets: Sequence[Tuple[str, float]],
+            default_key: str) -> str:
+    """Name the preset a pyramid exponent came from, e.g. 'Balanced (8)'.
+
+    A render carries the number the combo stood for, not the key it was picked
+    from, so the name is found back by value. Both are written: the name is what
+    the UI called it, the number is what the method did, and a retuned preset
+    would otherwise make two files claiming 'balanced' incomparable. A value no
+    preset holds - a settings file edited by hand - is quoted on its own.
+
+    `None` means the caller never chose, so the method ran on its own default;
+    that is what gets recorded, since it is what produced the pixels.
+    """
+    values = dict(presets)
+    if value is None:
+        value = values[default_key]
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    # inf compares equal to itself, so the choose-max preset is found like any
+    # other; it is spelled out because 'inf' names nothing on its own.
+    text = "choose-max" if number == float("inf") else f"{number:g}"
+    name = next((key for key, preset in presets if preset == number), None)
+    return f"{name.capitalize()} ({text})" if name else text
+
+
+def _pyramid_options(levels: Optional[int],
+                     selectivity: Any,
+                     coherence: Any,
+                     base_selectivity: Any,
+                     noise_gate: Optional[bool],
+                     envelope: Optional[bool]) -> Dict[str, str]:
+    """The pyramid's own tuning, as XMP properties.
+
+    Every control the method reads is quoted, including the ones left alone: a
+    property missing from the packet cannot be told apart from a build that had
+    no such control, which is exactly the question somebody rereading an old
+    render asks. The energy window is not repeated here - it is the kernel
+    slider, and `KernelSize` above already carries it.
+    """
+    return {
+        # 0 or None is the UI's "let the method decide", which resolves against
+        # the image size at render time rather than to a fixed number.
+        "PyramidLevels": f"{int(levels)}" if levels else "Auto",
+        "PyramidSelectivity": _preset(
+            selectivity, PYRAMID_SELECTIVITY_PRESETS, PYRAMID_SELECTIVITY_DEFAULT),
+        "PyramidCoherence": _preset(
+            coherence, PYRAMID_COHERENCE_PRESETS, PYRAMID_COHERENCE_DEFAULT),
+        "PyramidBaseWeighting": _preset(
+            base_selectivity, PYRAMID_BASE_PRESETS, PYRAMID_BASE_DEFAULT),
+        "PyramidNoiseGate": _on_off(
+            PYRAMID_NOISE_GATE_DEFAULT if noise_gate is None else noise_gate),
+        "PyramidEnvelopeClip": _on_off(
+            PYRAMID_ENVELOPE_DEFAULT if envelope is None else envelope),
+    }
 
 
 def describe_contrast(method: str, strength: int) -> str:
@@ -83,6 +150,12 @@ def describe(
     tile_overlap: Optional[int] = None,
     tile_threshold: Optional[int] = None,
     stackmffv4_batch_size: Optional[int] = None,
+    pyramid_levels: Optional[int] = None,
+    pyramid_selectivity: Any = None,
+    pyramid_coherence: Any = None,
+    pyramid_base: Any = None,
+    pyramid_noise_gate: Optional[bool] = None,
+    pyramid_envelope: Optional[bool] = None,
     result_dtype: Any = None,
     device_name: Optional[str] = None,
     thread_count: Optional[int] = None,
@@ -130,6 +203,11 @@ def describe(
             options["HaloRadius"] = f"{int(halo_radius)} px" if halo_radius else _OFF
         if algorithm == "stackmffv4" and stackmffv4_batch_size:
             options["StackMffBatchSize"] = str(int(stackmffv4_batch_size))
+        if algorithm == "pyramid":
+            options.update(_pyramid_options(
+                pyramid_levels, pyramid_selectivity, pyramid_coherence,
+                pyramid_base, pyramid_noise_gate, pyramid_envelope,
+            ))
         options["IfcnnRefinement"] = _on_off(ifcnn_refine)
     else:
         options["FusionMethod"] = "None (registration only)"

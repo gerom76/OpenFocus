@@ -913,6 +913,14 @@ class BatchWorker(QThread):
                 tile_overlap=self.tile_overlap,
                 tile_threshold=self.tile_threshold,
                 stackmffv4_batch_size=self.stackmffv4_batch_size,
+                # Same keys the batch dialog writes into fusion_params, and the
+                # same ones the pyramid call above reads.
+                pyramid_levels=fusion_params.get('levels'),
+                pyramid_selectivity=fusion_params.get('selectivity'),
+                pyramid_coherence=fusion_params.get('coherence'),
+                pyramid_base=fusion_params.get('base_selectivity'),
+                pyramid_noise_gate=fusion_params.get('noise_gate'),
+                pyramid_envelope=fusion_params.get('envelope'),
                 result_dtype=getattr(result, "dtype", None),
                 thread_count=self.thread_count,
             ),
