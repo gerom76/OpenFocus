@@ -39,7 +39,7 @@ class TestParameterRelevance:
         options = render_options.describe(algorithm=algorithm, kernel_size=31)
         assert options["KernelSize"] == "31 px"
 
-    @pytest.mark.parametrize("algorithm", ["dtcwt", "pyramid", "stackmffv4"])
+    @pytest.mark.parametrize("algorithm", ["dtcwt", "stackmffv4"])
     def test_methods_that_ignore_the_kernel_do_not_quote_it(self, algorithm):
         options = render_options.describe(algorithm=algorithm, kernel_size=31)
         assert "KernelSize" not in options

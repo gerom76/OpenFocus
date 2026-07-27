@@ -28,6 +28,16 @@ from constants import (
     DCT_PLATEAU_DEFAULT,
     DCT_PLATEAU_PRESETS,
     KERNEL_SIZE_MAX_DCT,
+    PYRAMID_BASE_DEFAULT,
+    PYRAMID_BASE_PRESETS,
+    PYRAMID_COHERENCE_DEFAULT,
+    PYRAMID_COHERENCE_PRESETS,
+    PYRAMID_ENVELOPE_DEFAULT,
+    PYRAMID_LEVELS,
+    PYRAMID_LEVELS_DEFAULT,
+    PYRAMID_NOISE_GATE_DEFAULT,
+    PYRAMID_SELECTIVITY_DEFAULT,
+    PYRAMID_SELECTIVITY_PRESETS,
 )
 from dialogs import RegistrationHelpDialog, RenderMethodHelpDialog
 from ui.styles import (
@@ -75,6 +85,17 @@ class RightPanelComponents:
     dct_widget: QWidget
     lbl_dct_block: QLabel
     lbl_dct_plateau: QLabel
+    combo_pyr_levels: QComboBox
+    combo_pyr_selectivity: QComboBox
+    combo_pyr_coherence: QComboBox
+    combo_pyr_base: QComboBox
+    cb_pyr_noise_gate: QCheckBox
+    cb_pyr_envelope: QCheckBox
+    pyramid_widget: QWidget
+    lbl_pyr_levels: QLabel
+    lbl_pyr_selectivity: QLabel
+    lbl_pyr_coherence: QLabel
+    lbl_pyr_base: QLabel
     combo_contrast: QComboBox
     slider_contrast: QSlider
     contrast_value_label: QLabel
@@ -268,6 +289,63 @@ def create_right_panel() -> RightPanelComponents:
     dct_widget.setEnabled(False)  # only DCT uses these
     config_layout.addWidget(dct_widget)
 
+    # Pyramid tuning (Pyramid only) -------------------------
+    # Six controls is more than the panel can afford to keep greyed out the way
+    # the DCT block above is, so this one is hidden instead of disabled. Hiding
+    # a widget keeps its state, so switching methods and back does not forget
+    # what was set.
+    pyramid_widget = QWidget()
+    pyramid_layout = QVBoxLayout(pyramid_widget)
+    pyramid_layout.setContentsMargins(0, 5, 0, 5)
+
+    def _preset_row(label_key, presets, default_key):
+        """One 'label ........ [combo]' row; the combo carries the preset key."""
+        row = QHBoxLayout()
+        label = QLabel(trans.t(label_key))
+        row.addWidget(label)
+        row.addStretch()
+        combo = QComboBox()
+        for key, _value in presets:
+            combo.addItem(trans.t(f'{label_key}_{key}'), key)
+        combo.setCurrentIndex([k for k, _ in presets].index(default_key))
+        row.addWidget(combo)
+        pyramid_layout.addLayout(row)
+        return label, combo
+
+    pyr_levels_row = QHBoxLayout()
+    lbl_pyr_levels = QLabel(trans.t('label_pyr_levels'))
+    pyr_levels_row.addWidget(lbl_pyr_levels)
+    pyr_levels_row.addStretch()
+    combo_pyr_levels = QComboBox()
+    for depth in PYRAMID_LEVELS:
+        # 0 is "as deep as the image allows", which is what every render did
+        # before the control existed.
+        combo_pyr_levels.addItem(trans.t('pyr_levels_auto') if depth == 0
+                                 else str(depth), depth)
+    combo_pyr_levels.setCurrentIndex(list(PYRAMID_LEVELS).index(PYRAMID_LEVELS_DEFAULT))
+    pyr_levels_row.addWidget(combo_pyr_levels)
+    pyramid_layout.addLayout(pyr_levels_row)
+
+    lbl_pyr_selectivity, combo_pyr_selectivity = _preset_row(
+        'label_pyr_selectivity', PYRAMID_SELECTIVITY_PRESETS,
+        PYRAMID_SELECTIVITY_DEFAULT)
+    lbl_pyr_coherence, combo_pyr_coherence = _preset_row(
+        'label_pyr_coherence', PYRAMID_COHERENCE_PRESETS,
+        PYRAMID_COHERENCE_DEFAULT)
+    lbl_pyr_base, combo_pyr_base = _preset_row(
+        'label_pyr_base', PYRAMID_BASE_PRESETS, PYRAMID_BASE_DEFAULT)
+
+    cb_pyr_noise_gate = QCheckBox(trans.t('label_pyr_noise_gate'))
+    cb_pyr_noise_gate.setChecked(PYRAMID_NOISE_GATE_DEFAULT)
+    pyramid_layout.addWidget(cb_pyr_noise_gate)
+
+    cb_pyr_envelope = QCheckBox(trans.t('label_pyr_envelope'))
+    cb_pyr_envelope.setChecked(PYRAMID_ENVELOPE_DEFAULT)
+    pyramid_layout.addWidget(cb_pyr_envelope)
+
+    pyramid_widget.setVisible(False)  # shown only while Pyramid is selected
+    config_layout.addWidget(pyramid_widget)
+
     # Contrast (post-fusion output enhancement) --------------
     contrast_widget = QWidget()
     contrast_layout = QVBoxLayout(contrast_widget)
@@ -453,6 +531,17 @@ def create_right_panel() -> RightPanelComponents:
         dct_widget=dct_widget,
         lbl_dct_block=lbl_dct_block,
         lbl_dct_plateau=lbl_dct_plateau,
+        combo_pyr_levels=combo_pyr_levels,
+        combo_pyr_selectivity=combo_pyr_selectivity,
+        combo_pyr_coherence=combo_pyr_coherence,
+        combo_pyr_base=combo_pyr_base,
+        cb_pyr_noise_gate=cb_pyr_noise_gate,
+        cb_pyr_envelope=cb_pyr_envelope,
+        pyramid_widget=pyramid_widget,
+        lbl_pyr_levels=lbl_pyr_levels,
+        lbl_pyr_selectivity=lbl_pyr_selectivity,
+        lbl_pyr_coherence=lbl_pyr_coherence,
+        lbl_pyr_base=lbl_pyr_base,
         combo_contrast=combo_contrast,
         slider_contrast=slider_contrast,
         contrast_value_label=contrast_value_label,

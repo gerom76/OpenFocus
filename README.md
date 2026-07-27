@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.27**: **Pyramid, reworked and opened up.** The textbook choose-max rule copies the sharpest coefficient of every band and discards the rest, which has no answer for the parts of a frame where nothing is in focus — there it picks by grain, stitches the background out of frames that disagree, and reconstructs thin dark filaments no frame ever had. It now weights frames by how far they fall behind the best rather than picking one, compares them in units of their own grain, lets the frames carrying the detail carry the smooth base with it, and holds every pixel inside the range its own frames span. Every scenario in the test suite improves — **+4.5 dB** on a deep stack with a never-sharp background, **+16.7 dB** where a bright defocused veil used to win, and no invented pixels anywhere — and all six controls behind it are exposed in the right panel, saved, inherited by batch jobs and written into output filenames. See item 19 in [ALGORITHM_IMPROVEMENTS.md](docs/ALGORITHM_IMPROVEMENTS.md).
+
 > 🎉 **2026.07.26**: **JPEG XL output.** Results can be saved as `.jxl` — lossless, typically half the size of the equivalent PNG, and 16-bit throughout, with the same EXIF/XMP metadata written into the container's boxes. Available in the save dialogs, drag-out and the batch format list; needs `pip install imagecodecs`, and is simply not offered without it.
 
 > 🎉 **2026.07.26**: **Metadata on saved results.** A fused JPEG or PNG now inherits the **EXIF** block of the first source frame of the render — camera, lens and exposure survive the stack — and carries an **XMP** packet with two groups: `OpenFocus`, holding the program version, render date, render duration and **every option the render ran with** (registration stages and reference frame, fusion method, kernel and halo size, IFCNN, contrast, ROI, tiling, bit depth, processing unit), and `Camera`, every camera tag of the source cloned as plain text so the shot's settings read without an EXIF parser. Both are spliced into the encoded file, so pixels are never recompressed and 16-bit PNG stays 16-bit. Applies to single saves, drag-out and batch output.
@@ -21,7 +23,7 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 
 > 🎉 **2026.07.23**: New **Depth Map** fusion method with two modes — *Max* (hard per-pixel select, the classic depth map) and *Average* (contrast-weighted blend that recovers multi-frame SNR in flat regions). Both are fully CPU-based and driven by a single focus-measure window. This closes the last two blending families the field treats as mandatory.
 
-> 🎉 **2026.07.23**: New **Pyramid** fusion method — Laplacian-pyramid choose-max blending. Fully CPU-based with no tuning, it scores highest of all methods on our synthetic benchmark and makes a strong, dependable default for typical focus stacks.
+> 🎉 **2026.07.23**: New **Pyramid** fusion method — Laplacian-pyramid choose-max blending. Fully CPU-based with no tuning, it scores highest of all methods on our synthetic benchmark and makes a strong, dependable default for typical focus stacks. *(Reworked on 2026.07.27 — see above.)*
 
 > 🎉 **2026.07.23**: Optional **contrast enhancement** for fused output. Pick *Auto* (color-safe global tone curve) or *Local* (CLAHE) with a strength slider — it applies after fusion and updates the preview live, so the stored result stays untouched. Off by default.
 
@@ -99,7 +101,7 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **DCT Multi-Focus Fusion**: Frequency-domain technique optimized for crisp detail recovery.
 - **Dual-Tree Complex Wavelet Transform (DTCWT)**: Multi-scale representation that preserves fine texture structures.
 - **GFG-FGF**: GFG-FGF is based on a generalized four-neighborhood Gaussian gradient (GFG) operator combined with a fast guided filter (FGF). 
-- **Pyramid**: Laplacian-pyramid choose-max fusion that selects, band by band, the coefficient carrying the most local energy. CPU-based, tuning-free, and a strong general-purpose default.
+- **Pyramid**: Laplacian-pyramid fusion. Band by band, each frame is weighted by how far its local energy falls behind the best on offer, so a sharp frame wins outright while frames that tie — a background no frame resolves — are averaged rather than picked between, and the result is held inside the range its own frames span. Six tuning controls, all defaulted to their measured best. A strong general-purpose default.
 - **Depth Map**: Per-pixel depth-map fusion from a local Laplacian focus measure, in two modes. *Max* takes each pixel whole from the sharpest frame (an order-independent hard select that keeps colour and noise clean within a slice); *Average* blends frames by their focus measure, so flat regions collapse to the mean and recover the stack's multi-frame SNR (√N noise reduction) while detail still follows the sharpest frame.
 - **StackMFF V4**: Pretrained deep model delivering state-of-the-art focus stacking quality.
 

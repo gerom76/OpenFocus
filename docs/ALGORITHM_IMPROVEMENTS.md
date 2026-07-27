@@ -15,9 +15,11 @@ Items 1-10 are the original audit. Items 11-16 were added by a follow-up at
 1.11.0 that re-verified every claim below against the code; the follow-up also
 covered the two methods added since the audit - `pyramid.py` and `depthmap.py` -
 which were written to this document's standards and contribute only items 15
-and 16. The **Fixed** column tracks how much of each item has actually landed;
-a partial percentage means a mitigation shipped but the underlying issue
-remains.
+and 16. Items 17-19 came from real stacks rather than from an audit, and all
+three are the same failure in three methods' clothing: a selection rule with no
+answer for the parts of a frame where nothing is in focus. The **Fixed** column
+tracks how much of each item has actually landed; a partial percentage means a
+mitigation shipped but the underlying issue remains.
 
 ---
 
@@ -43,11 +45,13 @@ remains.
 | 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift - *fixed in 1.11.3* | Low | Medium | 100% |
 | 17 | DCT | Quality | Focus measured as total block contrast, and grain deciding the rest, so blurred frames blank whole regions - *fixed in 1.15.1 and 1.15.2* | High | Low | 100% |
 | 18 | DCT | Quality | Per-block winner never clears its margin in a deep stack, so 91% of blocks fell to a fallback that tore the background - *fixed in 1.17.1* | High | Medium | 100% |
+| 19 | Pyramid | Quality | Choose-max stitches defocused regions out of frames that disagree, reconstructing filaments no frame had, and loses them to grain - *fixed in 1.19.0* | High | Medium | 100% |
 
-**Overall: 61% done** - 11 of 18 items fully fixed, item 8 partially (the GPU
+**Overall: 63% done** - 12 of 19 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched), 6 untouched. Since 1.17.1 a
-quality ratchet (`tests/test_fusion_regression.py`, described after item 18)
-guards every method against silent regressions of the kind items 17 and 18 were.
+quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
+guards every method against silent regressions of the kind items 17, 18 and 19
+were.
 
 ---
 
@@ -946,6 +950,175 @@ contract that holds: every pixel stays inside the envelope its sources span.
 
 **Guarded by** `tests/test_fusion_regression.py` - see below. Both halves of
 this fix trip it when removed.
+
+---
+
+## 19. The pyramid's choose-max has no answer where nothing is in focus
+
+**Category: quality. Impact: high. Effort: medium. Fixed in 1.19.0.**
+
+Reported as thin dark strokes over the smooth, defocused top-right corner of a
+macro render - filaments crossing a background that no frame resolves and no
+frame contains.
+
+The published rule is choose-max: for every band of the Laplacian
+decomposition, copy the coefficient with the most local energy and discard the
+rest. Where one frame is plainly sharper that is the right answer. Where none
+is - which on a macro frame is most of the picture - the energies differ only
+by grain, and three separate things go wrong at once:
+
+- **The winner map becomes a speckle field.** Grain decides it, so neighbouring
+  pixels take their coefficients from frames that disagree about what is there.
+- **The bands of one pixel disagree with each other.** Each band chooses
+  independently, so a pixel can take its fine detail from frame 3 and its
+  coarse structure from frame 40.
+- **The sum of those choices is not near any frame.** Collapsing the pyramid
+  adds bands from different frames, and nothing in the sum keeps the result
+  inside the range the stack spans. On `deep_stack` the render came back up to
+  **24 levels darker than the darkest source**, with 2.05% of the frame more
+  than 8 levels under. A pixel darker than every frame is, by definition,
+  something the reconstruction invented - and over a smooth background a
+  connected run of them is exactly the reported stroke.
+
+A fourth problem was already known from DCT: photon noise grows with
+brightness, so a bright defocused veil carries several times the band energy of
+a dark sharp frame *in grain alone*, wins every detail-free region and stamps
+its flat tone across them. That is item 17, in a method nobody had checked for
+it. On the veil fixture from `tests/test_dct_defocus_wash.py` the pyramid gave
+**32.3% of the subject's smooth body** to a veil frame, and scored 18.5 dB.
+
+**Fix.** Four changes, each aimed at one of the above.
+
+- **Weight instead of choose.** Each frame contributes to a band with weight
+  `(its energy / the best energy) ** selectivity`. At the default of 8 a frame
+  2x behind the winner contributes 0.4%, so a real focus decision is still a
+  decision; where frames tie they average, which is the correct answer for
+  "nothing is in focus here" and takes the speckle field with it. `inf`
+  restores the published rule exactly.
+- **Compare in units of the frame's own grain.** Each band is divided by a low
+  percentile of its own energies, so every frame sits at about 1.0 where it
+  resolves nothing and the veil cannot buy regions with grain. Pixels at
+  exactly zero are left out of that percentile: a clipped-black backdrop is
+  zero over a large part of every frame, and reading the level off those pixels
+  returns zero however much grain the rest carries.
+- **Clamp to the source envelope.** Every pixel is held between the darkest and
+  brightest value its own frames have there. The true all-in-focus value comes
+  from whichever frame resolves the pixel, so it is one of the sources by
+  construction and any blend of them lies between - clamping removes only
+  values no frame supports. It costs a running min and max over the stack, two
+  frames of memory. The block methods get this for free by compositing source
+  pixels; a pyramid composites coefficients, so it has to be imposed.
+- **Let the detail carry the base.** Item 16 replaced the base band's plain
+  mean with a weighting by aggregate activity, which is still far too gentle
+  when most of the stack is defocused: on the veil fixture 24 frames of haze
+  outvote the few that resolve the subject. Raising the exponent to 3 fixes
+  that (18.5 dB at the plain mean, 30.4 at the old weighting, 35.1 at 3, flat
+  past 4).
+
+Measured on every fixture the project has. "Under" is the worst pixel below the
+darkest source, in 8-bit levels, and the share of the frame more than 8 levels
+under it:
+
+| scenario | PSNR before | PSNR after | under before | under after |
+|---|---|---|---|---|
+| fine_texture | 45.45 | 46.05 | 15 / 0.04% | **0** |
+| sensor_noise | 51.15 | 51.94 | 9 / 0.00% | **0** |
+| depth_edge | 35.77 | 37.86 | 5 / 0.00% | **0** |
+| long_stack | 45.68 | 46.12 | 20 / 0.03% | **0** |
+| low_contrast | 68.05 | 69.44 | 1 / 0.00% | **0** |
+| saturated_colour | 33.12 | 33.89 | 28 / 0.10% | **0** |
+| deep_stack | 32.85 | **37.31** | 24 / 2.05% | **0** |
+| veil | 18.46 | **35.12** | 2 / 0.00% | **0** |
+
+Every scenario improves, the two that hold the artefacts by 4.5 and 16.7 dB,
+and the invented pixels are gone everywhere. The veil frames take 0.0% of the
+smooth body, against 32.3% before.
+
+**Cost.** A weighted sum is more arithmetic than a masked copy: 24 frames of
+2048x1364 take 3.6 s against 1.6 s, and `selectivity=inf` runs the old path at
+the old speed (1.4 s). The weights are computed in one streaming pass - the
+running peak is tracked as frames arrive and the accumulated sums are rescaled
+whenever it rises, which is exact rather than approximate - so memory is still
+bounded by the accumulators plus one frame's pyramid, and the stack depth does
+not enter into it.
+
+**One metric moved the wrong way.** `defocus_seam_visible` on `deep_stack` rose
+from 1.5% to 2.7%. It counts steps exceeding three times the *local* typical
+step, and the background is now smooth enough that the local step it is
+measured against halved: `defocus_seam_excess`, the severity, fell from 0.466
+to 0.257. `block_speckle` rose by 0.156, which is one 8x8 cell out of 640 - the
+metric's own quantum, and finer than the tolerance the ratchet gives it. The
+reference image scores 2.188 on that metric itself.
+
+**Guarded by** `tests/test_pyramid_flat_field.py`, which fails on the pre-1.19.0
+settings for both artefacts, and by the quality ratchet.
+
+---
+
+## Tuning Pyramid
+
+Everything item 19 added is exposed, because every one of them is a judgement
+about a trade rather than a fixed truth. The defaults are the measured best on
+the fixtures above; these are the reasons to move them.
+
+**`energy_window` (Kernel slider, default 5).** The window each band's energy
+is pooled over before frames are compared. The pyramid pools again at every
+level, so the window at level k already covers 2**k times as much picture -
+which is why the default is small where the depth map's is 9. Smaller follows
+fine detail and speckles on grain (3 scores 49.8 dB on `fine_texture` against
+46.0, and 29.5 on the veil against 35.1); larger decides regionally and rounds
+off narrow in-focus structures (9 costs 10 dB on `fine_texture`). The slider
+tops out at 51, where the pixel-domain methods' usefulness ends.
+
+**`selectivity` (Selectivity, default Balanced = 8).** The headline control of
+item 19. Average (2) and Soft (4) blend more of the stack into every band -
+smoother backgrounds, softer real detail. Strict (32) and Winner takes all
+(inf) approach the published rule; the last is the published rule, and brings
+its stitched backgrounds with it (flat-field noise 1.39 against 0.63 on the
+veil fixture). 8 and 16 are within a few tenths of a dB of each other on every
+scenario; 2 costs 3-8 dB on the ones with real detail.
+
+**`coherence` (Scale coherence, default Off).** How much of a band's decision
+comes from the coarser bands above it, so the bands of one frame decide
+together: `S[i] = e[i] ** (1 - c) * up(S[i + 1]) ** c`, cascaded from the top,
+so band i+k contributes with weight c**k. It is the one control that is off by
+default. On these fixtures the envelope clamp already removes what it was there
+to prevent, and a coarse-guided decision blurs the choice across a depth
+boundary the coarse band cannot see: 0.5 costs 2.4 dB on `fine_texture` and
+5.3 dB on `long_stack` for no measurable gain in flat-field noise. It is here
+for the stack where the bands visibly disagree anyway - fine detail sitting on
+a base that came from somewhere else - and the UI stops at Strong (0.75)
+because 1.0 hands every band the coarsest band's decision and scores 17.3 dB on
+`fine_texture`. Not a setting to render with; the end of a range.
+
+**`base_selectivity` (Base band, default Balanced = 3).** How hard the coarse
+base follows the frames that won the detail bands. Mean (0) is the pre-1.11.3
+behaviour and the veil fixture shows why it went: 13.9 dB. Gentle (1) is item
+16's weighting, 30.4 dB. Balanced (3) is 35.1, Strong (8) is 35.9 and the gain
+has flattened; against that, Strong costs 0.2 dB on `saturated_colour`. Nothing
+between Gentle and Strong moves the other six scenarios by more than 0.1 dB.
+
+**`noise_gate` (Ignore grain when nothing is sharp, default on).** Off is an
+absolute comparison between frames, which is the published behaviour and what
+lets a bright grainy frame win regions that hold no detail. Worth turning off
+only to see what it is doing.
+
+**`envelope` (Keep pixels within the source range, default on).** Off is what a
+collapsed pyramid does unaided. Worth turning off only to measure the clamp's
+effect, or if a stack legitimately needs values outside its own range, which a
+focus stack does not.
+
+**`levels` (Pyramid levels, default Auto = 5).** Auto means 5, clamped so the
+coarsest band keeps both sides >= 2 px, which is what every render did before
+the control existed. Fewer levels decide focus on coarser structure and can
+miss fine in-focus detail; more separate scales finely and cost time.
+
+**`NOISE_PERCENTILE`, `NOISE_FLOOR_RATIO` and the pyramid kernel stay
+internal.** The first two are the gate's own calibration and have no meaning a
+user could act on; the third is Burt-Adelson's.
+
+All of it is inherited by batch jobs from the main window, and anything not at
+its default goes into the output filename, the way DCT's tuning already does.
 
 ---
 

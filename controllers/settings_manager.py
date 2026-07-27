@@ -204,6 +204,12 @@ class SettingsManager:
             "dct_block_size": window.combo_dct_block.currentData(),
             "dct_plateau": window.combo_dct_plateau.currentData(),
             "dct_blend": window.cb_dct_blend.isChecked(),
+            "pyramid_levels": window.combo_pyr_levels.currentData(),
+            "pyramid_selectivity": window.combo_pyr_selectivity.currentData(),
+            "pyramid_coherence": window.combo_pyr_coherence.currentData(),
+            "pyramid_base": window.combo_pyr_base.currentData(),
+            "pyramid_noise_gate": window.cb_pyr_noise_gate.isChecked(),
+            "pyramid_envelope": window.cb_pyr_envelope.isChecked(),
             "show_status_console": getattr(window, "status_console", None) is not None
                                    and window.status_console.isVisible(),
             "recent_folders": list(self.recent_folders),
@@ -412,3 +418,18 @@ class SettingsManager:
             window.combo_dct_plateau.setCurrentIndex(index)
         if "dct_blend" in data:
             window.cb_dct_blend.setChecked(bool(data["dct_blend"]))
+
+        # Pyramid tuning, matched the same way. The combos carry preset keys
+        # rather than numbers, so a build that retunes a preset moves an old
+        # settings file with it instead of restoring a stale value.
+        for key, combo in (("pyramid_levels", window.combo_pyr_levels),
+                           ("pyramid_selectivity", window.combo_pyr_selectivity),
+                           ("pyramid_coherence", window.combo_pyr_coherence),
+                           ("pyramid_base", window.combo_pyr_base)):
+            index = combo.findData(data.get(key))
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        if "pyramid_noise_gate" in data:
+            window.cb_pyr_noise_gate.setChecked(bool(data["pyramid_noise_gate"]))
+        if "pyramid_envelope" in data:
+            window.cb_pyr_envelope.setChecked(bool(data["pyramid_envelope"]))

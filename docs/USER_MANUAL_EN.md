@@ -269,10 +269,10 @@ OpenFocus offers eight fusion algorithms. Each has different characteristics sui
 
 ### Pyramid (Laplacian Pyramid)
 
-- **Algorithm**: Laplacian-pyramid choose-max fusion — keeps, band by band, the coefficient with the most local focus energy; the shared low-frequency base is averaged
-- **Best for**: A strong, dependable general-purpose default across most focus stacks
-- **Advantages**: Sharp, seam-free results; fully CPU-based; no parameters to tune
-- **Parameter**: None (decomposition depth is chosen automatically from image size)
+- **Algorithm**: Laplacian-pyramid fusion — band by band, each frame is weighted by how far its local focus energy falls behind the best on offer, so a sharp frame wins outright and frames that tie are averaged rather than picked between
+- **Best for**: A strong, dependable general-purpose default across most focus stacks, and the best of the classical methods on deep stacks with a background that is never sharp
+- **Advantages**: Sharp, seam-free results; fully CPU-based (GPU optional); every pixel is held inside the range its own frames span, so the render cannot invent structure
+- **Parameters**: Kernel slider (energy window), plus Pyramid levels, Selectivity, Scale coherence, Base band, and two switches — see *Pyramid tuning* below. The defaults are the measured best; nothing has to be touched
 
 ### Depth Map (Max / Average)
 
@@ -291,6 +291,33 @@ OpenFocus offers eight fusion algorithms. Each has different characteristics sui
 - **Advantages**: State-of-the-art fusion quality, automatic optimization
 - **Requirements**: PyTorch installation, optional CUDA GPU
 - **Note**: May be unavailable if PyTorch is not installed
+
+### Pyramid Tuning
+
+Selecting **Pyramid** reveals its own group of controls under the kernel slider.
+Every one of them is a trade rather than a right answer, which is why they are
+exposed; the defaults are what measured best across the project's test stacks,
+so leaving them alone is a valid choice.
+
+| Control | Default | What it does |
+|---|---|---|
+| Kernel slider | 5 | The window each band's focus energy is pooled over before frames are compared. Small follows fine detail and can chase grain; large decides region by region and rounds off narrow in-focus structures. Small by design — the pyramid pools again at every level, so this window covers twice as much picture at each one |
+| Pyramid levels | Auto | How many band-pass levels each frame is split into. Auto is five, limited by the image size. Fewer decide focus on coarser structure; more separate scales finely and cost time |
+| Selectivity | Balanced | How sharply each band favours the sharpest frame. **Balanced** and **Strict** let a genuinely sharp frame win outright while frames that tie are averaged. **Average** and **Soft** blend more of the stack in — smoother backgrounds, softer detail. **Winner takes all** is the textbook rule: it takes the single best coefficient everywhere, including in defocused areas where the best is decided by grain, which is what leaves thin dark streaks across smooth backgrounds |
+| Scale coherence | Off | Makes the coarse levels guide the fine ones, so a pixel cannot take its fine detail from one frame and its coarse structure from another. Reach for it if detail looks like it is sitting on the wrong background. It costs sharpness where near meets far, which is why it is off |
+| Base band | Balanced | How hard the smooth, low-frequency layer follows the frames that won the detail. **Mean** averages every frame and hazes the result when most of the stack is defocused; **Strong** follows the sharp frames hardest |
+| Ignore grain when nothing is sharp | On | Compares frames in units of their own noise, so a bright, grainy, completely defocused frame cannot win the areas where nothing is in focus and stamp its flat tone over them |
+| Keep pixels within the source range | On | Holds every pixel between the darkest and brightest value the frames actually have there. Rebuilding an image from bands taken out of different frames can otherwise produce values no frame had — the thin dark filaments over a smooth background this prevents |
+
+**If a smooth, defocused area comes out crossed by thin dark strokes**, both
+switches at the bottom are the ones that remove them, and both are on by
+default. Check they have not been turned off, leave Selectivity at Balanced or
+lower rather than Winner takes all, and if the strokes survive that, try Scale
+coherence at Light or Medium.
+
+Batch jobs inherit whatever the main window is set to, and any control moved off
+its default is written into the output filename, so two renders that differ only
+in tuning cannot overwrite each other.
 
 ### Selecting a Fusion Method
 
@@ -572,7 +599,7 @@ This algorithm uses a Generalized Four-neighborhood Gaussian approach to measure
 
 ### Pyramid
 
-Each frame is decomposed into a Laplacian pyramid — a series of band-pass detail levels plus a low-frequency base. For every detail band the algorithm keeps, per pixel, the coefficient carrying the most local energy across the stack (the classic choose-max rule), so the sharpest source wins at every scale. The low-frequency base, which the focus stack shares, is averaged. Collapsing the fused pyramid reconstructs a sharp, seam-free all-in-focus image. The decomposition depth adapts to the image size, so there is nothing to tune. Based on Burt and Adelson's Laplacian pyramid (1983).
+Each frame is decomposed into a Laplacian pyramid — a series of band-pass detail levels plus a low-frequency base. Every detail band is then a weighted mean across the stack, each frame weighted by how far its pooled local energy falls behind the best on offer: a frame twice behind the winner contributes well under a percent, so a real focus decision is still a decision, while frames that tie — a defocused background, where no frame resolves anything — are averaged instead of picked between. Energies are compared in units of each frame's own grain, so a bright noisy frame cannot win the areas that hold no detail. The low-frequency base is weighted by each frame's aggregate detail activity, so the frames that carry the detail carry the base with it. Collapsing the fused pyramid reconstructs the all-in-focus image, and every pixel is finally held inside the range its own frames span, so bands taken from different frames cannot add up to a value no frame had. Based on Burt and Adelson's Laplacian pyramid (1983); the textbook choose-max rule it starts from is still available as *Selectivity → Winner takes all*.
 
 ### Depth Map
 

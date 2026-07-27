@@ -50,6 +50,18 @@ def _dct_params(window) -> dict:
     return params
 
 
+def _pyramid_params(window) -> dict:
+    """The pyramid tuning the main window is showing, for a batch job.
+
+    Read through the same helper the interactive render uses, so the two cannot
+    come to different conclusions about the same controls.
+    """
+    if window is None or getattr(window, "combo_pyr_levels", None) is None:
+        return {}
+    from controllers.render_manager import pyramid_params
+    return pyramid_params(window)
+
+
 class BatchProcessingDialog(QDialog):
     """Batch-processing settings dialog"""
     
@@ -788,6 +800,8 @@ class BatchProcessingDialog(QDialog):
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
             elif getattr(self.parent_window, 'rb_pyramid', None) and self.parent_window.rb_pyramid.isChecked():
                 fusion_method = "pyramid"
+                fusion_params["kernel_size"] = _sanitized_kernel_value()
+                fusion_params.update(_pyramid_params(self.parent_window))
             elif getattr(self.parent_window, 'rb_dmap_max', None) and self.parent_window.rb_dmap_max.isChecked():
                 fusion_method = "depthmap_max"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()

@@ -397,74 +397,74 @@
     },
     "pyramid": {
       "deep_stack": {
-        "block_speckle": 2.1875,
-        "defocus_seam_excess": 0.4662976562976837,
-        "defocus_seam_visible": 1.5151515151515151,
-        "psnr": 32.85150620173919,
-        "qabf": 0.33073753512946774,
-        "seam_excess": 0.7697353363037109,
-        "spatial_frequency": 8.844857215881348,
-        "ssim": 0.9735562801361084
+        "block_speckle": 2.34375,
+        "defocus_seam_excess": 0.257466197013855,
+        "defocus_seam_visible": 2.7004909983633385,
+        "psnr": 37.312319760508494,
+        "qabf": 0.3435424894022828,
+        "seam_excess": 0.6179985404014587,
+        "spatial_frequency": 8.26233959197998,
+        "ssim": 0.9921749830245972
       },
       "depth_edge": {
         "block_speckle": 0.0,
-        "defocus_seam_excess": 0.21184396743774414,
-        "defocus_seam_visible": 24.452252997106243,
-        "psnr": 35.771061637587316,
-        "qabf": 0.8305664652084132,
-        "seam_excess": 6.110485553741455,
-        "spatial_frequency": 38.044857025146484,
-        "ssim": 0.9905062913894653
+        "defocus_seam_excess": 0.2121293693780899,
+        "defocus_seam_visible": 24.427480916030532,
+        "psnr": 37.855848924070074,
+        "qabf": 0.8342509796346986,
+        "seam_excess": 6.0483598709106445,
+        "spatial_frequency": 37.597808837890625,
+        "ssim": 0.996224045753479
       },
       "fine_texture": {
         "block_speckle": 0.15625,
-        "defocus_seam_excess": 25.66472816467285,
-        "defocus_seam_visible": 31.555712519865796,
-        "psnr": 45.45277884284101,
-        "qabf": 0.7967190019098643,
-        "seam_excess": 21.4248104095459,
-        "spatial_frequency": 90.81585693359375,
-        "ssim": 0.999727189540863
+        "defocus_seam_excess": 25.593748092651367,
+        "defocus_seam_visible": 31.372549019607842,
+        "psnr": 46.045893171479406,
+        "qabf": 0.7974048253795567,
+        "seam_excess": 21.399797439575195,
+        "spatial_frequency": 90.65506744384766,
+        "ssim": 0.9997267127037048
       },
       "long_stack": {
         "block_speckle": 0.46875,
-        "defocus_seam_excess": 13.65239429473877,
-        "defocus_seam_visible": 20.303643724696357,
-        "psnr": 45.68328232567672,
-        "qabf": 0.3930392473170133,
-        "seam_excess": 11.661032676696777,
-        "spatial_frequency": 55.887657165527344,
-        "ssim": 0.9990326166152954
+        "defocus_seam_excess": 13.619563102722168,
+        "defocus_seam_visible": 20.315661675435045,
+        "psnr": 46.117072437603284,
+        "qabf": 0.39339735453006797,
+        "seam_excess": 11.56729507446289,
+        "spatial_frequency": 55.610198974609375,
+        "ssim": 0.9992272257804871
       },
       "low_contrast": {
         "block_speckle": 0.0,
-        "defocus_seam_excess": 0.32450106739997864,
-        "defocus_seam_visible": 1.3615118878276773,
-        "psnr": 68.05096009081191,
-        "qabf": 0.6169262744090988,
-        "seam_excess": 0.40525153279304504,
-        "spatial_frequency": 2.4747114181518555,
-        "ssim": 0.9998888969421387
+        "defocus_seam_excess": 0.3203001916408539,
+        "defocus_seam_visible": 1.2768544791244425,
+        "psnr": 69.43711111875669,
+        "qabf": 0.6152836122271202,
+        "seam_excess": 0.40513962507247925,
+        "spatial_frequency": 2.4683735370635986,
+        "ssim": 0.9999337792396545
       },
       "saturated_colour": {
         "block_speckle": 5.78125,
-        "defocus_seam_excess": 0.0019016654696315527,
-        "defocus_seam_visible": 0.19580967299784607,
-        "psnr": 33.11990194157388,
-        "qabf": 0.5313266534390694,
-        "seam_excess": 0.01793132722377777,
-        "spatial_frequency": 23.21848487854004,
-        "ssim": 0.9934077262878418
+        "defocus_seam_excess": 0.0,
+        "defocus_seam_visible": 0.0,
+        "psnr": 33.8856511700815,
+        "qabf": 0.5406428307227683,
+        "seam_excess": 0.0034679791424423456,
+        "spatial_frequency": 23.001033782958984,
+        "ssim": 0.9953433871269226
       },
       "sensor_noise": {
         "block_speckle": 0.0,
-        "defocus_seam_excess": 5.022444248199463,
-        "defocus_seam_visible": 1.665972511453561,
-        "psnr": 51.15177610955938,
-        "qabf": 0.8010744862491821,
-        "seam_excess": 5.232959747314453,
-        "spatial_frequency": 29.905519485473633,
-        "ssim": 0.999522864818573
+        "defocus_seam_excess": 4.979512691497803,
+        "defocus_seam_visible": 1.6216216216216217,
+        "psnr": 51.94395705699807,
+        "qabf": 0.8011921392251591,
+        "seam_excess": 5.229917049407959,
+        "spatial_frequency": 29.852258682250977,
+        "ssim": 0.9995815753936768
       }
     }
   }

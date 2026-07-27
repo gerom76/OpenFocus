@@ -33,7 +33,8 @@ METHOD_NAMES = {
 # Methods driven by the kernel-size slider, and the subset that also takes a
 # halo-suppression radius. The others ignore both, so quoting a value for them
 # would suggest it changed something.
-KERNEL_METHODS = {"guided_filter", "dct", "gfgfgf", "depthmap_max", "depthmap_average"}
+KERNEL_METHODS = {"guided_filter", "dct", "gfgfgf", "pyramid",
+                  "depthmap_max", "depthmap_average"}
 HALO_METHODS = {"depthmap_max", "depthmap_average"}
 
 _CONTRAST_NAMES = {"auto": "Auto", "clahe": "Local (CLAHE)"}

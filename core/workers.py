@@ -148,6 +148,12 @@ class RenderWorker(QThread):
         dct_block_size=None,
         dct_plateau=None,
         dct_blend=None,
+        pyramid_levels=None,
+        pyramid_selectivity=None,
+        pyramid_coherence=None,
+        pyramid_noise_gate=None,
+        pyramid_base=None,
+        pyramid_envelope=None,
     ):
         super().__init__()
         # Set by cancel() from the GUI thread to request an early, cooperative
@@ -189,6 +195,13 @@ class RenderWorker(QThread):
         self.dct_block_size = dct_block_size
         self.dct_plateau = dct_plateau
         self.dct_blend = dct_blend
+        # Pyramid tuning; None likewise defers to the method
+        self.pyramid_levels = pyramid_levels
+        self.pyramid_selectivity = pyramid_selectivity
+        self.pyramid_coherence = pyramid_coherence
+        self.pyramid_noise_gate = pyramid_noise_gate
+        self.pyramid_base = pyramid_base
+        self.pyramid_envelope = pyramid_envelope
         # Optional IFCNN refinement stage, applied to the fusion result
         self.ifcnn_refine = bool(ifcnn_refine)
         # Tile params passed from UI (may be None -> use fusion defaults)
@@ -466,6 +479,13 @@ class RenderWorker(QThread):
             result = fusion.fuse(
                 input_source=images,
                 img_resize=None,
+                levels=self.pyramid_levels,
+                energy_window=kernel_size,
+                selectivity=self.pyramid_selectivity,
+                coherence=self.pyramid_coherence,
+                noise_gate=self.pyramid_noise_gate,
+                base_selectivity=self.pyramid_base,
+                envelope=self.pyramid_envelope,
                 thread_count=self.thread_count,
             )
         elif algorithm in ("depthmap_max", "depthmap_average"):
@@ -794,6 +814,13 @@ class BatchWorker(QThread):
                 result = fusion.fuse(
                     input_source=aligned_images,
                     img_resize=None,
+                    levels=fusion_params.get('levels'),
+                    energy_window=fusion_params.get('kernel_size'),
+                    selectivity=fusion_params.get('selectivity'),
+                    coherence=fusion_params.get('coherence'),
+                    noise_gate=fusion_params.get('noise_gate'),
+                    base_selectivity=fusion_params.get('base_selectivity'),
+                    envelope=fusion_params.get('envelope'),
                     thread_count=self.thread_count,
                 )
             elif fusion_method in ("depthmap_max", "depthmap_average"):

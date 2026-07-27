@@ -43,8 +43,11 @@ methods still compute internal decision maps that are discarded
 *exports* the depth map as a file — see §6.
 ² Applied recursively pairwise, so the result is order-dependent
 ([ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §7).
-³ Added in 1.7.0. A single choose-max over all frames' Laplacian bands, so —
-unlike DTCWT — it is order-independent (`fusion_methods/pyramid.py`).
+³ Added in 1.7.0. A single decision over all frames' Laplacian bands, so —
+unlike DTCWT — it is order-independent (`fusion_methods/pyramid.py`). Since
+1.19.0 that decision is a peak-relative weighting rather than a choose-max, for
+the reasons in [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §19; the
+published rule remains selectable.
 
 ### What this table says
 

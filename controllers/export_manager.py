@@ -6,7 +6,10 @@ import cv2
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 
-from constants import DCT_BLOCK_SIZE_DEFAULT, DCT_PLATEAU_DEFAULT
+from constants import (
+    DCT_BLOCK_SIZE_DEFAULT, DCT_PLATEAU_DEFAULT,
+    PYRAMID_BASE_DEFAULT, PYRAMID_COHERENCE_DEFAULT, PYRAMID_SELECTIVITY_DEFAULT,
+)
 from core import contrast
 from dialogs import DurationDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
@@ -152,13 +155,13 @@ class ExportManager:
     def _kernel_suffix(self) -> str:
         """Return a '_k<size>' suffix for methods that use the kernel slider.
 
-        GuidedFilter (rb_a), DCT (rb_b), GFG-FGF (rb_gfg) and both Depth Map
-        modes rely on the kernel-size slider; DTCWT, Pyramid and StackMFF-V4
+        GuidedFilter (rb_a), DCT (rb_b), GFG-FGF (rb_gfg), Pyramid and both
+        Depth Map modes rely on the kernel-size slider; DTCWT and StackMFF-V4
         ignore it, so no suffix is emitted for those.
         """
         window = self.window
         if (window.rb_a.isChecked() or window.rb_b.isChecked()
-                or window.rb_gfg.isChecked()
+                or window.rb_gfg.isChecked() or window.rb_pyramid.isChecked()
                 or window.rb_dmap_max.isChecked() or window.rb_dmap_avg.isChecked()):
             try:
                 return f"_k{int(window.slider_smooth.value())}"
@@ -187,6 +190,39 @@ class ExportManager:
                 parts.append(str(preset))
             if not window.cb_dct_blend.isChecked():
                 parts.append("hard")
+        except Exception:
+            return ""
+        return f"_{'+'.join(parts)}" if parts else ""
+
+    def _pyramid_suffix(self) -> str:
+        """Return the pyramid tuning that changes the result, for the filename.
+
+        Same rule as the DCT suffix: only what departs from the defaults is
+        named, so a render left on the defaults keeps the filename it always
+        had, and two renders that differ only in tuning cannot collide.
+        """
+        window = self.window
+        if not window.rb_pyramid.isChecked():
+            return ""
+        parts = []
+        try:
+            levels = window.combo_pyr_levels.currentData()
+            if levels:
+                parts.append(f"l{int(levels)}")
+            # Prefixed by which control they came from: three of the presets
+            # share names ('strong' is both a coherence and a base setting), and
+            # a filename has to say which one moved.
+            for tag, combo, default in (
+                    ("sel", window.combo_pyr_selectivity, PYRAMID_SELECTIVITY_DEFAULT),
+                    ("coh", window.combo_pyr_coherence, PYRAMID_COHERENCE_DEFAULT),
+                    ("base", window.combo_pyr_base, PYRAMID_BASE_DEFAULT)):
+                preset = combo.currentData()
+                if preset and preset != default:
+                    parts.append(f"{tag}-{preset}")
+            if not window.cb_pyr_noise_gate.isChecked():
+                parts.append("nogate")
+            if not window.cb_pyr_envelope.isChecked():
+                parts.append("unclamped")
         except Exception:
             return ""
         return f"_{'+'.join(parts)}" if parts else ""
@@ -228,6 +264,7 @@ class ExportManager:
 
         fusion_method += self._kernel_suffix()
         fusion_method += self._dct_suffix()
+        fusion_method += self._pyramid_suffix()
         fusion_method += self._halo_suffix()
 
         # The IFCNN stage runs on top of the method above, so it reads as an addition

@@ -202,24 +202,50 @@ class MultiFocusFusion:
                       input_source: Union[str, List[np.ndarray]],
                       img_resize: Optional[Tuple[int, int]] = None,
                       levels: Optional[int] = None,
+                      energy_window: Optional[int] = None,
+                      selectivity: Optional[float] = None,
+                      coherence: Optional[float] = None,
+                      noise_gate: Optional[bool] = None,
+                      base_selectivity: Optional[float] = None,
+                      envelope: Optional[bool] = None,
                       **kwargs) -> np.ndarray:
         """
         Laplacian-pyramid fusion.
+
+        Every tuning argument passes None straight through, so the method's own
+        default is what a caller that does not care ends up with.
 
         Args:
             input_source: Image source
             img_resize: Target size
             levels: Number of pyramid decomposition levels (None -> method default)
+            energy_window: Window the band energy is pooled over before frames
+                           are compared
+            selectivity: How sharply each band's weights favour the sharpest
+                         frame; inf is the published choose-max rule
+            coherence: How much of a band's decision comes from the coarser
+                       bands above it, in [0, 1]
+            noise_gate: Compare frames in units of their own grain
+            base_selectivity: The same weighting exponent for the coarse base
+            envelope: Clamp the result to the range its own frames span
 
         Returns:
             Fused image
         """
-        # kernel_size may arrive from the shared worker call path - the pyramid
-        # has no kernel, so it is quietly dropped along with any other extras.
+        # kernel_size may arrive from the shared worker call path under its own
+        # name; for this method the slider drives the energy window.
+        if energy_window is None:
+            energy_window = kwargs.get('kernel_size', None)
+
+        tuning = dict(levels=levels, energy_window=energy_window,
+                      selectivity=selectivity, coherence=coherence,
+                      noise_gate=noise_gate, base_selectivity=base_selectivity,
+                      envelope=envelope)
+
         if self.use_gpu:
             try:
                 from fusion_methods.pyramid_torch import pyramid_torch_impl
-                return pyramid_torch_impl(input_source, img_resize, levels=levels)
+                return pyramid_torch_impl(input_source, img_resize, **tuning)
             except Exception as exc:
                 print(f"Warning: GPU pyramid fusion failed ({exc}); falling back to CPU.")
                 try:
@@ -230,7 +256,8 @@ class MultiFocusFusion:
                     pass
 
         thread_count = kwargs.get('thread_count', None)
-        return pyramid_impl(input_source, img_resize, levels=levels, thread_count=thread_count)
+        return pyramid_impl(input_source, img_resize, thread_count=thread_count,
+                            **tuning)
 
     def _fuse_depthmap(self,
                        input_source: Union[str, List[np.ndarray]],

@@ -67,6 +67,13 @@ KERNEL_SIZE_DEFAULT_GFF = 31
 KERNEL_SIZE_DEFAULT_GFG = 7
 KERNEL_SIZE_DEFAULT_DMAP = 9
 
+# The pyramid pools its band energy over this window before frames are
+# compared - the same job the slider does for the depth-map methods, one level
+# down. 5 px is the method default; it is deliberately small because the
+# pyramid pools again at every level, so the window at level k already covers
+# 2**k times as much of the picture.
+KERNEL_SIZE_DEFAULT_PYRAMID = 5
+
 # --- DCT tuning exposed in the UI ---------------------------------------
 # The grid every DCT decision is made over. Smaller follows fine detail and is
 # noisier; larger is steadier but steps harder where near meets far.
@@ -86,3 +93,48 @@ DCT_PLATEAU_DEFAULT = "balanced"
 # block from a single frame. Off restores verbatim source pixels at the cost of
 # the lattice showing again.
 DCT_BLEND_DEFAULT = True
+
+# --- Pyramid tuning exposed in the UI ------------------------------------
+# See item 19 in docs/ALGORITHM_IMPROVEMENTS.md for what each control is for
+# and what it was measured to do; fusion_methods/pyramid.py holds the defaults
+# themselves, and these are the values the UI offers.
+
+# Decomposition depth. 0 means "let the method decide", which is 5 levels
+# clamped to whatever the image can carry.
+PYRAMID_LEVELS = (0, 2, 3, 4, 5, 6, 7, 8)
+PYRAMID_LEVELS_DEFAULT = 0
+
+# How sharply each band's weights favour the sharpest frame. The last preset is
+# the published choose-max rule, kept because it is the published rule - it is
+# also what stitches a defocused background out of frames that disagree.
+PYRAMID_SELECTIVITY_PRESETS = (
+    ("average", 2.0), ("soft", 4.0), ("balanced", 8.0),
+    ("strict", 32.0), ("winner", float("inf")),
+)
+PYRAMID_SELECTIVITY_DEFAULT = "balanced"
+
+# How much of a band's decision comes from the coarser bands above it. Off by
+# default: it costs sharpness at a depth boundary, and on the test fixtures the
+# envelope clamp already removes what it was there to prevent. Worth reaching
+# for when the bands visibly disagree - fine detail sitting on a base that came
+# from somewhere else.
+PYRAMID_COHERENCE_PRESETS = (
+    ("off", 0.0), ("light", 0.25), ("medium", 0.5), ("strong", 0.75),
+)
+PYRAMID_COHERENCE_DEFAULT = "off"
+
+# How hard the coarse base band follows the frames that won the detail bands.
+# "Mean" is the plain average of every frame, which hazes the base whenever
+# most of the stack is defocused.
+PYRAMID_BASE_PRESETS = (
+    ("mean", 0.0), ("gentle", 1.0), ("balanced", 3.0), ("strong", 8.0),
+)
+PYRAMID_BASE_DEFAULT = "balanced"
+
+# Compare frames in units of their own grain rather than absolutely, so a
+# bright noisy frame cannot win the regions where nothing is in focus.
+PYRAMID_NOISE_GATE_DEFAULT = True
+
+# Hold every pixel inside the range its own frames span, so collapsing the
+# pyramid cannot reconstruct a value no frame had.
+PYRAMID_ENVELOPE_DEFAULT = True

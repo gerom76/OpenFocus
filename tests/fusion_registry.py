@@ -112,14 +112,16 @@ def _gfgfgf_torch(stack, kernel_size=7, img_resize=None, device=None):
     return gfgfgf_torch_impl(stack, img_resize, kernel_size=kernel_size, device=device)
 
 
-def _pyramid(stack, levels=None, img_resize=None, thread_count=None):
+def _pyramid(stack, levels=None, img_resize=None, thread_count=None, **tuning):
     from fusion_methods.pyramid import pyramid_impl
-    return pyramid_impl(stack, img_resize, levels=levels, thread_count=thread_count)
+    return pyramid_impl(stack, img_resize, levels=levels,
+                        thread_count=thread_count, **tuning)
 
 
-def _pyramid_torch(stack, levels=None, img_resize=None, device=None):
+def _pyramid_torch(stack, levels=None, img_resize=None, device=None, **tuning):
     from fusion_methods.pyramid_torch import pyramid_torch_impl
-    return pyramid_torch_impl(stack, img_resize, levels=levels, device=device)
+    return pyramid_torch_impl(stack, img_resize, levels=levels, device=device,
+                              **tuning)
 
 
 def _depthmap_max(stack, kernel_size=9, halo_radius=0, img_resize=None,
@@ -249,13 +251,42 @@ METHODS = [
         sweeps=(
             ("levels", [2, 3, 4, 5, 6],
              "How many band-pass levels the frame is split into before the "
-             "choose-max selection. Few levels decide focus on coarse blocks and "
+             "selection. Few levels decide focus on coarse blocks and "
              "can miss fine in-focus detail; many levels separate scales finely "
              "but cost more time. Self-limited so the coarsest band stays >= 2 px, "
              "so the very largest values collapse to the same depth on small "
              "images."),
+            ("energy_window", [3, 5, 9, 15, 31],
+             "Window each band's focus energy is pooled over before the frames "
+             "are compared. Small follows fine detail and speckles on grain; "
+             "large decides regionally and rounds off narrow in-focus "
+             "structures. Pooled again at every level, so the window at level k "
+             "already covers 2**k times as much picture."),
+            ("selectivity", [2, 4, 8, 32, float("inf")],
+             "How sharply each band's weights favour the sharpest frame. inf is "
+             "the published choose-max rule, which has no answer where nothing "
+             "is in focus and stitches those regions out of frames that "
+             "disagree; low numbers average the stack and soften real focus "
+             "decisions with it."),
+            ("coherence", [0.0, 0.25, 0.5, 0.75],
+             "How much of a band's decision comes from the coarser bands above "
+             "it, so the bands of one frame decide together instead of a pixel "
+             "taking fine detail from one frame and coarse from another. Costs "
+             "sharpness at a depth boundary the coarse band cannot see."),
+            ("base_selectivity", [0.0, 1.0, 3.0, 8.0],
+             "How hard the coarse base band follows the frames that won the "
+             "detail bands. 0 is the plain mean, which hazes the base whenever "
+             "most of the stack is defocused."),
+            ("noise_gate", [False, True],
+             "Compare frames in units of their own grain rather than "
+             "absolutely. Off lets the brightest, grainiest frame win every "
+             "region that holds no detail, and stamp its tone there."),
+            ("envelope", [False, True],
+             "Clamp each pixel to the range its own frames span. Off is what a "
+             "collapsed pyramid does unaided, which can reconstruct a value no "
+             "frame had - a thin dark filament over a smooth background."),
         ),
-        min_psnr=40.0,      # measured 49.6
+        min_psnr=40.0,      # measured 50.9
     ),
     FusionMethod(
         key="depthmap_max", label="Depth Map (Max)", fuse=_depthmap_max,
@@ -373,7 +404,11 @@ METHODS = [
     FusionMethod(
         key="pyramid_gpu", label="Pyramid (GPU)", fuse=_pyramid_torch,
         check=_needs_gpu("torch"), params={"levels": None}, gpu=True,
-        sweeps=(("levels", [2, 3, 4, 5, 6], "Same dial as the CPU pyramid."),),
+        sweeps=(("levels", [2, 3, 4, 5, 6], "Same dial as the CPU pyramid."),
+                ("selectivity", [2, 4, 8, 32, float("inf")],
+                 "Same dial as the CPU pyramid."),
+                ("coherence", [0.0, 0.25, 0.5, 0.75],
+                 "Same dial as the CPU pyramid.")),
     ),
 ]
 
@@ -399,4 +434,5 @@ PARITY_PAIRS = [
     ("gfgfgf", "gfgfgf_gpu"),
     ("dct", "dct_gpu"),
     ("dtcwt", "dtcwt_gpu"),
+    ("pyramid", "pyramid_gpu"),
 ]

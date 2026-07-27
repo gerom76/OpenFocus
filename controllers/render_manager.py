@@ -5,7 +5,12 @@ from typing import Any, List, Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox, QDialog
 
 from utils import RenderMetadata, show_custom_message_box, show_message_box, show_warning_box
-from constants import DCT_PLATEAU_DEFAULT, DCT_PLATEAU_PRESETS
+from constants import (
+    DCT_PLATEAU_DEFAULT, DCT_PLATEAU_PRESETS,
+    PYRAMID_BASE_DEFAULT, PYRAMID_BASE_PRESETS,
+    PYRAMID_COHERENCE_DEFAULT, PYRAMID_COHERENCE_PRESETS,
+    PYRAMID_SELECTIVITY_DEFAULT, PYRAMID_SELECTIVITY_PRESETS,
+)
 from core import render_options
 from core.multi_focus_fusion import is_stackmffv4_available
 from core.workers import RenderWorker
@@ -23,6 +28,39 @@ def dct_plateau_value(window) -> float:
     """
     key = window.combo_dct_plateau.currentData() or DCT_PLATEAU_DEFAULT
     return _PLATEAU_BY_KEY.get(key, _PLATEAU_BY_KEY[DCT_PLATEAU_DEFAULT])
+
+
+def _preset_value(combo, presets, default_key):
+    """The number behind a preset combo, or the default preset's number.
+
+    Same contract as dct_plateau_value: what is stored and restored is the key,
+    so retuning a preset moves every saved setting with it.
+    """
+    values = dict(presets)
+    key = None if combo is None else combo.currentData()
+    return values.get(key, values[default_key])
+
+
+def pyramid_params(window) -> dict:
+    """The pyramid tuning the window is showing, as method arguments.
+
+    Kept next to dct_plateau_value because the batch dialog needs exactly the
+    same reading of the same controls, and two readings would drift apart.
+    """
+    return {
+        "levels": (window.combo_pyr_levels.currentData() or None),
+        "selectivity": _preset_value(window.combo_pyr_selectivity,
+                                     PYRAMID_SELECTIVITY_PRESETS,
+                                     PYRAMID_SELECTIVITY_DEFAULT),
+        "coherence": _preset_value(window.combo_pyr_coherence,
+                                   PYRAMID_COHERENCE_PRESETS,
+                                   PYRAMID_COHERENCE_DEFAULT),
+        "base_selectivity": _preset_value(window.combo_pyr_base,
+                                          PYRAMID_BASE_PRESETS,
+                                          PYRAMID_BASE_DEFAULT),
+        "noise_gate": window.cb_pyr_noise_gate.isChecked(),
+        "envelope": window.cb_pyr_envelope.isChecked(),
+    }
 
 
 class RenderManager:
@@ -303,6 +341,7 @@ class RenderManager:
                 effective_aligned_images = []
                 effective_is_aligned = False
 
+        pyramid = pyramid_params(window)
         self.worker = RenderWorker(
             source_images,
             effective_aligned_images,
@@ -321,6 +360,12 @@ class RenderManager:
             dct_block_size=window.combo_dct_block.currentData(),
             dct_plateau=dct_plateau_value(window),
             dct_blend=window.cb_dct_blend.isChecked(),
+            pyramid_levels=pyramid["levels"],
+            pyramid_selectivity=pyramid["selectivity"],
+            pyramid_coherence=pyramid["coherence"],
+            pyramid_noise_gate=pyramid["noise_gate"],
+            pyramid_base=pyramid["base_selectivity"],
+            pyramid_envelope=pyramid["envelope"],
             rb_pyramid_checked=window.rb_pyramid.isChecked(),
             rb_dmap_max_checked=window.rb_dmap_max.isChecked(),
             rb_dmap_avg_checked=window.rb_dmap_avg.isChecked(),

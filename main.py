@@ -63,7 +63,10 @@ from constants import (
     KERNEL_SIZE_MAX, KERNEL_SIZE_MAX_DCT,
     KERNEL_SIZE_DEFAULT_DCT, KERNEL_SIZE_DEFAULT_GFF,
     KERNEL_SIZE_DEFAULT_GFG, KERNEL_SIZE_DEFAULT_DMAP,
+    KERNEL_SIZE_DEFAULT_PYRAMID,
     DCT_PLATEAU_PRESETS,
+    PYRAMID_BASE_PRESETS, PYRAMID_COHERENCE_PRESETS,
+    PYRAMID_LEVELS, PYRAMID_SELECTIVITY_PRESETS,
 )
 
 class OpenFocus(QMainWindow):
@@ -279,6 +282,13 @@ class OpenFocus(QMainWindow):
         self.combo_dct_plateau = right_panel_components.combo_dct_plateau
         self.cb_dct_blend = right_panel_components.cb_dct_blend
         self.dct_widget = right_panel_components.dct_widget
+        self.combo_pyr_levels = right_panel_components.combo_pyr_levels
+        self.combo_pyr_selectivity = right_panel_components.combo_pyr_selectivity
+        self.combo_pyr_coherence = right_panel_components.combo_pyr_coherence
+        self.combo_pyr_base = right_panel_components.combo_pyr_base
+        self.cb_pyr_noise_gate = right_panel_components.cb_pyr_noise_gate
+        self.cb_pyr_envelope = right_panel_components.cb_pyr_envelope
+        self.pyramid_widget = right_panel_components.pyramid_widget
         self.combo_contrast = right_panel_components.combo_contrast
         self.slider_contrast = right_panel_components.slider_contrast
         self.lbl_contrast_value = right_panel_components.contrast_value_label
@@ -639,6 +649,10 @@ class OpenFocus(QMainWindow):
         # The DCT tuning block keeps its values while disabled, so switching
         # away and back does not forget them.
         self.dct_widget.setEnabled(self.rb_b.isChecked())
+        # The pyramid block is hidden rather than greyed out - six controls is
+        # too much dead panel to leave standing. Hidden widgets keep their
+        # values, so this forgets nothing either.
+        self.pyramid_widget.setVisible(self.rb_pyramid.isChecked())
 
         if self.rb_a.isChecked():
             self.smooth_widget.setEnabled(True)
@@ -671,6 +685,15 @@ class OpenFocus(QMainWindow):
             if self.current_kernel_mode != "dmap":
                 self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_DMAP)
             self.current_kernel_mode = "dmap"
+        elif self.rb_pyramid.isChecked():
+            # The pyramid pools its band energy over the same slider-controlled
+            # window, at every level of the decomposition; 5 px is small because
+            # each level doubles what that window covers.
+            self.smooth_widget.setEnabled(True)
+            self._set_kernel_range(KERNEL_SIZE_MAX)
+            if self.current_kernel_mode != "pyramid":
+                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_PYRAMID)
+            self.current_kernel_mode = "pyramid"
         else:
             self.smooth_widget.setEnabled(False)
             self.current_kernel_mode = None
@@ -1208,6 +1231,23 @@ class OpenFocus(QMainWindow):
         c.cb_dct_blend.setText(trans.t('label_dct_blend'))
         for i, (key, _value) in enumerate(DCT_PLATEAU_PRESETS):
             c.combo_dct_plateau.setItemText(i, trans.t(f'dct_plateau_{key}'))
+
+        c.lbl_pyr_levels.setText(trans.t('label_pyr_levels'))
+        c.lbl_pyr_selectivity.setText(trans.t('label_pyr_selectivity'))
+        c.lbl_pyr_coherence.setText(trans.t('label_pyr_coherence'))
+        c.lbl_pyr_base.setText(trans.t('label_pyr_base'))
+        c.cb_pyr_noise_gate.setText(trans.t('label_pyr_noise_gate'))
+        c.cb_pyr_envelope.setText(trans.t('label_pyr_envelope'))
+        for i, depth in enumerate(PYRAMID_LEVELS):
+            if depth == 0:
+                c.combo_pyr_levels.setItemText(i, trans.t('pyr_levels_auto'))
+        for combo, presets, prefix in (
+                (c.combo_pyr_selectivity, PYRAMID_SELECTIVITY_PRESETS, 'label_pyr_selectivity'),
+                (c.combo_pyr_coherence, PYRAMID_COHERENCE_PRESETS, 'label_pyr_coherence'),
+                (c.combo_pyr_base, PYRAMID_BASE_PRESETS, 'label_pyr_base')):
+            for i, (key, _value) in enumerate(presets):
+                combo.setItemText(i, trans.t(f'{prefix}_{key}'))
+
         self.handle_halo_slider_change(self.slider_halo.value())
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))
