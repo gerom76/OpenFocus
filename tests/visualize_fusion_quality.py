@@ -51,6 +51,14 @@ PARAM_LABELS = {
     "kernel_size": "Kernel size",
     "block_size": "Block size",
     "N": "Levels",
+    "levels": "Levels",
+    "energy_window": "Energy window",
+    "selectivity": "Selectivity",
+    "coherence": "Scale coherence",
+    "base_selectivity": "Base weighting",
+    "noise_gate": "Noise gate",
+    "envelope": "Envelope clamp",
+    "halo_radius": "Halo radius",
 }
 
 
@@ -107,6 +115,38 @@ def load_stack(path):
 # Data collection
 # ---------------------------------------------------------------------------
 
+def _value_label(value):
+    """How one swept value reads on the page.
+
+    Not every parameter is an integer any more: the pyramid sweeps floats, two
+    booleans and an infinity, and `str()` renders those as 'True' and 'inf',
+    which say nothing on an axis.
+    """
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    if isinstance(value, float):
+        if value == float("inf"):
+            return "max"
+        return f"{value:g}"
+    return str(value)
+
+
+def _parse_value(text):
+    """One value from --values, keeping the type the parameter expects."""
+    text = text.strip()
+    lowered = text.lower()
+    if lowered in ("on", "true"):
+        return True
+    if lowered in ("off", "false"):
+        return False
+    if lowered in ("inf", "max"):
+        return float("inf")
+    try:
+        return int(text)
+    except ValueError:
+        return float(text)
+
+
 def _plan(method_key, compare, values_override, param=None):
     """
     Work out what the report varies along its axis.
@@ -146,7 +186,7 @@ def _plan(method_key, compare, values_override, param=None):
     def make(value):
         return lambda stack, **kw: method.run(stack, **{param: value}, **kw)
 
-    runs = [(str(v), str(v), make(v)) for v in values]
+    runs = [(str(v), _value_label(v), make(v)) for v in values]
     held = (" with " + ", ".join(f"{k}={v}" for k, v in fixed.items())
             + " held fixed") if fixed else ""
     return runs, label, f"{method.label}, swept across {label.lower()}{held}. {blurb}"
@@ -831,7 +871,8 @@ def main():
     if not args.synthetic and not args.stack:
         ap.error("provide a stack directory or pass --synthetic")
 
-    values = [int(v) for v in args.values.split(",") if v.strip()] if args.values else None
+    values = ([_parse_value(v) for v in args.values.split(",") if v.strip()]
+              if args.values else None)
 
     if args.synthetic:
         stack, reference, _ = make_stack(num_slices=args.slices, height=args.size,
