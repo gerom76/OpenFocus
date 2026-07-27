@@ -11,6 +11,21 @@ CONFIG_FILENAME = "openfocus.cfg.json"
 # How many entries the File > Recent submenus keep.
 MAX_RECENT_PATHS = 10
 
+# Saved fusion_method value -> the window attribute holding its radio button.
+# Single source of truth for saving, restoring and clearing the selection, so a
+# newly added method cannot end up persisted as null by being listed in only one
+# of the three places.
+_FUSION_METHOD_BUTTONS = {
+    "guided": "rb_a",
+    "dct": "rb_b",
+    "dtcwt": "rb_c",
+    "gfg": "rb_gfg",
+    "pyramid": "rb_pyramid",
+    "depthmap_max": "rb_dmap_max",
+    "depthmap_avg": "rb_dmap_avg",
+    "stackmff": "rb_d",
+}
+
 
 def _config_path() -> str:
     """Return the absolute path to the settings file next to the app/executable."""
@@ -164,14 +179,8 @@ class SettingsManager:
 
     def _selected_fusion_method(self) -> str | None:
         window = self.window
-        mapping = [
-            (getattr(window, "rb_a", None), "guided"),
-            (getattr(window, "rb_b", None), "dct"),
-            (getattr(window, "rb_c", None), "dtcwt"),
-            (getattr(window, "rb_gfg", None), "gfg"),
-            (getattr(window, "rb_d", None), "stackmff"),
-        ]
-        for button, name in mapping:
+        for name, attr in _FUSION_METHOD_BUTTONS.items():
+            button = getattr(window, attr, None)
             if button is not None and button.isChecked():
                 return name
         return None
@@ -275,7 +284,7 @@ class SettingsManager:
         window = self.window
 
         # Fusion method radios (mutually exclusive, cancelable) -> all unchecked
-        for attr in ("rb_a", "rb_b", "rb_c", "rb_gfg", "rb_d"):
+        for attr in _FUSION_METHOD_BUTTONS.values():
             button = getattr(window, attr, None)
             if button is not None:
                 button.setChecked(False)
@@ -373,17 +382,10 @@ class SettingsManager:
 
         # Fusion method radio buttons
         method = data.get("fusion_method")
-        method_buttons = {
-            "guided": getattr(window, "rb_a", None),
-            "dct": getattr(window, "rb_b", None),
-            "dtcwt": getattr(window, "rb_c", None),
-            "gfg": getattr(window, "rb_gfg", None),
-            "stackmff": getattr(window, "rb_d", None),
-        }
-        if method in method_buttons and method_buttons[method] is not None:
-            button = method_buttons[method]
-            if button.isEnabled():
-                button.setChecked(True)
+        attr = _FUSION_METHOD_BUTTONS.get(method)
+        button = getattr(window, attr, None) if attr else None
+        if button is not None and button.isEnabled():
+            button.setChecked(True)
 
         # Post-fusion refinement stage (skipped when its weights are missing)
         if "ifcnn_refine" in data and window.cb_ifcnn.isEnabled():
