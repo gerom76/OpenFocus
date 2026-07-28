@@ -3,6 +3,7 @@ Utility modules for OpenFocus.
 
 Modules:
 - image_utils: Image conversion functions (pixmap <-> cv2)
+- auto_params: What a setting left on 'Auto' resolved to during a render
 - bitdepth: 8/16-bit depth policy and conversion
 - jxl: JPEG XL encoding, optional and off when imagecodecs is absent
 - ui_utils: UI-related functions (message boxes, dialogs)
@@ -25,6 +26,7 @@ from utils.image_utils import (
     write_image,
 )
 
+from utils import auto_params
 from utils import jxl
 from utils import metadata
 from utils.metadata import RenderMetadata
@@ -99,6 +101,8 @@ __all__ = [
     'ensure_bgr',
     'read_image_any_depth',
     'write_image',
+    # auto_params
+    'auto_params',
     # jxl
     'jxl',
     # metadata

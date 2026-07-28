@@ -4,7 +4,7 @@ import re
 import cv2
 import numpy as np
 
-from utils import bitdepth
+from utils import auto_params, bitdepth
 from utils.image_utils import read_image_any_depth
 from fusion_methods.gff import _map_in_order
 
@@ -147,6 +147,11 @@ def _resolve_levels(height, width, requested):
     Each level halves both sides; decomposing past a handful of pixels buys no
     focus information and risks a degenerate 1-pixel band. The depth is capped
     so the smallest Gaussian level keeps both sides >= 2.
+
+    The depth this settles on is reported to `utils.auto_params`, because it is
+    the number a caller who left the control on 'Auto' never got to see; the
+    render logs it and its saved metadata records it. The GPU path resolves
+    through this same function, so both report alike.
     """
     requested = DEFAULT_LEVELS if requested is None else max(1, int(requested))
     depth = 0
@@ -154,7 +159,9 @@ def _resolve_levels(height, width, requested):
     while depth < requested and (smallest + 1) // 2 >= 2:
         smallest = (smallest + 1) // 2
         depth += 1
-    return max(1, depth)
+    depth = max(1, depth)
+    auto_params.record(auto_params.PYRAMID_LEVELS, depth)
+    return depth
 
 
 def _resolve_window(requested):

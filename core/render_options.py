@@ -12,7 +12,7 @@ months later: units are spelled out, and a stage that did not run says so
 instead of being absent.
 """
 
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from constants import (
     PYRAMID_BASE_DEFAULT, PYRAMID_BASE_PRESETS,
@@ -20,7 +20,7 @@ from constants import (
     PYRAMID_ENVELOPE_DEFAULT, PYRAMID_NOISE_GATE_DEFAULT,
     PYRAMID_SELECTIVITY_DEFAULT, PYRAMID_SELECTIVITY_PRESETS,
 )
-from utils import bitdepth
+from utils import auto_params, bitdepth
 
 # Display names of the fusion algorithms, keyed by the internal algorithm id
 # that both render paths use (see RenderWorker._get_fusion_algorithm and the
@@ -84,12 +84,32 @@ def _preset(value: Any,
     return f"{name.capitalize()} ({text})" if name else text
 
 
+def _resolved(requested: Optional[int],
+              used: Optional[str],
+              auto_label: str = "Auto") -> str:
+    """A setting the method decided for itself, next to what was asked of it.
+
+    'Auto' names the choice but not the outcome, and a number the method could
+    not honour - a depth deeper than the frame allows - is not what produced
+    the pixels either. Both are written the same way: what the render asked
+    for, with what actually ran in brackets after it. A run whose value went
+    unrecorded (an older file, or a stage that never got there) keeps the plain
+    wording rather than claiming a value it does not have.
+    """
+    if not requested:
+        return f"{auto_label} ({used})" if used else auto_label
+
+    asked = f"{int(requested)}"
+    return f"{asked} ({used} applied)" if used and used != asked else asked
+
+
 def _pyramid_options(levels: Optional[int],
                      selectivity: Any,
                      coherence: Any,
                      base_selectivity: Any,
                      noise_gate: Optional[bool],
-                     envelope: Optional[bool]) -> Dict[str, str]:
+                     envelope: Optional[bool],
+                     levels_used: Optional[str] = None) -> Dict[str, str]:
     """The pyramid's own tuning, as XMP properties.
 
     Every control the method reads is quoted, including the ones left alone: a
@@ -100,8 +120,9 @@ def _pyramid_options(levels: Optional[int],
     """
     return {
         # 0 or None is the UI's "let the method decide", which resolves against
-        # the image size at render time rather than to a fixed number.
-        "PyramidLevels": f"{int(levels)}" if levels else "Auto",
+        # the image size at render time rather than to a fixed number; the depth
+        # it settled on is quoted in brackets when the render reported it.
+        "PyramidLevels": _resolved(levels, levels_used),
         "PyramidSelectivity": _preset(
             selectivity, PYRAMID_SELECTIVITY_PRESETS, PYRAMID_SELECTIVITY_DEFAULT),
         "PyramidCoherence": _preset(
@@ -159,6 +180,7 @@ def describe(
     result_dtype: Any = None,
     device_name: Optional[str] = None,
     thread_count: Optional[int] = None,
+    resolved_auto: Optional[Mapping[str, Sequence[Any]]] = None,
 ) -> Dict[str, str]:
     """Describe a render as ordered XMP property name/value pairs.
 
@@ -166,6 +188,10 @@ def describe(
     setting it cannot report is left out rather than guessed at. Values are
     already formatted for reading - this is the last step before they are
     written into the file.
+
+    `resolved_auto` is what the run reported through `utils.auto_params` - the
+    numbers behind the settings that read 'Auto' - as collected by
+    `MultiFocusFusion.fuse`.
     """
     options: Dict[str, str] = {}
 
@@ -202,11 +228,18 @@ def describe(
         if algorithm in HALO_METHODS:
             options["HaloRadius"] = f"{int(halo_radius)} px" if halo_radius else _OFF
         if algorithm == "stackmffv4" and stackmffv4_batch_size:
-            options["StackMffBatchSize"] = str(int(stackmffv4_batch_size))
+            # The batch halves itself when the card runs out of memory, so what
+            # was asked for is not always what inferred the tiles.
+            options["StackMffBatchSize"] = _resolved(
+                stackmffv4_batch_size,
+                auto_params.value_of(resolved_auto, auto_params.STACKMFF_BATCH_SIZE),
+            )
         if algorithm == "pyramid":
             options.update(_pyramid_options(
                 pyramid_levels, pyramid_selectivity, pyramid_coherence,
                 pyramid_base, pyramid_noise_gate, pyramid_envelope,
+                levels_used=auto_params.value_of(
+                    resolved_auto, auto_params.PYRAMID_LEVELS),
             ))
         options["IfcnnRefinement"] = _on_off(ifcnn_refine)
     else:
@@ -228,6 +261,14 @@ def describe(
                              f"{int(tile_overlap)} px overlap")
         if tile_threshold:
             options["Tiling"] += f", above {int(tile_threshold)} px"
+
+    # How many tiles ran at once, which is derived from free memory at render
+    # time rather than from the thread count above - and forced to one for the
+    # GPU methods, which are already parallel inside a tile. Recorded only by a
+    # render that tiled, so its absence says the frame stayed in one piece.
+    tile_workers = auto_params.value_of(resolved_auto, auto_params.TILE_WORKERS)
+    if tile_workers:
+        options["TilingWorkers"] = f"{tile_workers} tiles at once"
 
     mode = bitdepth.get_mode()
     depth = "Auto" if mode == bitdepth.MODE_AUTO else f"Forced {mode}-bit"

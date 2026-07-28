@@ -1,0 +1,38 @@
+{
+  "name": "circuit_steps",
+  "description": "Four flat planes with hard silhouettes. Every error lands on an occlusion edge, which is where halos and colour bleed become visible.",
+  "resolution": [
+    640,
+    480
+  ],
+  "bit_depth": 8,
+  "frame_count": 12,
+  "focus_distances": [
+    0.78,
+    0.82036,
+    0.86512,
+    0.91506,
+    0.97111,
+    1.03447,
+    1.10668,
+    1.18972,
+    1.28624,
+    1.39981,
+    1.53537,
+    1.7
+  ],
+  "depth_range": [
+    0.82,
+    1.55
+  ],
+  "coc_scale_px": 26.0,
+  "max_blur_radius_px": 22.0,
+  "max_blur_radius_used_px": 16.559,
+  "focus_index_agreement": 0.908,
+  "noise_sigma": 1.4,
+  "vignette": 0.0,
+  "exposure_drift": 0.0,
+  "alignment_drift": 0.0,
+  "per_frame_affine": null,
+  "seed": 303
+}

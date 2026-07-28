@@ -1,0 +1,441 @@
+{
+  "scenes": [
+    {
+      "name": "macro_dome",
+      "description": "Domed subject on a receding substrate. Continuous depth everywhere, so no single frame is sharp anywhere but a ring. Start here.",
+      "resolution": [
+        640,
+        480
+      ],
+      "bit_depth": 8,
+      "frame_count": 16,
+      "focus_distances": [
+        0.62,
+        0.65249,
+        0.68858,
+        0.72889,
+        0.77421,
+        0.82554,
+        0.88417,
+        0.95175,
+        1.03053,
+        1.12352,
+        1.23496,
+        1.37094,
+        1.54057,
+        1.7581,
+        2.04717,
+        2.45
+      ],
+      "depth_range": [
+        0.62,
+        2.6
+      ],
+      "coc_scale_px": 26.0,
+      "max_blur_radius_px": 22.0,
+      "max_blur_radius_used_px": 22.0,
+      "focus_index_agreement": 0.8565,
+      "noise_sigma": 1.8,
+      "vignette": 0.0,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 101
+    },
+    {
+      "name": "tilted_print",
+      "description": "A printed card raked away from the lens. Linear depth ramp and fine type, recorded at 16 bits; selection errors show as horizontal bands.",
+      "resolution": [
+        640,
+        480
+      ],
+      "bit_depth": 16,
+      "frame_count": 14,
+      "focus_distances": [
+        0.68,
+        0.71394,
+        0.75144,
+        0.7931,
+        0.83966,
+        0.89202,
+        0.95134,
+        1.01912,
+        1.09729,
+        1.18846,
+        1.29614,
+        1.42529,
+        1.58302,
+        1.78
+      ],
+      "depth_range": [
+        0.68,
+        1.72781
+      ],
+      "coc_scale_px": 26.0,
+      "max_blur_radius_px": 22.0,
+      "max_blur_radius_used_px": 22.0,
+      "focus_index_agreement": 1.0,
+      "noise_sigma": 1.1,
+      "vignette": 0.0,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 202
+    },
+    {
+      "name": "circuit_steps",
+      "description": "Four flat planes with hard silhouettes. Every error lands on an occlusion edge, which is where halos and colour bleed become visible.",
+      "resolution": [
+        640,
+        480
+      ],
+      "bit_depth": 8,
+      "frame_count": 12,
+      "focus_distances": [
+        0.78,
+        0.82036,
+        0.86512,
+        0.91506,
+        0.97111,
+        1.03447,
+        1.10668,
+        1.18972,
+        1.28624,
+        1.39981,
+        1.53537,
+        1.7
+      ],
+      "depth_range": [
+        0.82,
+        1.55
+      ],
+      "coc_scale_px": 26.0,
+      "max_blur_radius_px": 22.0,
+      "max_blur_radius_used_px": 16.559,
+      "focus_index_agreement": 0.908,
+      "noise_sigma": 1.4,
+      "vignette": 0.0,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 303
+    },
+    {
+      "name": "fibre_thicket",
+      "description": "Thin strands spread through depth. Defocused strands go translucent and let the background through - partial occlusion, the hard case.",
+      "resolution": [
+        640,
+        480
+      ],
+      "bit_depth": 8,
+      "frame_count": 18,
+      "focus_distances": [
+        0.62,
+        0.64828,
+        0.67927,
+        0.71337,
+        0.75107,
+        0.79298,
+        0.83984,
+        0.89259,
+        0.95241,
+        1.02082,
+        1.09983,
+        1.19208,
+        1.30123,
+        1.43239,
+        1.59295,
+        1.79404,
+        2.05325,
+        2.4
+      ],
+      "depth_range": [
+        0.62,
+        2.6
+      ],
+      "coc_scale_px": 26.0,
+      "max_blur_radius_px": 22.0,
+      "max_blur_radius_used_px": 22.0,
+      "focus_index_agreement": 0.1933,
+      "noise_sigma": 2.0,
+      "vignette": 0.0,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 404
+    },
+    {
+      "name": "pale_specimen",
+      "description": "Flat, pale subject at high ISO with vignetting. Grain rivals the real detail, so variance-based focus measures pick badly.",
+      "resolution": [
+        640,
+        480
+      ],
+      "bit_depth": 8,
+      "frame_count": 12,
+      "focus_distances": [
+        0.9,
+        0.94836,
+        1.00222,
+        1.06257,
+        1.13064,
+        1.20804,
+        1.29681,
+        1.39966,
+        1.52022,
+        1.66352,
+        1.83665,
+        2.05
+      ],
+      "depth_range": [
+        0.94,
+        1.9
+      ],
+      "coc_scale_px": 26.0,
+      "max_blur_radius_px": 22.0,
+      "max_blur_radius_used_px": 15.205,
+      "focus_index_agreement": 0.4042,
+      "noise_sigma": 6.0,
+      "vignette": 0.13,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 505
+    },
+    {
+      "name": "handheld_drift",
+      "description": "The macro_dome scene recaptured with focus breathing, frame drift, roll and exposure flicker. Fails without registration; scene.json carries the affine that was applied to each frame.",
+      "resolution": [
+        640,
+        480
+      ],
+      "bit_depth": 8,
+      "frame_count": 16,
+      "focus_distances": [
+        0.62,
+        0.65249,
+        0.68858,
+        0.72889,
+        0.77421,
+        0.82554,
+        0.88417,
+        0.95175,
+        1.03053,
+        1.12352,
+        1.23496,
+        1.37094,
+        1.54057,
+        1.7581,
+        2.04717,
+        2.45
+      ],
+      "depth_range": [
+        0.62,
+        2.6
+      ],
+      "coc_scale_px": 26.0,
+      "max_blur_radius_px": 22.0,
+      "max_blur_radius_used_px": 22.0,
+      "focus_index_agreement": 0.7441,
+      "noise_sigma": 2.2,
+      "vignette": 0.0,
+      "exposure_drift": 0.045,
+      "alignment_drift": 1.0,
+      "per_frame_affine": [
+        [
+          [
+            0.9999922893814706,
+            -0.003926980723806,
+            0.9449427716428622
+          ],
+          [
+            0.003926980723806,
+            0.9999922893814706,
+            -0.4547832831708536
+          ]
+        ],
+        [
+          [
+            1.0019941968838304,
+            -0.0034101922420427164,
+            1.1469683169598317
+          ],
+          [
+            0.0034101922420427164,
+            1.0019941968838304,
+            -1.847078986586185
+          ]
+        ],
+        [
+          [
+            1.0039958368118318,
+            -0.0028913084424789515,
+            -0.4425199685460256
+          ],
+          [
+            0.0028913084424789515,
+            1.0039958368118318,
+            -2.0230948601721224
+          ]
+        ],
+        [
+          [
+            1.0059972075200967,
+            -0.002370329463924506,
+            -1.570879080951246
+          ],
+          [
+            0.002370329463924506,
+            1.0059972075200967,
+            -1.017948324172316
+          ]
+        ],
+        [
+          [
+            1.007998307363319,
+            -0.0018472554463377735,
+            -1.0274930348967843
+          ],
+          [
+            0.0018472554463377735,
+            1.007998307363319,
+            -2.4194797666513215
+          ]
+        ],
+        [
+          [
+            1.0099991346962653,
+            -0.0013220865308257031,
+            -1.376965978641282
+          ],
+          [
+            0.0013220865308257031,
+            1.0099991346962653,
+            -2.569956226031368
+          ]
+        ],
+        [
+          [
+            1.011999687873777,
+            -0.0007948228596437617,
+            -3.1690423833689456
+          ],
+          [
+            0.0007948228596437617,
+            1.011999687873777,
+            -1.574720736391661
+          ]
+        ],
+        [
+          [
+            1.013999965250768,
+            -0.0002654645761958949,
+            -3.6974537384150628
+          ],
+          [
+            0.0002654645761958949,
+            1.013999965250768,
+            -2.9851411671716535
+          ]
+        ],
+        [
+          [
+            1.0159999651822291,
+            0.00026598817496551206,
+            -3.109829901753179
+          ],
+          [
+            -0.00026598817496551206,
+            1.0159999651822291,
+            -3.110084964341783
+          ]
+        ],
+        [
+          [
+            1.017999686023226,
+            0.0007995352481396734,
+            -4.074395528481384
+          ],
+          [
+            -0.0007995352481396734,
+            1.017999686023226,
+            -2.125090992374768
+          ]
+        ],
+        [
+          [
+            1.0199991261289016,
+            0.0013351764964774425,
+            -5.755947380573424
+          ],
+          [
+            -0.0013351764964774425,
+            1.0199991261289016,
+            -3.5440505335763617
+          ]
+        ],
+        [
+          [
+            1.021998283854476,
+            0.001872911771981353,
+            -5.7014822126925715
+          ],
+          [
+            -0.001872911771981353,
+            1.021998283854476,
+            -3.6434750250623664
+          ]
+        ],
+        [
+          [
+            1.0239971575552476,
+            0.002412740925505661,
+            -5.378313919686443
+          ],
+          [
+            -0.002412740925505661,
+            1.0239971575552476,
+            -2.669049531984699
+          ]
+        ],
+        [
+          [
+            1.0259957455865931,
+            0.002954663806756379,
+            -6.861333844337258
+          ],
+          [
+            -0.002954663806756379,
+            1.0259957455865931,
+            -4.096195276658561
+          ]
+        ],
+        [
+          [
+            1.0279940463039696,
+            0.00349868026429133,
+            -8.14855017062862
+          ],
+          [
+            -0.00349868026429133,
+            1.0279940463039696,
+            -4.170120418867452
+          ]
+        ],
+        [
+          [
+            1.0299920580629147,
+            0.0040447901455201805,
+            -7.680961531839818
+          ],
+          [
+            -0.0040447901455201805,
+            1.0299920580629147,
+            -3.2065867624873747
+          ]
+        ]
+      ],
+      "seed": 606
+    }
+  ]
+}

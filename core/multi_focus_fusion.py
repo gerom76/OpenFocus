@@ -11,7 +11,7 @@ from fusion_methods.depthmap import depthmap_impl, MODE_MAX, MODE_AVERAGE
 from fusion_methods.stackmffv4 import _stackmffv4_impl, _stackmffv4_batch_impl
 from fusion_methods.dtcwt import _dtcwt_impl
 from core.cancellation import RenderCancelled
-from utils import resource_path, bitdepth
+from utils import auto_params, resource_path, bitdepth
 from utils.image_utils import read_image_any_depth
 from utils.torch_env import gpu_device_name, has_gpu_device, is_torch_available
 
@@ -111,6 +111,10 @@ class MultiFocusFusion:
         self.tile_threshold = int(tile_threshold)
         # StackMFF V4 batch size
         self.stackmffv4_batch_size = max(1, int(stackmffv4_batch_size))
+        # What the settings left on 'Auto' resolved to in the last fuse() call,
+        # keyed by the names in utils/auto_params.py. Read by the render workers
+        # for the saved result's metadata; empty until a run has happened.
+        self.resolved_auto = {}
         self._validate_environment()
     
     def _ensure_supported_algorithm(self, algorithm: str) -> None:
@@ -340,12 +344,37 @@ class MultiFocusFusion:
             print("Warning: No GPU acceleration available (CUDA/MPS). Running StackMFF-V4 on CPU (slower).")
             self.use_gpu = False
     
-    def fuse(self, 
-             input_source: Union[str, List[np.ndarray]], 
+    def fuse(self,
+             input_source: Union[str, List[np.ndarray]],
              img_resize: Optional[Tuple[int, int]] = None,
              **kwargs) -> np.ndarray:
         """
-        Run image fusion.
+        Run image fusion, recording what the 'Auto' settings resolved to.
+
+        A method that picks a value for itself - the pyramid's depth is the one
+        this app exposes - reports it while it runs, and the run is bracketed
+        here because this is the one door every caller comes through, tiled or
+        not. The values are logged and left on `resolved_auto` for the saved
+        metadata to quote.
+
+        Args and return value are those of the dispatch below.
+        """
+        with auto_params.recording() as resolved:
+            result = self._dispatch(input_source, img_resize, **kwargs)
+
+        self.resolved_auto = {name: list(values) for name, values in resolved.items()}
+        summary = auto_params.summarize(self.resolved_auto)
+        if summary:
+            print(f"Auto settings resolved: {summary}", flush=True)
+
+        return result
+
+    def _dispatch(self,
+                  input_source: Union[str, List[np.ndarray]],
+                  img_resize: Optional[Tuple[int, int]] = None,
+                  **kwargs) -> np.ndarray:
+        """
+        Route one fusion run to the selected algorithm, tiling it when needed.
 
         Args:
             input_source (str or list): Image directory path or list of preloaded images
@@ -823,6 +852,11 @@ class MultiFocusFusion:
         if self.use_gpu and algorithm in ('guided_filter', 'dct', 'dtcwt', 'gfgfgf'):
             optimal_threads = 1
 
+        # Neither the memory estimate above nor the GPU override is anything the
+        # user asked for, so what the render settled on is recorded alongside
+        # the thread count they did set.
+        auto_params.record(auto_params.TILE_WORKERS, optimal_threads)
+
         print(f"Tiled fusion: {len(tile_coords)} tiles, {optimal_threads} parallel workers (memory-optimized)", flush=True)
 
         def call_algo(crops):
@@ -1035,7 +1069,7 @@ class MultiFocusFusion:
             return self._run_stackmffv4_cpu(tiles_list, model_path)
 
         try:
-            return _stackmffv4_batch_impl(tiles_list, model_path, True)
+            fused = _stackmffv4_batch_impl(tiles_list, model_path, True)
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             if len(tiles_list) > 1:
@@ -1050,6 +1084,11 @@ class MultiFocusFusion:
                   "falling back to CPU for the rest of this render. "
                   "Reduce Tile Block Size in Settings to keep GPU acceleration.")
             return self._run_stackmffv4_cpu(tiles_list, model_path)
+        else:
+            # Recorded only once a batch has come back: the sizes that ran out
+            # of memory on the way down are not what fused the picture.
+            auto_params.record(auto_params.STACKMFF_BATCH_SIZE, len(tiles_list))
+            return fused
 
     def _run_stackmffv4_cpu(self, tiles_list: list, model_path: str) -> list:
         """
@@ -1057,7 +1096,7 @@ class MultiFocusFusion:
         out-of-memory failure into an actionable error message.
         """
         try:
-            return _stackmffv4_batch_impl(tiles_list, model_path, False)
+            fused = _stackmffv4_batch_impl(tiles_list, model_path, False)
         except RuntimeError as exc:
             msg = str(exc)
             if 'not enough memory' in msg or 'DefaultCPUAllocator' in msg or 'bad allocation' in msg:
@@ -1068,6 +1107,9 @@ class MultiFocusFusion:
                     "and/or fuse fewer images at once, then try again."
                 ) from exc
             raise
+        else:
+            auto_params.record(auto_params.STACKMFF_BATCH_SIZE, len(tiles_list))
+            return fused
 
     def set_device(self, use_gpu: bool):
         """

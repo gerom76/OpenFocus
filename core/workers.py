@@ -220,6 +220,9 @@ class RenderWorker(QThread):
             self.thread_count = max(1, int(thread_count))
         except Exception:
             self.thread_count = 4
+        # Filled by the fusion stage with what the 'Auto' settings resolved to,
+        # so the saved result can quote the numbers rather than just 'Auto'.
+        self.resolved_auto = {}
 
     def cancel(self):
         """Request a cooperative stop of the running render (GUI thread)."""
@@ -512,6 +515,8 @@ class RenderWorker(QThread):
                 thread_count=self.thread_count,
             )
 
+        self.resolved_auto = fusion.resolved_auto
+
         return result, device_name
 
     def _run_ifcnn_refine(self, fusion_result, source_images):
@@ -613,6 +618,9 @@ class BatchWorker(QThread):
             self.thread_count = max(1, int(thread_count))
         except Exception:
             self.thread_count = 4
+        # Refreshed by each stack's fusion stage with what its 'Auto' settings
+        # resolved to; the metadata of that stack's result quotes it.
+        self.resolved_auto = {}
 
     def _register_batch_stack(self, images, reg_methods):
         """Apply the selected registration stages in pipeline order.
@@ -845,6 +853,8 @@ class BatchWorker(QThread):
             else:
                 result = None
 
+            self.resolved_auto = fusion.resolved_auto
+
             if result is not None and self.processing_settings.get('ifcnn_refine'):
                 result = refine_with_ifcnn(
                     result,
@@ -923,6 +933,7 @@ class BatchWorker(QThread):
                 pyramid_envelope=fusion_params.get('envelope'),
                 result_dtype=getattr(result, "dtype", None),
                 thread_count=self.thread_count,
+                resolved_auto=self.resolved_auto,
             ),
         )
 
@@ -974,6 +985,7 @@ class BatchWorker(QThread):
             
             # Call the fuse method to perform fusion
             fusion_result = fusion.fuse(aligned_images, thread_count=self.thread_count, **fusion_params)
+            self.resolved_auto = fusion.resolved_auto
 
             if fusion_result is not None and self.processing_settings.get('ifcnn_refine'):
                 fusion_result = refine_with_ifcnn(

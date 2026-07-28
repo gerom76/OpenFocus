@@ -1,0 +1,38 @@
+{
+  "name": "pale_specimen",
+  "description": "Flat, pale subject at high ISO with vignetting. Grain rivals the real detail, so variance-based focus measures pick badly.",
+  "resolution": [
+    640,
+    480
+  ],
+  "bit_depth": 8,
+  "frame_count": 12,
+  "focus_distances": [
+    0.9,
+    0.94836,
+    1.00222,
+    1.06257,
+    1.13064,
+    1.20804,
+    1.29681,
+    1.39966,
+    1.52022,
+    1.66352,
+    1.83665,
+    2.05
+  ],
+  "depth_range": [
+    0.94,
+    1.9
+  ],
+  "coc_scale_px": 26.0,
+  "max_blur_radius_px": 22.0,
+  "max_blur_radius_used_px": 15.205,
+  "focus_index_agreement": 0.4042,
+  "noise_sigma": 6.0,
+  "vignette": 0.13,
+  "exposure_drift": 0.0,
+  "alignment_drift": 0.0,
+  "per_frame_affine": null,
+  "seed": 505
+}

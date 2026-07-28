@@ -22,7 +22,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import render_options
-from utils import bitdepth
+from utils import auto_params, bitdepth
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +56,24 @@ class TestParameterRelevance:
             algorithm="stackmffv4", stackmffv4_batch_size=4)["StackMffBatchSize"] == "4"
         assert "StackMffBatchSize" not in render_options.describe(
             algorithm="pyramid", stackmffv4_batch_size=4)
+
+    def test_a_batch_the_card_could_not_hold_says_what_ran(self):
+        options = render_options.describe(
+            algorithm="stackmffv4", stackmffv4_batch_size=4,
+            resolved_auto={auto_params.STACKMFF_BATCH_SIZE: [2, 1]},
+        )
+        assert options["StackMffBatchSize"] == "4 (1-2 applied)"
+
+    def test_tile_workers_are_only_reported_by_a_render_that_tiled(self):
+        options = render_options.describe(
+            tile_enabled=True, tile_block_size=512, tile_overlap=64,
+            resolved_auto={auto_params.TILE_WORKERS: [3]},
+        )
+        assert options["TilingWorkers"] == "3 tiles at once"
+        # Tiling switched on but never reached: the frame stayed in one piece,
+        # so there is no worker count to report.
+        assert "TilingWorkers" not in render_options.describe(
+            tile_enabled=True, tile_block_size=512, tile_overlap=64)
 
     def test_pyramid_tuning_is_only_reported_for_the_pyramid(self):
         options = render_options.describe(algorithm="pyramid")
@@ -148,13 +166,43 @@ class TestWording:
     def test_pyramid_defaults_are_named_rather_than_left_blank(self):
         options = render_options.describe(algorithm="pyramid")
         # Depth 0 is the UI's "let the method decide" and resolves at render
-        # time against the image size, so there is no number to quote.
+        # time against the image size; nothing was recorded here, so there is
+        # no number to quote alongside it.
         assert options["PyramidLevels"] == "Auto"
         assert options["PyramidSelectivity"] == "Balanced (8)"
         assert options["PyramidCoherence"] == "Off (0)"
         assert options["PyramidBaseWeighting"] == "Balanced (3)"
         assert options["PyramidNoiseGate"] == "On"
         assert options["PyramidEnvelopeClip"] == "On"
+
+    def test_auto_depth_quotes_what_the_render_resolved_it_to(self):
+        """'Auto' says who chose; the bracket says what they chose."""
+        options = render_options.describe(
+            algorithm="pyramid", pyramid_levels=0,
+            resolved_auto={auto_params.PYRAMID_LEVELS: [5]},
+        )
+        assert options["PyramidLevels"] == "Auto (5)"
+
+    def test_auto_depth_spans_the_values_a_tiled_render_used(self):
+        # Edge tiles are smaller than the full blocks and can resolve
+        # shallower, so both ends are stated rather than one of them.
+        options = render_options.describe(
+            algorithm="pyramid",
+            resolved_auto={auto_params.PYRAMID_LEVELS: [5, 4]},
+        )
+        assert options["PyramidLevels"] == "Auto (4-5)"
+
+    def test_a_depth_the_method_could_not_honour_says_what_ran(self):
+        options = render_options.describe(
+            algorithm="pyramid", pyramid_levels=8,
+            resolved_auto={auto_params.PYRAMID_LEVELS: [6]},
+        )
+        assert options["PyramidLevels"] == "8 (6 applied)"
+        # A request the method honoured is not restated in brackets.
+        assert render_options.describe(
+            algorithm="pyramid", pyramid_levels=6,
+            resolved_auto={auto_params.PYRAMID_LEVELS: [6]},
+        )["PyramidLevels"] == "6"
 
     def test_choose_max_selectivity_is_spelled_out(self):
         """inf is the published choose-max rule; 'inf' would name nothing."""

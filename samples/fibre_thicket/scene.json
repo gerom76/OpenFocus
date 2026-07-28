@@ -1,0 +1,44 @@
+{
+  "name": "fibre_thicket",
+  "description": "Thin strands spread through depth. Defocused strands go translucent and let the background through - partial occlusion, the hard case.",
+  "resolution": [
+    640,
+    480
+  ],
+  "bit_depth": 8,
+  "frame_count": 18,
+  "focus_distances": [
+    0.62,
+    0.64828,
+    0.67927,
+    0.71337,
+    0.75107,
+    0.79298,
+    0.83984,
+    0.89259,
+    0.95241,
+    1.02082,
+    1.09983,
+    1.19208,
+    1.30123,
+    1.43239,
+    1.59295,
+    1.79404,
+    2.05325,
+    2.4
+  ],
+  "depth_range": [
+    0.62,
+    2.6
+  ],
+  "coc_scale_px": 26.0,
+  "max_blur_radius_px": 22.0,
+  "max_blur_radius_used_px": 22.0,
+  "focus_index_agreement": 0.1933,
+  "noise_sigma": 2.0,
+  "vignette": 0.0,
+  "exposure_drift": 0.0,
+  "alignment_drift": 0.0,
+  "per_frame_affine": null,
+  "seed": 404
+}

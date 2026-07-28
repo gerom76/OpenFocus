@@ -1,0 +1,40 @@
+{
+  "name": "tilted_print",
+  "description": "A printed card raked away from the lens. Linear depth ramp and fine type, recorded at 16 bits; selection errors show as horizontal bands.",
+  "resolution": [
+    640,
+    480
+  ],
+  "bit_depth": 16,
+  "frame_count": 14,
+  "focus_distances": [
+    0.68,
+    0.71394,
+    0.75144,
+    0.7931,
+    0.83966,
+    0.89202,
+    0.95134,
+    1.01912,
+    1.09729,
+    1.18846,
+    1.29614,
+    1.42529,
+    1.58302,
+    1.78
+  ],
+  "depth_range": [
+    0.68,
+    1.72781
+  ],
+  "coc_scale_px": 26.0,
+  "max_blur_radius_px": 22.0,
+  "max_blur_radius_used_px": 22.0,
+  "focus_index_agreement": 1.0,
+  "noise_sigma": 1.1,
+  "vignette": 0.0,
+  "exposure_drift": 0.0,
+  "alignment_drift": 0.0,
+  "per_frame_affine": null,
+  "seed": 202
+}

@@ -208,6 +208,7 @@ class RenderManager:
             result_dtype=getattr(fusion_result, "dtype", None),
             device_name=device_name,
             thread_count=worker.thread_count,
+            resolved_auto=getattr(worker, "resolved_auto", None),
         )
 
     def start_render(self) -> None:
