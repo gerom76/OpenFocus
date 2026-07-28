@@ -194,6 +194,15 @@ def setup_menus(window: QMainWindow) -> None:
     window.ui_objs['action_show_console'] = show_console_action
     window.action_show_console = show_console_action
 
+    show_source_action = QAction(trans.t('action_show_source_stack'), window)
+    show_source_action.setCheckable(True)
+    show_source_action.setChecked(True)
+    show_source_action.setShortcut("Ctrl+1")
+    show_source_action.toggled.connect(window.set_source_panel_visible)
+    view_menu.addAction(show_source_action)
+    window.ui_objs['action_show_source_stack'] = show_source_action
+    window.action_show_source_stack = show_source_action
+
     # --- Settings Menu ---
     settings_menu = menubar.addMenu(trans.t('menu_settings'))
     window.ui_objs['menu_settings'] = settings_menu

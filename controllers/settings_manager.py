@@ -221,6 +221,8 @@ class SettingsManager:
             "pyramid_envelope": window.cb_pyr_envelope.isChecked(),
             "show_status_console": getattr(window, "status_console", None) is not None
                                    and window.status_console.isVisible(),
+            "show_source_stack": getattr(window, "action_show_source_stack", None) is None
+                                 or window.action_show_source_stack.isChecked(),
             "recent_folders": list(self.recent_folders),
             "recent_videos": list(self.recent_videos),
             "output_dir": self.output_dir,
@@ -396,6 +398,10 @@ class SettingsManager:
         # Status console visibility (drives the View menu action, which hides the panel)
         if "show_status_console" in data and hasattr(window, "action_show_console"):
             window.action_show_console.setChecked(bool(data["show_status_console"]))
+
+        # Source stack panel visibility (also toggled by double-clicking the output)
+        if "show_source_stack" in data and hasattr(window, "action_show_source_stack"):
+            window.action_show_source_stack.setChecked(bool(data["show_source_stack"]))
 
         window.update_slider_availability()
         if "smooth_kernel" in data:

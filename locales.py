@@ -77,6 +77,7 @@ class TranslationManager(QObject):
                 # Menu View
                 'menu_view': 'View',
                 'action_show_console': 'Status Output',
+                'action_show_source_stack': 'Source Stack',
 
                 # Menu Help
                 'menu_help': 'Help',
@@ -595,6 +596,7 @@ class TranslationManager(QObject):
                 # Menu View
                 'menu_view': '视图',
                 'action_show_console': '状态输出',
+                'action_show_source_stack': '源图像栈',
 
                 # Menu Help
                 'menu_help': '帮助',

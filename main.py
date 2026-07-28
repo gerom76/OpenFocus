@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QDialog,
 )
-from PyQt6.QtCore import Qt, QUrl, QEvent
+from PyQt6.QtCore import Qt, QUrl, QEvent, QTimer
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtGui import QFont, QIcon, QDragEnterEvent, QDropEvent
 from core import ImageStackLoader
@@ -214,6 +214,7 @@ class OpenFocus(QMainWindow):
         
         # --- A1/A2. Image view panels ---
         source_panel = create_source_panel()
+        self.source_panel_widget = source_panel.widget
         self.lbl_source_img = source_panel.image_label
         self.source_control_bar = source_panel.control_bar
         self.stack_slider = source_panel.slider
@@ -234,6 +235,8 @@ class OpenFocus(QMainWindow):
         self.lbl_result_img.roiModeExitRequested.connect(self._on_roi_mode_exit_requested)
         self.lbl_result_info = result_panel.info_label
         self.result_slider.valueChanged.connect(self.update_result_view)
+        # Double-clicking the output gives it the whole view area
+        self.lbl_result_img.doubleClicked.connect(self.toggle_source_panel)
 
         self.lbl_source_img.enterPreview.connect(self._on_enter_source_preview)
         self.lbl_source_img.leavePreview.connect(self._on_leave_source_preview)
@@ -1123,6 +1126,45 @@ class OpenFocus(QMainWindow):
             total = self.vertical_splitter.height()
             console_height = max(120, int(total * 0.18))
             self.vertical_splitter.setSizes([total - console_height, console_height])
+
+    # --- Source stack panel ---
+
+    def toggle_source_panel(self) -> None:
+        """Flip the source stack between shown and hidden (output double-click)."""
+        if not hasattr(self, 'action_show_source_stack'):
+            return
+        self.action_show_source_stack.setChecked(
+            not self.action_show_source_stack.isChecked())
+
+    def set_source_panel_visible(self, visible: bool) -> None:
+        """Show or hide the left source stack panel.
+
+        Hiding it hands the whole view area to the output. The splitter sizes
+        are remembered so restoring does not snap back to a 50/50 split.
+        """
+        if not hasattr(self, 'source_panel_widget'):
+            return
+        if not visible:
+            sizes = self.view_splitter.sizes()
+            if sizes and sizes[0] > 0:
+                self._view_splitter_sizes = sizes
+            self.source_panel_widget.setVisible(False)
+        else:
+            self.source_panel_widget.setVisible(True)
+            saved = getattr(self, '_view_splitter_sizes', None)
+            if saved:
+                self.view_splitter.setSizes(saved)
+
+        # The output pixmap is scaled to the label, so re-render once the
+        # layout has actually resized the labels.
+        QTimer.singleShot(0, self._refresh_image_views)
+
+    def _refresh_image_views(self) -> None:
+        """Re-scale both previews to their current label size."""
+        if hasattr(self, 'source_manager'):
+            self.source_manager.refresh_current_source_view()
+        if hasattr(self, 'output_manager'):
+            self.output_manager.refresh_current_result_view()
 
     # --- Language ---
     

@@ -15,6 +15,7 @@ class MagnifierLabel(QLabel):
     roiChanged = pyqtSignal(QRectF)  # Emits normalized ROI (0-1) or base coords? Let's use base coords (pixels)
     roiDeleted = pyqtSignal()
     roiModeExitRequested = pyqtSignal()  # Request to exit ROI mode (click X button or right-click)
+    doubleClicked = pyqtSignal()  # Left double-click on the image area
 
     def __init__(self, text: Optional[str] = "", parent=None):
         super().__init__(parent)
@@ -399,6 +400,20 @@ class MagnifierLabel(QLabel):
                 self.setCursor(Qt.CursorShape.CrossCursor)
             self.update()
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        # ROI mode owns the left button for drawing, so leave it alone there
+        if event.button() == Qt.MouseButton.LeftButton and not self._roi_mode:
+            # The second press already armed the magnifier; drop it so the
+            # loupe does not stay on screen after the double-click.
+            if self._magnifier_active:
+                self._magnifier_active = False
+                self._update_cursor()
+                self.update()
+            self.doubleClicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._roi_mode:
