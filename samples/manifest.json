@@ -34,7 +34,7 @@
       "coc_scale_px": 26.0,
       "max_blur_radius_px": 22.0,
       "max_blur_radius_used_px": 22.0,
-      "focus_index_agreement": 0.8565,
+      "focus_index_agreement": 0.8526,
       "noise_sigma": 1.8,
       "vignette": 0.0,
       "exposure_drift": 0.0,
@@ -194,7 +194,7 @@
       "coc_scale_px": 26.0,
       "max_blur_radius_px": 22.0,
       "max_blur_radius_used_px": 15.205,
-      "focus_index_agreement": 0.4042,
+      "focus_index_agreement": 0.3999,
       "noise_sigma": 6.0,
       "vignette": 0.13,
       "exposure_drift": 0.0,
@@ -236,7 +236,7 @@
       "coc_scale_px": 26.0,
       "max_blur_radius_px": 22.0,
       "max_blur_radius_used_px": 22.0,
-      "focus_index_agreement": 0.7441,
+      "focus_index_agreement": 0.7313,
       "noise_sigma": 2.2,
       "vignette": 0.0,
       "exposure_drift": 0.045,
@@ -436,6 +436,353 @@
         ]
       ],
       "seed": 606
+    },
+    {
+      "name": "flower01_subject",
+      "description": "A macro stack of the flower alone: focus covers the subject and stops, so the slate behind it is defocused in every frame and never resolves. The everyday case, and the one where a method has to leave the background alone instead of hunting for detail in it.",
+      "resolution": [
+        1280,
+        715
+      ],
+      "bit_depth": 8,
+      "frame_count": 14,
+      "focus_distances": [
+        0.78,
+        0.81035,
+        0.84315,
+        0.87872,
+        0.91743,
+        0.9597,
+        1.00606,
+        1.05712,
+        1.11364,
+        1.17655,
+        1.24699,
+        1.3264,
+        1.41662,
+        1.52
+      ],
+      "depth_range": [
+        0.81,
+        2.66952
+      ],
+      "coc_scale_px": 52.0,
+      "max_blur_radius_px": 44.0,
+      "max_blur_radius_used_px": 44.0,
+      "focus_index_agreement": 0.477,
+      "noise_sigma": 1.2,
+      "vignette": 0.0,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 701,
+      "source_image": "flower01/Sharing.png",
+      "depth_source": "assigned, not measured - a photograph carries no depth map; see samples/photo_stacks.py",
+      "subject_fraction": 0.1793
+    },
+    {
+      "name": "flower01_full",
+      "description": "The same frame with focus racked all the way through the slate as well, so every part of the picture is sharp in some frame. Twenty frames over a much longer throw, which is where neighbouring frames stop differing by much and tie-breaking starts to decide the picture.",
+      "resolution": [
+        1280,
+        715
+      ],
+      "bit_depth": 8,
+      "frame_count": 20,
+      "focus_distances": [
+        0.78,
+        0.81056,
+        0.84361,
+        0.87948,
+        0.91853,
+        0.9612,
+        1.00804,
+        1.05967,
+        1.11688,
+        1.18062,
+        1.25207,
+        1.33273,
+        1.4245,
+        1.52984,
+        1.65201,
+        1.79537,
+        1.96599,
+        2.17244,
+        2.42734,
+        2.75
+      ],
+      "depth_range": [
+        0.81,
+        2.66952
+      ],
+      "coc_scale_px": 52.0,
+      "max_blur_radius_px": 44.0,
+      "max_blur_radius_used_px": 44.0,
+      "focus_index_agreement": 0.6588,
+      "noise_sigma": 1.6,
+      "vignette": 0.0,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 702,
+      "source_image": "flower01/Sharing.png",
+      "depth_source": "assigned, not measured - a photograph carries no depth map; see samples/photo_stacks.py",
+      "subject_fraction": 0.1793
+    },
+    {
+      "name": "flower01_handheld",
+      "description": "The subject stack again, with focus breathing, drift, roll and exposure flicker on top - what the same shoot looks like off a rail that is not quite rigid. scene.json carries the affine applied to each frame.",
+      "resolution": [
+        1280,
+        715
+      ],
+      "bit_depth": 8,
+      "frame_count": 14,
+      "focus_distances": [
+        0.78,
+        0.81035,
+        0.84315,
+        0.87872,
+        0.91743,
+        0.9597,
+        1.00606,
+        1.05712,
+        1.11364,
+        1.17655,
+        1.24699,
+        1.3264,
+        1.41662,
+        1.52
+      ],
+      "depth_range": [
+        0.81,
+        2.66952
+      ],
+      "coc_scale_px": 52.0,
+      "max_blur_radius_px": 44.0,
+      "max_blur_radius_used_px": 44.0,
+      "focus_index_agreement": 0.3444,
+      "noise_sigma": 2.2,
+      "vignette": 0.0,
+      "exposure_drift": 0.04,
+      "alignment_drift": 1.0,
+      "per_frame_affine": [
+        [
+          [
+            0.9999922893814706,
+            -0.003926980723806,
+            1.4088304046194893
+          ],
+          [
+            0.003926980723806,
+            0.9999922893814706,
+            -1.7105111171115641
+          ]
+        ],
+        [
+          [
+            1.0023021589454122,
+            -0.003330500343357024,
+            0.7106039960483084
+          ],
+          [
+            0.003330500343357024,
+            1.0023021589454122,
+            -3.2122650802593937
+          ]
+        ],
+        [
+          [
+            1.004611671934285,
+            -0.002731230366991843,
+            -1.7794880633642953
+          ],
+          [
+            0.002731230366991843,
+            1.004611671934285,
+            -3.4965611161465424
+          ]
+        ],
+        [
+          [
+            1.0069208258205082,
+            -0.002129171008355273,
+            -3.808801635500447
+          ],
+          [
+            0.002129171008355273,
+            1.0069208258205082,
+            -2.598516228610799
+          ]
+        ],
+        [
+          [
+            1.0092296180766285,
+            -0.001524322483128015,
+            -4.166719600413073
+          ],
+          [
+            0.001524322483128015,
+            1.0092296180766285,
+            -4.105970390274574
+          ]
+        ],
+        [
+          [
+            1.011538046175324,
+            -0.0009166850090265806,
+            -5.4178449713816015
+          ],
+          [
+            0.0009166850090265806,
+            1.011538046175324,
+            -4.361190225082925
+          ]
+        ],
+        [
+          [
+            1.0138461075894027,
+            -0.0003062588058032102,
+            -8.111921084217942
+          ],
+          [
+            0.0003062588058032102,
+            1.0138461075894027,
+            -3.4695183536016545
+          ]
+        ],
+        [
+          [
+            1.0161537997918066,
+            0.0003069559047542038,
+            -9.542678292495507
+          ],
+          [
+            -0.0003069559047542038,
+            1.0161537997918066,
+            -4.982322232722558
+          ]
+        ],
+        [
+          [
+            1.0184611202556115,
+            0.0009229588988222002,
+            -9.857745318035118
+          ],
+          [
+            -0.0009229588988222002,
+            1.0184611202556115,
+            -5.208468896833234
+          ]
+        ],
+        [
+          [
+            1.0207680664540293,
+            0.0015417499505418265,
+            -11.725345679392955
+          ],
+          [
+            -0.0015417499505418265,
+            1.0207680664540293,
+            -4.323496799789286
+          ]
+        ],
+        [
+          [
+            1.0230746358604093,
+            0.002163328832018727,
+            -14.310275001612263
+          ],
+          [
+            -0.002163328832018727,
+            1.0230746358604093,
+            -5.841296814245276
+          ]
+        ],
+        [
+          [
+            1.0253808259482402,
+            0.002787695313323221,
+            -15.159528902038142
+          ],
+          [
+            -0.002787695313323221,
+            1.0253808259482402,
+            -6.03837996863217
+          ]
+        ],
+        [
+          [
+            1.0276866341911517,
+            0.003414849162490395,
+            -15.740420137813263
+          ],
+          [
+            -0.003414849162490395,
+            1.0276866341911517,
+            -5.160430920383821
+          ]
+        ],
+        [
+          [
+            1.0299920580629147,
+            0.0040447901455201805,
+            -18.127838913628146
+          ],
+          [
+            -0.0040447901455201805,
+            1.0299920580629147,
+            -6.682870485064016
+          ]
+        ]
+      ],
+      "seed": 703,
+      "source_image": "flower01/Sharing.png",
+      "depth_source": "assigned, not measured - a photograph carries no depth map; see samples/photo_stacks.py",
+      "subject_fraction": 0.1793
+    },
+    {
+      "name": "flower01_subject_hires",
+      "description": "flower01_subject at the photograph's own 2560x1430, with the aperture scaled to match so it is the same scene on four times the pixels. For the questions that only appear at capture resolution: whether a fixed block or kernel size still spans the detail it was tuned for, what a method costs in time and memory on a real frame, and whether tiling a large image leaves seams a small one never showed.",
+      "resolution": [
+        2560,
+        1430
+      ],
+      "bit_depth": 8,
+      "frame_count": 14,
+      "focus_distances": [
+        0.78,
+        0.81035,
+        0.84315,
+        0.87872,
+        0.91743,
+        0.9597,
+        1.00606,
+        1.05712,
+        1.11364,
+        1.17655,
+        1.24699,
+        1.3264,
+        1.41662,
+        1.52
+      ],
+      "depth_range": [
+        0.81,
+        2.67
+      ],
+      "coc_scale_px": 104.0,
+      "max_blur_radius_px": 88.0,
+      "max_blur_radius_used_px": 88.0,
+      "focus_index_agreement": 0.3966,
+      "noise_sigma": 1.2,
+      "vignette": 0.0,
+      "exposure_drift": 0.0,
+      "alignment_drift": 0.0,
+      "per_frame_affine": null,
+      "seed": 704,
+      "source_image": "flower01/Sharing.png",
+      "depth_source": "assigned, not measured - a photograph carries no depth map; see samples/photo_stacks.py",
+      "subject_fraction": 0.1793
     }
   ]
 }

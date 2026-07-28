@@ -1,0 +1,49 @@
+{
+  "name": "flower01_full",
+  "description": "The same frame with focus racked all the way through the slate as well, so every part of the picture is sharp in some frame. Twenty frames over a much longer throw, which is where neighbouring frames stop differing by much and tie-breaking starts to decide the picture.",
+  "resolution": [
+    1280,
+    715
+  ],
+  "bit_depth": 8,
+  "frame_count": 20,
+  "focus_distances": [
+    0.78,
+    0.81056,
+    0.84361,
+    0.87948,
+    0.91853,
+    0.9612,
+    1.00804,
+    1.05967,
+    1.11688,
+    1.18062,
+    1.25207,
+    1.33273,
+    1.4245,
+    1.52984,
+    1.65201,
+    1.79537,
+    1.96599,
+    2.17244,
+    2.42734,
+    2.75
+  ],
+  "depth_range": [
+    0.81,
+    2.66952
+  ],
+  "coc_scale_px": 52.0,
+  "max_blur_radius_px": 44.0,
+  "max_blur_radius_used_px": 44.0,
+  "focus_index_agreement": 0.6588,
+  "noise_sigma": 1.6,
+  "vignette": 0.0,
+  "exposure_drift": 0.0,
+  "alignment_drift": 0.0,
+  "per_frame_affine": null,
+  "seed": 702,
+  "source_image": "flower01/Sharing.png",
+  "depth_source": "assigned, not measured - a photograph carries no depth map; see samples/photo_stacks.py",
+  "subject_fraction": 0.1793
+}

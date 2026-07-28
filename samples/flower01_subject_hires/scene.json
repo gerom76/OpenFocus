@@ -1,0 +1,43 @@
+{
+  "name": "flower01_subject_hires",
+  "description": "flower01_subject at the photograph's own 2560x1430, with the aperture scaled to match so it is the same scene on four times the pixels. For the questions that only appear at capture resolution: whether a fixed block or kernel size still spans the detail it was tuned for, what a method costs in time and memory on a real frame, and whether tiling a large image leaves seams a small one never showed.",
+  "resolution": [
+    2560,
+    1430
+  ],
+  "bit_depth": 8,
+  "frame_count": 14,
+  "focus_distances": [
+    0.78,
+    0.81035,
+    0.84315,
+    0.87872,
+    0.91743,
+    0.9597,
+    1.00606,
+    1.05712,
+    1.11364,
+    1.17655,
+    1.24699,
+    1.3264,
+    1.41662,
+    1.52
+  ],
+  "depth_range": [
+    0.81,
+    2.67
+  ],
+  "coc_scale_px": 104.0,
+  "max_blur_radius_px": 88.0,
+  "max_blur_radius_used_px": 88.0,
+  "focus_index_agreement": 0.3966,
+  "noise_sigma": 1.2,
+  "vignette": 0.0,
+  "exposure_drift": 0.0,
+  "alignment_drift": 0.0,
+  "per_frame_affine": null,
+  "seed": 704,
+  "source_image": "flower01/Sharing.png",
+  "depth_source": "assigned, not measured - a photograph carries no depth map; see samples/photo_stacks.py",
+  "subject_fraction": 0.1793
+}

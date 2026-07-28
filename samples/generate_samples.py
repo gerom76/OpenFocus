@@ -28,6 +28,7 @@ up as a diff unless the generator itself changed.
 
 import json
 import os
+import sys
 
 import cv2
 import numpy as np
@@ -74,16 +75,21 @@ def _disc_kernel(radius):
     return kernel
 
 
-def _defocus(img, radius):
+def _defocus(img, radius, max_radius=MAX_RADIUS):
     if radius < SHARP_RADIUS:
         return img
-    return cv2.filter2D(img, -1, _disc_kernel(min(radius, MAX_RADIUS)),
+    return cv2.filter2D(img, -1, _disc_kernel(min(radius, max_radius)),
                         borderType=cv2.BORDER_REFLECT)
 
 
-def coc_radius(depth, focus):
-    """Blur radius in pixels for a layer at `depth` when focused at `focus`."""
-    return COC_SCALE * abs(1.0 / depth - 1.0 / focus)
+def coc_radius(depth, focus, coc_scale=COC_SCALE):
+    """
+    Blur radius in pixels for a layer at `depth` when focused at `focus`.
+
+    `coc_scale` is in pixels, so it has to grow with the render: the same scene
+    at twice the width has to blur twice as far to look like the same aperture.
+    """
+    return coc_scale * abs(1.0 / depth - 1.0 / focus)
 
 
 class Layer:
@@ -95,7 +101,7 @@ class Layer:
         self.alpha = np.ascontiguousarray(alpha, dtype=np.float32)
 
 
-def composite(layers, focus=None):
+def composite(layers, focus=None, coc_scale=COC_SCALE, max_radius=MAX_RADIUS):
     """
     Composite far to near, defocusing each layer on the way.
 
@@ -109,9 +115,9 @@ def composite(layers, focus=None):
         premul = layer.rgb * layer.alpha[:, :, None]
         alpha = layer.alpha
         if focus is not None:
-            radius = coc_radius(layer.depth, focus)
-            premul = _defocus(premul, radius)
-            alpha = _defocus(alpha, radius)
+            radius = coc_radius(layer.depth, focus, coc_scale)
+            premul = _defocus(premul, radius, max_radius)
+            alpha = _defocus(alpha, radius, max_radius)
         out = premul + out * (1.0 - alpha[:, :, None])
     return out
 
@@ -199,10 +205,20 @@ def bands_from_depthmap(rgb, alpha, depthmap, count=26):
     if hi - lo < 1e-4:
         return [Layer(lo, rgb, alpha)]
 
-    planes = np.linspace(lo, hi, count)
-    step = planes[1] - planes[0]
-    shares = [(np.clip(1.0 - np.abs(depthmap - plane) / step, 0.0, 1.0) * alpha, plane)
-              for plane in planes]
+    # Spaced evenly in 1/distance, and weighted there too. Blur radius goes as
+    # |1/z - 1/focus|, so planes spaced evenly in distance are *not* evenly
+    # spaced in blur: the near end of a wide depth range gets radius steps
+    # several times larger than the far end. Sharing a pixel between two planes
+    # blends two blur discs where one intermediate disc belongs, and that
+    # approximation degrades with the gap between them - which is why a smooth
+    # receding background used to print faint contours at the plane pitch even
+    # though the depth ramp behind it was perfectly smooth.
+    disparities = np.linspace(1.0 / lo, 1.0 / hi, count)
+    step = abs(disparities[1] - disparities[0])
+    depth_disparity = 1.0 / np.maximum(depthmap, 1e-6)
+    shares = [(np.clip(1.0 - np.abs(depth_disparity - disparity) / step, 0.0, 1.0) * alpha,
+               1.0 / disparity)
+              for disparity in disparities]
 
     layers = []
     remaining = np.ones_like(alpha)     # light not yet blocked by a nearer plane
@@ -575,8 +591,9 @@ def label_agreement(frames, index_map):
 
 
 def build_scene(name, builder, blurb, seed, noise=1.6, vignette=0.0,
-                bits=8, drift=0.0, exposure_drift=0.0):
-    print("  %-16s" % name, end="", flush=True)
+                bits=8, drift=0.0, exposure_drift=0.0,
+                coc_scale=COC_SCALE, max_radius=MAX_RADIUS, extra_meta=None):
+    print("  %-18s" % name, end="", flush=True)
     layers, focus_distances = builder()
     h, w = layers[0].alpha.shape
 
@@ -592,7 +609,8 @@ def build_scene(name, builder, blurb, seed, noise=1.6, vignette=0.0,
 
     frames, transforms = [], []
     for index, focus in enumerate(focus_distances):
-        rendered = composite(layers, focus=float(focus))
+        rendered = composite(layers, focus=float(focus),
+                             coc_scale=coc_scale, max_radius=max_radius)
         matrix = (breathing_transform((h, w), index, len(focus_distances), drift)
                   if drift else None)
         exposure = 1.0 + exposure_drift * np.sin(index * 0.9)
@@ -631,10 +649,10 @@ def build_scene(name, builder, blurb, seed, noise=1.6, vignette=0.0,
         "frame_count": len(focus_distances),
         "focus_distances": [round(float(f), 5) for f in focus_distances],
         "depth_range": [round(float(depth.min()), 5), round(float(depth.max()), 5)],
-        "coc_scale_px": COC_SCALE,
-        "max_blur_radius_px": MAX_RADIUS,
+        "coc_scale_px": coc_scale,
+        "max_blur_radius_px": max_radius,
         "max_blur_radius_used_px": round(float(max(
-            min(coc_radius(l.depth, float(f)), MAX_RADIUS)
+            min(coc_radius(l.depth, float(f), coc_scale), max_radius)
             for l in layers for f in focus_distances)), 3),
         # Fraction of pixels where a Laplacian focus measure picks the labelled
         # frame or a neighbour. Low means the label is ambiguous there, not
@@ -647,6 +665,7 @@ def build_scene(name, builder, blurb, seed, noise=1.6, vignette=0.0,
         "per_frame_affine": transforms if drift else None,
         "seed": seed,
     }
+    meta.update(extra_meta or {})
     with open(os.path.join(root, "scene.json"), "w", encoding="utf-8") as handle:
         json.dump(meta, handle, indent=2)
     print(" ok")
@@ -691,6 +710,14 @@ def main():
     print("Generating focus-stack samples in %s" % OUT_DIR)
     manifest = [build_scene(name, builder, blurb, **options)
                 for name, builder, blurb, options in SCENES]
+
+    # The photo-derived scenes are written by the same builder and land in the
+    # same manifest, so there is one command to rebuild the folder and one file
+    # describing it. Imported here rather than at the top because that module
+    # imports this one back.
+    from samples.photo_stacks import build_all
+    manifest += build_all()
+
     with open(os.path.join(OUT_DIR, "manifest.json"), "w", encoding="utf-8") as handle:
         json.dump({"scenes": manifest}, handle, indent=2)
     total = sum(m["frame_count"] for m in manifest)
@@ -698,4 +725,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Run as a script, samples/ is on the path but the repository root is not,
+    # and the photo scenes are imported as samples.photo_stacks
+    sys.path.insert(0, os.path.dirname(OUT_DIR))
     main()

@@ -28,7 +28,7 @@
   "coc_scale_px": 26.0,
   "max_blur_radius_px": 22.0,
   "max_blur_radius_used_px": 15.205,
-  "focus_index_agreement": 0.4042,
+  "focus_index_agreement": 0.3999,
   "noise_sigma": 6.0,
   "vignette": 0.13,
   "exposure_drift": 0.0,

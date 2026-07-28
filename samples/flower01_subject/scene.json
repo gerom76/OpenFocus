@@ -1,0 +1,43 @@
+{
+  "name": "flower01_subject",
+  "description": "A macro stack of the flower alone: focus covers the subject and stops, so the slate behind it is defocused in every frame and never resolves. The everyday case, and the one where a method has to leave the background alone instead of hunting for detail in it.",
+  "resolution": [
+    1280,
+    715
+  ],
+  "bit_depth": 8,
+  "frame_count": 14,
+  "focus_distances": [
+    0.78,
+    0.81035,
+    0.84315,
+    0.87872,
+    0.91743,
+    0.9597,
+    1.00606,
+    1.05712,
+    1.11364,
+    1.17655,
+    1.24699,
+    1.3264,
+    1.41662,
+    1.52
+  ],
+  "depth_range": [
+    0.81,
+    2.66952
+  ],
+  "coc_scale_px": 52.0,
+  "max_blur_radius_px": 44.0,
+  "max_blur_radius_used_px": 44.0,
+  "focus_index_agreement": 0.477,
+  "noise_sigma": 1.2,
+  "vignette": 0.0,
+  "exposure_drift": 0.0,
+  "alignment_drift": 0.0,
+  "per_frame_affine": null,
+  "seed": 701,
+  "source_image": "flower01/Sharing.png",
+  "depth_source": "assigned, not measured - a photograph carries no depth map; see samples/photo_stacks.py",
+  "subject_fraction": 0.1793
+}
