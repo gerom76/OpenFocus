@@ -165,6 +165,7 @@ class TranslationManager(QObject):
                 'status_res': 'Res: {}',
                 'status_ram': 'RAM: {}',
                 'status_loaded_fmt': 'Loaded: {} ({:.1f} MB/img)',
+                'status_loaded_depth_fmt': 'Loaded: {} ({:.1f} MB/img, {})',
                 'status_res_fmt': 'Res: {}x{}',
                 'status_ram_fmt': 'RAM: {:.1f} GB / {:.0f} GB',
                 
@@ -681,6 +682,7 @@ class TranslationManager(QObject):
                 'status_res': '分辨率: {}',
                 'status_ram': '内存: {}',
                 'status_loaded_fmt': '已加载: {} ({:.1f} MB/张)',
+                'status_loaded_depth_fmt': '已加载: {} ({:.1f} MB/张, {})',
                 'status_res_fmt': '分辨率: {}x{}',
                 'status_ram_fmt': '内存: {:.1f} GB / {:.0f} GB',
                 

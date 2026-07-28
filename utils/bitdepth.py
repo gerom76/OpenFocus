@@ -199,6 +199,18 @@ def describe(dtype) -> str:
     return f"{bits_for(dtype)}-bit"
 
 
+def depth_label(images: Sequence[np.ndarray]) -> str:
+    """Compact depth label for a stack, for the status panel.
+
+    Mixed stacks are reported as "8/16-bit" rather than picking one depth, so a
+    folder holding both JPEGs and 16-bit TIFFs is visible at a glance.
+    """
+    depths = sorted({bits_for(img.dtype) for img in images if img is not None})
+    if not depths:
+        return "-"
+    return "/".join(str(d) for d in depths) + "-bit"
+
+
 def stack_summary(images: Sequence[np.ndarray]) -> str:
     """One-line depth description of a loaded stack, for the console."""
     if not images:

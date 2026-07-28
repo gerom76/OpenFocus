@@ -425,8 +425,11 @@ class OpenFocus(QMainWindow):
                 try:
                     total_size_bytes = sum(img.nbytes for img in self.raw_images)
                     avg_size_mb = (total_size_bytes / count) / (1024 * 1024)
-                    self.lbl_status_loaded.setText(trans.t('status_loaded_fmt').format(count, avg_size_mb))
-                    
+                    depth = bitdepth.depth_label(self.raw_images)
+                    self.lbl_status_loaded.setText(
+                        trans.t('status_loaded_depth_fmt').format(count, avg_size_mb, depth)
+                    )
+
                     h, w = self.raw_images[0].shape[:2]
                     self.lbl_status_resolution.setText(trans.t('status_res_fmt').format(w, h))
                 except Exception:
