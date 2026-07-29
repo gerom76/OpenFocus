@@ -181,6 +181,32 @@ pipeline instead of two programs that each aligned the stack their own way.
 After a deliberate change to the method, re-render at the same settings and
 replace the file.
 
+### Tuning against the Helicon renders
+
+[tests/fusion_autotune.py](../tests/fusion_autotune.py) closes the loop: it
+scores the pyramid's constants against the Helicon renders, keeps the best
+candidate that survives a guard, and can write the winner into
+`fusion_methods/pyramid.py`.
+
+```bash
+python -m tests.fusion_autotune              # search, report, change nothing
+python -m tests.fusion_autotune --apply      # and write the winner to source
+python -m tests.fusion_autotune --quick      # a short run, for checking the rig
+```
+
+The obvious failure of any such loop is converging on the reference rather than
+on quality, and it is not hypothetical — on the first real run, `COHERENCE=0.25`
+and `0.5` both scored **higher** against Helicon than the shipped `0.0` while
+losing 2.5 dB of ground-truth reconstruction on `fine_texture`. The guard
+rejected both. Every candidate is re-scored on the rendered scenarios in
+[tests/fusion_scenarios.py](../tests/fusion_scenarios.py), which unlike the
+capture do have a ground truth, and one that loses more than 0.3 dB on **any**
+of them is refused whatever it scored.
+
+`fusion_autotune_ledger.json` records what each run chose, and
+[tests/test_fusion_autotune.py](../tests/test_fusion_autotune.py) checks that
+source and ledger still agree about which constants are current.
+
 ### None of them is a ground truth
 
 Not one of these renders can be compared pixel by pixel, and the reason is the
