@@ -231,8 +231,18 @@ def _band_energy(detail, window):
         squared = detail * detail
     if window <= 1:
         return squared
-    return cv2.boxFilter(squared, cv2.CV_32F, (window, window),
-                         normalize=True, borderType=cv2.BORDER_REFLECT)
+    pooled = cv2.boxFilter(squared, cv2.CV_32F, (window, window),
+                           normalize=True, borderType=cv2.BORDER_REFLECT)
+    # A mean of squares cannot be negative, but the pooling is not done that
+    # way: a box filter slides a running column sum and subtracts the column
+    # leaving the window, so where a region is exactly zero the subtraction
+    # cancels to float32 residue of either sign. Values around -1e-19 are what
+    # it leaves, harmless until a fractional power reaches for them - the
+    # geometric mix at any coherence above 0 does, returns NaN, and the NaN
+    # survives all the way to an undefined cast into the output. A registered
+    # stack is where this bites, because warping leaves an irregular border
+    # that is exactly zero in every frame while the crop keeps part of it.
+    return np.maximum(pooled, 0.0, out=pooled)
 
 
 def _noise_level(energy):

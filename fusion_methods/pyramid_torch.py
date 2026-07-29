@@ -73,7 +73,11 @@ def _box_energy(band, box_kernel, window):
     if window <= 1:
         return squared
     squared = F.pad(squared, (window // 2,) * 4, mode='reflect')
-    return F.conv2d(squared, box_kernel)
+    # Clamped for the same reason the CPU path clamps: summing a window of
+    # squares in float32 can land just below zero where the region is exactly
+    # zero, and the geometric mix in _mix_parent turns that into NaN. See the
+    # note in pyramid.py's _band_energy.
+    return F.conv2d(squared, box_kernel).clamp_(min=0.0)
 
 
 def _noise_level(energy):

@@ -8,10 +8,14 @@ Two families are provided:
   entropy, spatial_frequency, std_dev, qabf.
 * Artefact-specific (need only the fused image): block_seams, defocus_seams -
   how much of the block lattice a block-selection method left showing.
+* Foreign-reference (need a render of the same capture by other software, which
+  is neither registered to the stack nor graded like it): match_tone,
+  detail_map, detail_agreement.
 
 The no-reference set is what applies to real focus stacks, where no all-in-focus
 ground truth exists; the full-reference set is used against the synthetic stacks
-in tests/synthetic_stack.py.
+in tests/synthetic_stack.py. The foreign-reference set is for the captures in
+samples/captures.py, where a reference exists but is not a ground truth.
 """
 
 import cv2
@@ -195,6 +199,84 @@ def align_to_common_size(fused, sources, reference=None):
     return (fused[:height, :width],
             [s[:height, :width] for s in sources],
             None if reference is None else reference[:height, :width])
+
+
+def match_tone(source, target):
+    """
+    Regrade `source` onto `target`'s tone, per channel, by histogram matching.
+
+    For comparing a result against a reference that came out of other software.
+    Another program's render of the same capture carries its own exposure,
+    contrast curve and colour grade, and none of that is a fusion property - but
+    every intensity metric reads it as error, and a large one. Matching the
+    histograms removes exactly the class of difference that a global monotone
+    curve can express, and nothing else: where the detail is cannot survive a
+    per-channel lookup table.
+
+    Applied per candidate rather than once, so a single frame is regraded onto
+    its own tone the same way the fused result is and neither is charged for a
+    grade it never chose. uint8 only, which is the scale the metrics here are
+    defined on.
+    """
+    if source.dtype != np.uint8 or target.dtype != np.uint8:
+        raise ValueError("match_tone works on 8-bit images")
+    if source.ndim != target.ndim:
+        raise ValueError("match_tone needs both images in the same layout")
+
+    source = source if source.ndim == 3 else source[:, :, None]
+    target = target if target.ndim == 3 else target[:, :, None]
+
+    out = np.empty_like(source)
+    for channel in range(source.shape[2]):
+        src = np.bincount(source[:, :, channel].ravel(), minlength=256).cumsum()
+        dst = np.bincount(target[:, :, channel].ravel(), minlength=256).cumsum()
+        lut = np.searchsorted(dst / dst[-1], src / src[-1])
+        out[:, :, channel] = lut.clip(0, 255).astype(np.uint8)[source[:, :, channel]]
+    return out if out.shape[2] > 1 else out[:, :, 0]
+
+
+def detail_map(img, block=64):
+    """
+    Mean local contrast per `block`x`block` tile: where the picture has detail.
+
+    Pooling to tiles is what makes the map comparable across images that are not
+    registered to each other. Two renders of the same capture by different
+    programs sit a few pixels apart - each aligned its own way, and focus
+    breathing means no single warp relates them - so a per-pixel comparison
+    measures the offset. A tile several times wider than that offset does not.
+    """
+    grey = _gray32(img)
+    if img.dtype == np.uint16:
+        grey = grey / 257.0
+    energy = np.abs(cv2.Laplacian(grey, cv2.CV_32F, ksize=3))
+    height = (energy.shape[0] // block) * block
+    width = (energy.shape[1] // block) * block
+    if height < block or width < block:
+        raise ValueError(f"image is smaller than one {block}px block")
+    return cv2.resize(energy[:height, :width], (width // block, height // block),
+                      interpolation=cv2.INTER_AREA)
+
+
+def detail_agreement(fused, reference, block=64):
+    """
+    How far `fused` found detail where `reference` did. Returns (agreement, share).
+
+    agreement - correlation between the two `detail_map`s, in [-1, 1]. 1 means
+                the two agree everywhere about which parts of the frame resolve.
+    share     - mean tile contrast of `fused` over that of `reference`, so 1.0
+                is as much local contrast recovered, and less is a softer render.
+
+    Both are relative to `reference` after `match_tone`, and both survive the
+    misalignment between two programs' renders that stops PSNR working at all.
+    Reported together because either alone is easy to satisfy: an image of pure
+    noise agrees with nothing but scores a huge share, and a heavily blurred
+    copy of the reference keeps some agreement while recovering nothing.
+    """
+    graded = match_tone(reference, fused)
+    ours = detail_map(fused, block)
+    theirs = detail_map(graded, block)
+    agreement = float(np.corrcoef(ours.ravel(), theirs.ravel())[0, 1])
+    return agreement, float(ours.mean() / max(theirs.mean(), 1e-6))
 
 
 def block_seams(fused, block=8, factor=3.0):
