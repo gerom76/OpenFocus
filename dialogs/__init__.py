@@ -24,6 +24,7 @@ from dialogs.help import (
 
 from dialogs.settings import (
     DurationDialog,
+    ExportFormatDialog,
     DownsampleDialog,
     TileSettingsDialog,
     RegistrationSettingsDialog,
@@ -51,6 +52,7 @@ __all__ = [
     'TileHelpDialog',
     # Settings dialogs
     'DurationDialog',
+    'ExportFormatDialog',
     'DownsampleDialog',
     'TileSettingsDialog',
     'RegistrationSettingsDialog',

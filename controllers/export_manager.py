@@ -11,9 +11,10 @@ from constants import (
     PYRAMID_BASE_DEFAULT, PYRAMID_COHERENCE_DEFAULT, PYRAMID_SELECTIVITY_DEFAULT,
 )
 from core import contrast
-from dialogs import DurationDialog
+from dialogs import DurationDialog, ExportFormatDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
+    bitdepth,
     jxl,
     write_image,
     show_error_box,
@@ -48,6 +49,17 @@ EXPORT_EXTENSION_ALIASES = {
 
 DEFAULT_EXPORT_EXTENSION = ".png"
 
+# Formats offered when a stack is exported to a folder, in the same order as the
+# save-dialog entries. ".tiff" is left out because it writes the same container
+# as ".tif"; JPEG XL is appended only where it can be encoded.
+EXPORT_FORMAT_CHOICES = [
+    (".jpg", "JPG"),
+    (".png", "PNG"),
+    (".bmp", "Bitmap"),
+    (".tif", "TIFF"),
+    (".webp", "WebP"),
+]
+
 # Which save-dialog entry each extension belongs to, so a remembered format can
 # be pre-selected in the dialog's format dropdown.
 EXPORT_FILTER_LABELS = {
@@ -59,6 +71,14 @@ EXPORT_FILTER_LABELS = {
     ".webp": "WebP Files (*.webp)",
     ".jxl": "JPEG XL Files (*.jxl)",
 }
+
+
+def export_format_choices() -> list[tuple[str, str]]:
+    """(extension, name) pairs the folder-export dialog offers, JXL where writable."""
+    choices = list(EXPORT_FORMAT_CHOICES)
+    if ".jxl" in ALLOWED_EXPORT_EXTENSION_MAP:
+        choices.append((".jxl", "JPEG XL"))
+    return choices
 
 
 def save_dialog_filter() -> str:
@@ -143,6 +163,40 @@ class ExportManager:
         root, ext = os.path.splitext(name)
         ext_lower = ext.lower()
         if ext_lower in ALLOWED_EXPORT_EXTENSION_MAP or ext_lower in EXPORT_EXTENSION_ALIASES:
+            return root + extension
+        return name + extension
+
+    def ask_export_format(self) -> Optional[str]:
+        """Ask which format a folder export writes, or None if the user cancels.
+
+        The choice is remembered in the settings straight away, so it is also the
+        format the next stack export and the next save dialog start on.
+        """
+        dialog = ExportFormatDialog(
+            self.window,
+            formats=export_format_choices(),
+            initial=self.preferred_export_extension(),
+        )
+        if not dialog.exec():
+            return None
+
+        extension = dialog.selected_extension() or DEFAULT_EXPORT_EXTENSION
+        settings = getattr(self.window, "settings_manager", None)
+        if settings is not None:
+            settings.set_output_format(extension)
+        return extension
+
+    def force_export_extension(self, name: str, extension: str) -> str:
+        """Put `extension` on a source filename, dropping the one it arrived with.
+
+        Source names carry their own extension - ".jpg", but also ".CR2" or
+        ".ARW" - and a stack exported in a chosen format must not keep any of
+        them. A trailing dot group that does not look like a file extension (a
+        name such as "2.5x") is left alone, so only the extension is appended.
+        """
+        root, ext = os.path.splitext(name)
+        suffix = ext[1:]
+        if suffix and suffix.isalnum() and len(suffix) <= 5:
             return root + extension
         return name + extension
 
@@ -552,6 +606,12 @@ class ExportManager:
             show_warning_box(window, trans.t("msg_no_images_title"), trans.t("msg_no_images_save_stack_text"))
             return
 
+        # The format is asked for before the folder: a folder dialog has no
+        # filter to carry it, and cancelling here costs the user nothing.
+        extension = self.ask_export_format()
+        if not extension:
+            return
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         default_foldername = f"Processed_Input_Stack_{timestamp}"
         folder_path = QFileDialog.getExistingDirectory(
@@ -567,18 +627,21 @@ class ExportManager:
         # Remember the parent so the next export starts beside the created stack folder.
         window.settings_manager.set_output_dir(os.path.dirname(folder_path))
 
-        preferred_ext = self.preferred_export_extension()
+        # One line for the whole stack when the chosen container cannot hold the
+        # source depth, rather than one per frame from write_image.
+        if bitdepth.is_high_depth(window.raw_images) and not bitdepth.supports_16bit(extension):
+            print(f"[Depth] {extension} cannot store 16-bit; the stack is saved 8-bit. "
+                  f"Use PNG, TIFF or JPEG XL to keep the full depth.", flush=True)
 
         try:
             saved_count = 0
             for index, image in enumerate(window.raw_images):
                 image_to_save = window.label_manager.prepare_bgr_image("input", image, index)
                 if index < len(window.image_filenames):
-                    filename = window.image_filenames[index]
+                    filename = self.force_export_extension(window.image_filenames[index], extension)
                 else:
-                    filename = f"processed_{index + 1:04d}{preferred_ext}"
+                    filename = f"processed_{index + 1:04d}{extension}"
                 file_path = os.path.join(folder_path, filename)
-                file_path = self.normalize_export_path(file_path, preferred_ext)
                 if write_image(file_path, image_to_save):
                     saved_count += 1
 

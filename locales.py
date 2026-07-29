@@ -482,6 +482,9 @@ class TranslationManager(QObject):
                 'dialog_duration_group': 'Frame Duration',
                 'dialog_duration_label': 'Duration (ms):',
 
+                'dialog_export_format_title': 'Save Stack Format',
+                'dialog_export_format_label': 'Format:',
+
                 # Add Label Dialog
                 'add_label_title': 'Add Label Configuration',
                 'label_target_stack': 'Target Stack:',
@@ -766,6 +769,8 @@ class TranslationManager(QObject):
                 'msg_gif_save_failed_info': '错误: {message}',
                 'msg_processed_stack_saved_text': '处理后的输入图像栈保存成功！',
                 'msg_processed_stack_saved_info': '已成功保存 {saved}/{total} 张图像到:\n{folder}',
+                'dialog_export_format_title': '保存图像栈格式',
+                'dialog_export_format_label': '格式:',
                 'msg_size_mismatch_title': '图像尺寸不一致',
                 'msg_size_mismatch_text': '新增图像尺寸与当前栈不一致。',
                 'msg_size_mismatch_info': '仍然要追加吗？',

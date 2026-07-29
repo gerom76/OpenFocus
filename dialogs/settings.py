@@ -9,13 +9,14 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
+    QComboBox,
     QGroupBox,
     QSpinBox,
     QSlider,
     QPushButton,
     QRadioButton,
 )
-from ui.styles import PRIMARY_BLUE
+from ui.styles import ADD_LABEL_DIALOG_STYLE, PRIMARY_BLUE
 from locales import trans
 from utils import resource_path
 
@@ -132,6 +133,57 @@ class DurationDialog(QDialog):
     def get_duration(self):
         """Return the duration value set by the user (milliseconds)"""
         return self.duration_spinbox.value()
+
+
+class ExportFormatDialog(QDialog):
+    """Ask which image format a stack is written in when saving it as a folder.
+
+    A folder export has no filename dialog, so it has nowhere to carry the
+    format filter the single-image saves use - hence this. The caller passes
+    `formats` as (extension, display name) pairs covering what this build can
+    actually write, so a missing JPEG XL encoder is never offered, and `initial`
+    as the extension remembered in the settings, which is preselected.
+    """
+
+    def __init__(self, parent=None, formats=None, initial=""):
+        super().__init__(parent)
+        self.setWindowTitle(trans.t('dialog_export_format_title'))
+        self.setStyleSheet(ADD_LABEL_DIALOG_STYLE)
+        self.setMinimumWidth(320)
+
+        layout = QVBoxLayout(self)
+
+        format_layout = QHBoxLayout()
+        label = QLabel(trans.t('dialog_export_format_label'))
+        label.setMinimumWidth(80)
+        self.format_combo = QComboBox()
+        for extension, name in (formats or []):
+            self.format_combo.addItem(f"{name} (*{extension})", extension)
+        format_layout.addWidget(label)
+        format_layout.addWidget(self.format_combo, 1)
+        layout.addLayout(format_layout)
+
+        index = self.format_combo.findData((initial or "").lower())
+        if index >= 0:
+            self.format_combo.setCurrentIndex(index)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        ok_button = QPushButton("OK")
+        ok_button.setDefault(True)
+        ok_button.clicked.connect(self.accept)
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+
+    def selected_extension(self) -> str:
+        """Return the chosen extension, e.g. '.png'."""
+        return self.format_combo.currentData() or ""
 
 
 class DownsampleDialog(QDialog):

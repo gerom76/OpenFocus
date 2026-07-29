@@ -476,7 +476,7 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 
 1. Go to **File → Save Stack → Input Stack**
 2. Choose save format:
-   - **Save as Folder**: Saves original frames as separate images
+   - **Save as Folder**: Asks which image format to write, then saves the original frames as separate images under their own names. The chosen format is remembered and offered first the next time you save
    - **Save as GIF**: Creates animated GIF of input sequence
 
 ### Export Formats
