@@ -225,8 +225,8 @@ def stack_summary(images: Sequence[np.ndarray]) -> str:
 def supports_16bit(extension: str) -> bool:
     """Whether a container can actually store 16 bits per channel.
 
-    PNG, TIFF and JPEG XL can; JPEG and BMP cannot, so writing 16-bit data to
-    them has to be narrowed first rather than silently mangled by the encoder.
+    PNG, TIFF and JPEG XL can; JPEG, BMP and WebP cannot, so writing 16-bit data
+    to them has to be narrowed first rather than silently mangled by the encoder.
     """
     ext = extension.lower()
     if not ext.startswith("."):

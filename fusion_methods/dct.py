@@ -130,7 +130,7 @@ def _ensure_color_image(image: np.ndarray) -> np.ndarray:
     raise ValueError(f"Unsupported image shape: {image.shape}")
 
 def _collect_images_from_folder(source_folder: str) -> Tuple[List[np.ndarray], List[str]]:
-    extensions = ['*.jpg', '*.jpeg', '*.png', '*.tif', '*.tiff', '*.bmp']
+    extensions = ['*.jpg', '*.jpeg', '*.png', '*.tif', '*.tiff', '*.bmp', '*.webp']
     img_paths = []
     for ext in extensions:
         img_paths.extend(glob.glob(os.path.join(source_folder, ext)))

@@ -11,6 +11,16 @@ from utils import jxl
 from utils.metadata import RenderMetadata, embed as embed_metadata
 
 
+# WebP is written losslessly, like every other container here: OpenCV selects
+# lossless encoding for any quality above 100.
+WEBP_LOSSLESS_QUALITY = 101
+
+# libwebp cannot address more than 16383 px on either side, whatever the encoder
+# settings are. Past that the encode just fails, so the limit is checked before
+# the write and reported as itself rather than as a bare "could not write".
+WEBP_MAX_DIMENSION = 16383
+
+
 def ensure_bgr(img: np.ndarray) -> np.ndarray:
     """Force a decoded frame to 3-channel BGR without changing its bit depth.
 
@@ -66,6 +76,9 @@ def get_imwrite_params(extension: str) -> list:
     elif ext in (".tif", ".tiff"):
         # TIFF: LZW compression disabled (compression flag 1 = no compression)
         return [cv2.IMWRITE_TIFF_COMPRESSION, 1]
+    elif ext in (".webp",):
+        # WebP: above 100 the encoder switches to lossless (default is 100, lossy)
+        return [cv2.IMWRITE_WEBP_QUALITY, WEBP_LOSSLESS_QUALITY]
     elif ext in (".bmp",):
         # BMP: No quality parameters needed (always lossless)
         return []
@@ -73,6 +86,23 @@ def get_imwrite_params(extension: str) -> list:
         # JPEG XL lands here too: it is not encoded by OpenCV at all, so it has
         # no imwrite parameters - see utils.jxl for its quality settings.
         return []
+
+
+def webp_size_error(image: np.ndarray) -> Optional[str]:
+    """Why libwebp will refuse this image, or None if it will accept it.
+
+    WebP's canvas is capped at 16383 px per side by the format itself, so a
+    fused panorama wider than that cannot be written however it is encoded. The
+    encoder only reports a generic failure, hence the check up front.
+    """
+    if image is None:
+        return None
+    height, width = image.shape[:2]
+    if max(width, height) > WEBP_MAX_DIMENSION:
+        return (f"WebP cannot store images larger than {WEBP_MAX_DIMENSION} px "
+                f"on a side; this one is {width}x{height}. "
+                f"Save as PNG, TIFF or JPEG XL instead.")
+    return None
 
 
 def write_image(
@@ -83,24 +113,30 @@ def write_image(
 ) -> bool:
     """Write an image, narrowing it first if the container cannot hold its depth.
 
-    PNG, TIFF and JPEG XL store 16 bits per channel; JPEG and BMP do not.
+    PNG, TIFF and JPEG XL store 16 bits per channel; JPEG, BMP and WebP do not.
     Handing 16-bit data to a JPEG encoder does not produce a 16-bit JPEG, so the
     narrowing has to be explicit. `announce` prints one line when it happens,
     which the single-image save paths use so the loss is never silent; stack
     exports log once around the loop instead of once per frame.
 
     JPEG XL is encoded by utils.jxl rather than OpenCV, whose wheels are not
-    built with libjxl; everything else goes through cv2.imwrite.
+    built with libjxl; everything else, WebP included, goes through cv2.imwrite.
 
     `metadata` describes the render behind the image. When given, and when the
     container is JPEG, PNG or JPEG XL, the source EXIF and OpenFocus' XMP group
     are added to the encoded file afterwards - see utils.metadata. Metadata
-    failures never fail the save: the image is already on disk by then.
+    failures never fail the save: the image is already on disk by then. WebP,
+    like TIFF and BMP, is written without them.
     """
     ext = os.path.splitext(file_path)[1]
     if announce and bitdepth.is_high_depth(image) and not bitdepth.supports_16bit(ext):
         print(f"[Depth] {ext or 'this format'} cannot store 16-bit; saving 8-bit. "
               f"Use PNG, TIFF or JPEG XL to keep the full depth.", flush=True)
+    if ext.lower() == ".webp":
+        reason = webp_size_error(image)
+        if reason is not None:
+            print(f"[WebP] {reason}", flush=True)
+            return False
     image = bitdepth.prepare_for_write(image, ext)
     if jxl.is_jxl(ext):
         if not jxl.write(file_path, image):

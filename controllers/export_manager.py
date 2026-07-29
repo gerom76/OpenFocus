@@ -30,6 +30,7 @@ ALLOWED_EXPORT_EXTENSION_MAP = {
     ".bmp": ".bmp",
     ".tif": ".tif",
     ".tiff": ".tiff",
+    ".webp": ".webp",
 }
 
 # JPEG XL needs an encoder this build may not have; offering it in the dialogs
@@ -55,18 +56,20 @@ EXPORT_FILTER_LABELS = {
     ".bmp": "Bitmap Files (*.bmp)",
     ".tif": "TIFF Files (*.tif *.tiff)",
     ".tiff": "TIFF Files (*.tif *.tiff)",
+    ".webp": "WebP Files (*.webp)",
     ".jxl": "JPEG XL Files (*.jxl)",
 }
 
 
 def save_dialog_filter() -> str:
     """Filter string for the save dialogs, with JPEG XL only where it can be written."""
-    supported = "*.png *.jpg *.bmp *.tif *.tiff"
+    supported = "*.png *.jpg *.bmp *.tif *.tiff *.webp"
     entries = [
         "JPG Files (*.jpg)",
         "PNG Files (*.png)",
         "Bitmap Files (*.bmp)",
         "TIFF Files (*.tif *.tiff)",
+        "WebP Files (*.webp)",
     ]
     if jxl.is_available():
         supported += " *.jxl"

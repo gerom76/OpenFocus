@@ -91,7 +91,7 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
              
         files = os.listdir(input_source)
         # Simple filtering by image extension
-        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
         img_paths = [
             os.path.join(input_source, f) for f in files 
             if os.path.splitext(f)[1].lower() in valid_exts

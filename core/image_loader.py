@@ -117,7 +117,7 @@ class ImageStackLoader:
     """Image stack loader"""
 
     RAW_FORMATS = {'.nef', '.nrw'}  # Nikon RAW, requires rawpy (LibRaw)
-    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'} | (RAW_FORMATS if RAWPY_AVAILABLE else set())
+    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'} | (RAW_FORMATS if RAWPY_AVAILABLE else set())
     SUPPORTED_VIDEO_FORMATS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
     # Formats nvJPEG can decode on the GPU; everything else stays on OpenCV.
     GPU_DECODE_FORMATS = {'.jpg', '.jpeg'}

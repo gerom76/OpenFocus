@@ -278,7 +278,7 @@ class BatchProcessingDialog(QDialog):
         
         format_layout.addWidget(QLabel(trans.t('batch_format_label')))
         self.format_combo = QComboBox()
-        formats = ["JPG", "PNG", "BMP", "TIFF"]
+        formats = ["JPG", "PNG", "BMP", "TIFF", "WEBP"]
         # The combo text is lower-cased into the output extension, so the entry
         # is the extension itself. It is only offered when this build can encode
         # JPEG XL - see utils.jxl.
