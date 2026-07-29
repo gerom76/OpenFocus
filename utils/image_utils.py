@@ -46,9 +46,16 @@ def read_image_any_depth(path: str, apply_mode: bool = True) -> Optional[np.ndar
     Used by the folder-input paths of the fusion methods, which would otherwise
     silently narrow a 16-bit stack the moment it was passed as a directory
     rather than as preloaded arrays. Returns None if the file cannot be decoded.
+
+    JPEG XL is decoded by utils.jxl rather than OpenCV, whose wheels are not
+    built with libjxl - the mirror of how write_image encodes it. Everything
+    else goes through cv2.imdecode.
     """
-    data = np.fromfile(path, dtype=np.uint8)
-    img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+    if jxl.is_jxl(os.path.splitext(path)[1]):
+        img = jxl.read(path)
+    else:
+        data = np.fromfile(path, dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
     if img is None:
         return None
     img = ensure_bgr(img)

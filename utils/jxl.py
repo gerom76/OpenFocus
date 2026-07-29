@@ -1,15 +1,18 @@
-"""JPEG XL encoding for saved results.
+"""JPEG XL encoding and decoding.
 
-OpenCV's wheels are not built with libjxl, so `.jxl` is the one output container
-the usual `cv2.imwrite` path cannot produce. It is encoded here instead, through
-`imagecodecs`, which wraps libjxl and takes a numpy array directly - the same
-kind of array the rest of the pipeline already carries. That matters for depth:
-JPEG XL stores 16 bits per channel, and encoding straight from the uint16 buffer
-keeps the full depth that PNG and TIFF also keep.
+OpenCV's wheels are not built with libjxl, so `.jxl` is the one container the
+usual `cv2.imwrite` / `cv2.imdecode` paths can neither write nor read. It is
+handled here instead, through `imagecodecs`, which wraps libjxl and speaks numpy
+arrays directly - the same kind of array the rest of the pipeline already
+carries. That matters for depth in both directions: JPEG XL stores 16 bits per
+channel, so encoding straight from the uint16 buffer keeps the full depth PNG
+and TIFF also keep, and a 16-bit `.jxl` stack loads at 16 bits rather than
+arriving pre-narrowed.
 
 The backend is optional. Without it `is_available()` is False, the format is
-left out of the save dialogs and the batch format list, and nothing else in the
-app changes - so a build without `imagecodecs` behaves exactly as before.
+left out of the save dialogs, the batch format list and the loader's supported
+extensions, and nothing else in the app changes - so a build without
+`imagecodecs` behaves exactly as before.
 
 Files are always written as a **container** (the ISOBMFF-style box layout) rather
 than a bare codestream, because that is what lets utils.metadata splice the EXIF
@@ -38,7 +41,7 @@ except Exception:  # pylint: disable=broad-except
 
 
 def is_available() -> bool:
-    """Whether this build can write JPEG XL."""
+    """Whether this build can read and write JPEG XL."""
     return _AVAILABLE
 
 
@@ -56,6 +59,15 @@ def unavailable_reason() -> str:
         return ""
     return ("JPEG XL support needs the 'imagecodecs' package: "
             "pip install imagecodecs")
+
+
+def extensions() -> tuple:
+    """The extensions this build can handle - empty when the backend is absent.
+
+    Lets the loader and the folder-scanning fusion methods fold JPEG XL into
+    their supported sets without each of them repeating the availability check.
+    """
+    return EXTENSIONS if _AVAILABLE else ()
 
 
 def encode(image: np.ndarray,
@@ -132,8 +144,9 @@ def write(file_path: str,
 def decode(payload: bytes) -> Optional[np.ndarray]:
     """Decode a JPEG XL byte string to BGR, or None if it cannot be read.
 
-    Only used by the tests and by anything that wants to verify a written file;
-    loading stacks still goes through OpenCV.
+    The array comes back at the depth the file was written at - uint8, uint16 or
+    float32 - and is handed on unchanged, so the caller's depth mode is what
+    decides the frame's storage dtype, exactly as for a 16-bit PNG or TIFF.
     """
     if not _AVAILABLE:
         return None
@@ -146,3 +159,25 @@ def decode(payload: bytes) -> Optional[np.ndarray]:
     if data.ndim == 3 and data.shape[2] == 4:
         return cv2.cvtColor(data, cv2.COLOR_RGBA2BGRA)
     return data
+
+
+def read(file_path: str) -> Optional[np.ndarray]:
+    """Read a JPEG XL file from disk as BGR, or None if it cannot be read.
+
+    The counterpart of `write`, and the read side of what cv2.imdecode does for
+    every other input format. The file is pulled into memory first rather than
+    handed to libjxl by name, so paths with non-ASCII characters load the same
+    way they do everywhere else in the loader.
+
+    Returns None - rather than raising - for a missing, truncated or non-JPEG XL
+    file, because the callers report a failed frame themselves and carry on with
+    the rest of the stack.
+    """
+    if not _AVAILABLE:
+        return None
+    try:
+        with open(file_path, "rb") as handle:
+            payload = handle.read()
+    except OSError:
+        return None
+    return decode(payload)

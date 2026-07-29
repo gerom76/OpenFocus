@@ -35,7 +35,7 @@ OpenFocus is a professional multi-focus image fusion desktop application designe
 
 ### Supported Input Formats
 
-- Image files: JPG, PNG, BMP, TIFF, and other common formats
+- Image files: JPG, PNG, BMP, TIFF, WebP, JXL (JPEG XL, with `imagecodecs` installed), and other common formats
 - Video files: MP4 format (automatically decoded into image sequences)
 - Folders containing numbered image sequences
 

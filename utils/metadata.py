@@ -137,9 +137,17 @@ def read_source_exif(path: Optional[str]) -> Optional[bytes]:
 
     Sources Pillow cannot open - RAW files above all - simply yield no EXIF; the
     result is still saved, just without the camera block.
+
+    JPEG XL is read from its own Exif box rather than through Pillow, which has
+    no JPEG XL reader; that is the same box this module writes, so a `.jxl`
+    stack carries its camera tags through a render like any other source.
     """
     if not path or not os.path.isfile(path):
         return None
+
+    if os.path.splitext(path)[1].lower() == ".jxl":
+        blob = _jxl_exif(path)
+        return _as_tiff_stream(blob)
 
     try:
         from PIL import Image
@@ -158,6 +166,11 @@ def read_source_exif(path: Optional[str]) -> Optional[bytes]:
         print(f"[Metadata] No EXIF read from {os.path.basename(path)}: {exc}", flush=True)
         return None
 
+    return _as_tiff_stream(blob)
+
+
+def _as_tiff_stream(blob: Optional[bytes]) -> Optional[bytes]:
+    """Strip the ``Exif\\0\\0`` prefix, and reject anything that is not TIFF."""
     if not blob:
         return None
 
@@ -463,6 +476,46 @@ def _png_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Option
 def _jxl_box(box_type: bytes, payload: bytes) -> bytes:
     """Build one JPEG XL container box: 32-bit size (counting itself), type, data."""
     return (len(payload) + 8).to_bytes(4, "big") + box_type + payload
+
+
+def _jxl_exif(path: str) -> Optional[bytes]:
+    """The EXIF block of a JPEG XL file, still prefixed as the box stores it.
+
+    Walks the container box by box, seeking over each payload instead of reading
+    it, so a large file costs a handful of small reads rather than loading a
+    codestream to find a few hundred bytes of tags. A bare codestream, a
+    truncated file or a container without an Exif box all yield None.
+
+    The box payload opens with a 32-bit count of bytes to skip before the TIFF
+    header - OpenFocus writes 0, other encoders need not.
+    """
+    try:
+        with open(path, "rb") as handle:
+            if handle.read(len(_JXL_CONTAINER_SIGNATURE)) != _JXL_CONTAINER_SIGNATURE:
+                return None
+
+            while True:
+                header = handle.read(8)
+                if len(header) < 8:
+                    return None
+                size = int.from_bytes(header[0:4], "big")
+                box_type = header[4:8]
+
+                if box_type == _JXL_EXIF_BOX:
+                    # Size 0 means the box runs to the end of the file.
+                    payload = handle.read() if size == 0 else handle.read(size - 8)
+                    if len(payload) < 4:
+                        return None
+                    skip = int.from_bytes(payload[0:4], "big")
+                    return payload[4 + skip:] or None
+
+                if size == 0:
+                    return None  # Ran to the end without an Exif box.
+                if size < 8:
+                    return None  # Malformed: a box cannot be smaller than its header.
+                handle.seek(size - 8, os.SEEK_CUR)
+    except OSError:
+        return None
 
 
 def _jxl_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Optional[bytes]:

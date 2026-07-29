@@ -29,7 +29,7 @@ except ImportError:
 
 from PyQt6.QtGui import QPixmap, QImage
 
-from utils import bitdepth
+from utils import bitdepth, jxl
 from utils.image_utils import read_image_any_depth
 from core import gpu_decode, memory
 
@@ -117,7 +117,12 @@ class ImageStackLoader:
     """Image stack loader"""
 
     RAW_FORMATS = {'.nef', '.nrw'}  # Nikon RAW, requires rawpy (LibRaw)
-    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'} | (RAW_FORMATS if RAWPY_AVAILABLE else set())
+    # JPEG XL, requires imagecodecs (libjxl); absent it, the format is simply
+    # not a supported input, the same way RAW is not without rawpy.
+    JXL_FORMATS = set(jxl.extensions())
+    SUPPORTED_FORMATS = ({'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
+                         | (RAW_FORMATS if RAWPY_AVAILABLE else set())
+                         | JXL_FORMATS)
     SUPPORTED_VIDEO_FORMATS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
     # Formats nvJPEG can decode on the GPU; everything else stays on OpenCV.
     GPU_DECODE_FORMATS = {'.jpg', '.jpeg'}
@@ -156,10 +161,11 @@ class ImageStackLoader:
         """Read an image as a BGR array, then bring it to the active depth mode.
 
         The decode itself is always done at the source's native depth - RAW at
-        16 bits, and IMREAD_UNCHANGED for everything else so a 16-bit PNG or
-        TIFF arrives intact. bitdepth.apply_load_mode then narrows or widens the
-        result according to the mode, so in the default auto mode a >8-bit file
-        keeps its extra bits and an 8-bit file stays 8-bit.
+        16 bits, libjxl for JPEG XL, and IMREAD_UNCHANGED for everything else so
+        a 16-bit PNG or TIFF arrives intact. bitdepth.apply_load_mode then
+        narrows or widens the result according to the mode, so in the default
+        auto mode a >8-bit file keeps its extra bits and an 8-bit file stays
+        8-bit.
 
         Returns None on failure.
         """
@@ -197,6 +203,10 @@ class ImageStackLoader:
         about to build before it allocates any of it. Returns None when the
         dimensions cannot be read cheaply, in which case callers carry on
         without the estimate rather than paying a full decode for it.
+
+        JPEG XL is one such case: imagecodecs exposes no header-only reader, so
+        unless Pillow has a JPEG XL plugin registered a `.jxl` stack loads
+        without the up-front size line. The load itself is unaffected.
         """
         ext = os.path.splitext(full_path)[1].lower()
         try:

@@ -8,7 +8,7 @@ from typing import List, Sequence, Tuple, Union
 import cv2
 import numpy as np
 
-from utils import bitdepth
+from utils import bitdepth, jxl
 from utils.image_utils import read_image_any_depth
 
 ArraySource = Sequence[np.ndarray]
@@ -131,6 +131,7 @@ def _ensure_color_image(image: np.ndarray) -> np.ndarray:
 
 def _collect_images_from_folder(source_folder: str) -> Tuple[List[np.ndarray], List[str]]:
     extensions = ['*.jpg', '*.jpeg', '*.png', '*.tif', '*.tiff', '*.bmp', '*.webp']
+    extensions += [f"*{ext}" for ext in jxl.extensions()]
     img_paths = []
     for ext in extensions:
         img_paths.extend(glob.glob(os.path.join(source_folder, ext)))

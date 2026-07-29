@@ -5,7 +5,7 @@ Modules:
 - image_utils: Image conversion functions (pixmap <-> cv2)
 - auto_params: What a setting left on 'Auto' resolved to during a render
 - bitdepth: 8/16-bit depth policy and conversion
-- jxl: JPEG XL encoding, optional and off when imagecodecs is absent
+- jxl: JPEG XL encoding and decoding, optional and off when imagecodecs is absent
 - ui_utils: UI-related functions (message boxes, dialogs)
 - metadata: EXIF passthrough and OpenFocus XMP for saved results
 - validators: Validation and utility functions
