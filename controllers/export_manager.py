@@ -15,6 +15,7 @@ from dialogs import DurationDialog, ExportFormatDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
     bitdepth,
+    dng,
     jxl,
     write_image,
     show_error_box,
@@ -39,6 +40,12 @@ ALLOWED_EXPORT_EXTENSION_MAP = {
 # the accepted extensions only once utils.jxl reports a backend.
 if jxl.is_available():
     ALLOWED_EXPORT_EXTENSION_MAP[".jxl"] = ".jxl"
+
+# DNG is written by utils.dng without help from any optional package, but a build
+# that cannot read one back has no business offering it as a save format, so it
+# follows the same availability gate - see utils.dng.is_available.
+if dng.is_available():
+    ALLOWED_EXPORT_EXTENSION_MAP[".dng"] = ".dng"
 
 EXPORT_EXTENSION_ALIASES = {
     ".jpeg": ".jpg",
@@ -70,19 +77,26 @@ EXPORT_FILTER_LABELS = {
     ".tiff": "TIFF Files (*.tif *.tiff)",
     ".webp": "WebP Files (*.webp)",
     ".jxl": "JPEG XL Files (*.jxl)",
+    ".dng": "DNG Files (*.dng)",
 }
 
 
 def export_format_choices() -> list[tuple[str, str]]:
-    """(extension, name) pairs the folder-export dialog offers, JXL where writable."""
+    """(extension, name) pairs the folder-export dialog offers.
+
+    JPEG XL and DNG are appended only where they can be written, so the list
+    matches what ALLOWED_EXPORT_EXTENSION_MAP will actually accept.
+    """
     choices = list(EXPORT_FORMAT_CHOICES)
     if ".jxl" in ALLOWED_EXPORT_EXTENSION_MAP:
         choices.append((".jxl", "JPEG XL"))
+    if ".dng" in ALLOWED_EXPORT_EXTENSION_MAP:
+        choices.append((".dng", "DNG"))
     return choices
 
 
 def save_dialog_filter() -> str:
-    """Filter string for the save dialogs, with JPEG XL only where it can be written."""
+    """Filter string for the save dialogs, with JPEG XL and DNG where writable."""
     supported = "*.png *.jpg *.bmp *.tif *.tiff *.webp"
     entries = [
         "JPG Files (*.jpg)",
@@ -94,6 +108,9 @@ def save_dialog_filter() -> str:
     if jxl.is_available():
         supported += " *.jxl"
         entries.append("JPEG XL Files (*.jxl)")
+    if dng.is_available():
+        supported += " *.dng"
+        entries.append("DNG Files (*.dng)")
     entries.append("All Files (*)")
     return f"All Supported Formats ({supported});;" + ";;".join(entries)
 

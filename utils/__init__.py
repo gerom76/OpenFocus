@@ -6,6 +6,7 @@ Modules:
 - auto_params: What a setting left on 'Auto' resolved to during a render
 - bitdepth: 8/16-bit depth policy and conversion
 - jxl: JPEG XL encoding and decoding, optional and off when imagecodecs is absent
+- dng: DNG reading (LibRaw for camera files, verbatim for our own) and writing
 - ui_utils: UI-related functions (message boxes, dialogs)
 - metadata: EXIF passthrough and OpenFocus XMP for saved results
 - validators: Validation and utility functions
@@ -27,6 +28,7 @@ from utils.image_utils import (
 )
 
 from utils import auto_params
+from utils import dng
 from utils import jxl
 from utils import metadata
 from utils.metadata import RenderMetadata
@@ -106,6 +108,8 @@ __all__ = [
     'auto_params',
     # jxl
     'jxl',
+    # dng
+    'dng',
     # metadata
     'metadata',
     'RenderMetadata',

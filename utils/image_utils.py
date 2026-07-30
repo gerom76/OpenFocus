@@ -7,6 +7,7 @@ from typing import Optional
 from PyQt6.QtGui import QPixmap, QImage
 
 from utils import bitdepth
+from utils import dng
 from utils import jxl
 from utils.metadata import RenderMetadata, embed as embed_metadata
 
@@ -48,11 +49,17 @@ def read_image_any_depth(path: str, apply_mode: bool = True) -> Optional[np.ndar
     rather than as preloaded arrays. Returns None if the file cannot be decoded.
 
     JPEG XL is decoded by utils.jxl rather than OpenCV, whose wheels are not
-    built with libjxl - the mirror of how write_image encodes it. Everything
-    else goes through cv2.imdecode.
+    built with libjxl - the mirror of how write_image encodes it. DNG goes to
+    utils.dng, which reads its own linear output verbatim and develops a camera
+    DNG through LibRaw. Everything else goes through cv2.imdecode.
     """
-    if jxl.is_jxl(os.path.splitext(path)[1]):
+    ext = os.path.splitext(path)[1]
+    if jxl.is_jxl(ext):
         img = jxl.read(path)
+    elif dng.is_dng(ext):
+        # A camera DNG has to be developed, and the depth mode decides at what
+        # depth; an OpenFocus linear DNG ignores this and comes back as stored.
+        img = dng.read(path, output_bps=8 if bitdepth.get_mode() == bitdepth.MODE_8 else 16)
     else:
         data = np.fromfile(path, dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
@@ -90,8 +97,9 @@ def get_imwrite_params(extension: str) -> list:
         # BMP: No quality parameters needed (always lossless)
         return []
     else:
-        # JPEG XL lands here too: it is not encoded by OpenCV at all, so it has
-        # no imwrite parameters - see utils.jxl for its quality settings.
+        # JPEG XL and DNG land here too: neither is encoded by OpenCV at all, so
+        # they have no imwrite parameters - see utils.jxl for JPEG XL's quality
+        # settings, and utils.dng, which is always uncompressed.
         return []
 
 
@@ -108,7 +116,7 @@ def webp_size_error(image: np.ndarray) -> Optional[str]:
     if max(width, height) > WEBP_MAX_DIMENSION:
         return (f"WebP cannot store images larger than {WEBP_MAX_DIMENSION} px "
                 f"on a side; this one is {width}x{height}. "
-                f"Save as PNG, TIFF or JPEG XL instead.")
+                f"Save as PNG, TIFF, JPEG XL or DNG instead.")
     return None
 
 
@@ -120,25 +128,26 @@ def write_image(
 ) -> bool:
     """Write an image, narrowing it first if the container cannot hold its depth.
 
-    PNG, TIFF and JPEG XL store 16 bits per channel; JPEG, BMP and WebP do not.
-    Handing 16-bit data to a JPEG encoder does not produce a 16-bit JPEG, so the
-    narrowing has to be explicit. `announce` prints one line when it happens,
+    PNG, TIFF, JPEG XL and DNG store 16 bits per channel; JPEG, BMP and WebP do
+    not. Handing 16-bit data to a JPEG encoder does not produce a 16-bit JPEG, so
+    the narrowing has to be explicit. `announce` prints one line when it happens,
     which the single-image save paths use so the loss is never silent; stack
     exports log once around the loop instead of once per frame.
 
     JPEG XL is encoded by utils.jxl rather than OpenCV, whose wheels are not
-    built with libjxl; everything else, WebP included, goes through cv2.imwrite.
+    built with libjxl, and DNG by utils.dng, which OpenCV cannot write at all;
+    everything else, WebP included, goes through cv2.imwrite.
 
     `metadata` describes the render behind the image. When given, and when the
     container is JPEG, PNG or JPEG XL, the source EXIF and OpenFocus' XMP group
     are added to the encoded file afterwards - see utils.metadata. Metadata
     failures never fail the save: the image is already on disk by then. WebP,
-    like TIFF and BMP, is written without them.
+    like TIFF, BMP and DNG, is written without them.
     """
     ext = os.path.splitext(file_path)[1]
     if announce and bitdepth.is_high_depth(image) and not bitdepth.supports_16bit(ext):
         print(f"[Depth] {ext or 'this format'} cannot store 16-bit; saving 8-bit. "
-              f"Use PNG, TIFF or JPEG XL to keep the full depth.", flush=True)
+              f"Use PNG, TIFF, JPEG XL or DNG to keep the full depth.", flush=True)
     if ext.lower() == ".webp":
         reason = webp_size_error(image)
         if reason is not None:
@@ -147,6 +156,9 @@ def write_image(
     image = bitdepth.prepare_for_write(image, ext)
     if jxl.is_jxl(ext):
         if not jxl.write(file_path, image):
+            return False
+    elif dng.is_dng(ext):
+        if not dng.write(file_path, image):
             return False
     elif not cv2.imwrite(file_path, image, get_imwrite_params(ext)):
         return False

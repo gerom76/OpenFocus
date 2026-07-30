@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 
 from fusion_methods import torch_depth
-from utils import bitdepth, jxl
+from utils import bitdepth, dng, jxl
 from utils.image_utils import read_image_any_depth
 
 # Parameters matching the CPU implementation in gfg_fgf.py
@@ -44,7 +44,8 @@ def _load_stack(input_source):
         raise ValueError(f"Path not found: {input_source}")
 
     filenames = os.listdir(input_source)
-    valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'} | set(jxl.extensions())
+    valid_exts = ({'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
+                  | set(jxl.extensions()) | set(dng.extensions()))
     img_paths = [
         os.path.join(input_source, f) for f in filenames
         if os.path.splitext(f)[1].lower() in valid_exts

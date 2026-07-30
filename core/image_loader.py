@@ -29,8 +29,8 @@ except ImportError:
 
 from PyQt6.QtGui import QPixmap, QImage
 
-from utils import bitdepth, jxl
-from utils.image_utils import read_image_any_depth
+from utils import bitdepth, dng, jxl
+from utils.image_utils import ensure_bgr, read_image_any_depth
 from core import gpu_decode, memory
 
 # Progress lines are throttled to this interval so a large stack does not
@@ -116,7 +116,10 @@ class LazyPixmapStack:
 class ImageStackLoader:
     """Image stack loader"""
 
-    RAW_FORMATS = {'.nef', '.nrw'}  # Nikon RAW, requires rawpy (LibRaw)
+    # Nikon RAW and DNG, all developed by rawpy (LibRaw). A DNG that OpenFocus
+    # wrote itself is already demosaiced and is read verbatim instead - see
+    # read_image_bgr - but it shares the extension, so it shares the entry here.
+    RAW_FORMATS = {'.nef', '.nrw', '.dng'}
     # JPEG XL, requires imagecodecs (libjxl); absent it, the format is simply
     # not a supported input, the same way RAW is not without rawpy.
     JXL_FORMATS = set(jxl.extensions())
@@ -170,6 +173,14 @@ class ImageStackLoader:
         Returns None on failure.
         """
         ext = os.path.splitext(full_path)[1].lower()
+        if dng.is_dng(ext):
+            # A DNG OpenFocus wrote holds demosaiced pixels, so developing it
+            # would put a second tone curve and white balance on a frame that
+            # already has one; it is read straight from its strips instead. A
+            # camera DNG returns None here and falls through to LibRaw below.
+            linear = dng.read_linear(full_path)
+            if linear is not None:
+                return bitdepth.apply_load_mode(ensure_bgr(linear))
         if ext in cls.RAW_FORMATS:
             if not RAWPY_AVAILABLE:
                 return None
@@ -210,7 +221,13 @@ class ImageStackLoader:
         """
         ext = os.path.splitext(full_path)[1].lower()
         try:
-            if ext in cls.RAW_FORMATS:
+            own_dng = dng.probe(full_path) if dng.is_dng(ext) else None
+            if own_dng is not None:
+                # An OpenFocus DNG is read verbatim, so its stored depth is the
+                # depth the frame arrives at - LibRaw would report 16 either way.
+                width, height, bits = own_dng
+                native = bitdepth.UINT16 if bits > 8 else bitdepth.UINT8
+            elif ext in cls.RAW_FORMATS:
                 if not RAWPY_AVAILABLE:
                     return None
                 with open(full_path, 'rb') as f:

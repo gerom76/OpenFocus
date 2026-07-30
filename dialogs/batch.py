@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 )
 from ui.styles import PRIMARY_BLUE
 from locales import trans
-from utils import jxl, log_message_box, show_warning_box
+from utils import dng, jxl, log_message_box, show_warning_box
 
 
 def _dct_params(window) -> dict:
@@ -279,11 +279,13 @@ class BatchProcessingDialog(QDialog):
         format_layout.addWidget(QLabel(trans.t('batch_format_label')))
         self.format_combo = QComboBox()
         formats = ["JPG", "PNG", "BMP", "TIFF", "WEBP"]
-        # The combo text is lower-cased into the output extension, so the entry
-        # is the extension itself. It is only offered when this build can encode
-        # JPEG XL - see utils.jxl.
+        # The combo text is lower-cased into the output extension, so each entry
+        # is the extension itself. The last two are offered only where this build
+        # can handle them - see utils.jxl and utils.dng.
         if jxl.is_available():
             formats.append("JXL")
+        if dng.is_available():
+            formats.append("DNG")
         self.format_combo.addItems(formats)
         self._select_remembered_format()
         self.format_combo.currentTextChanged.connect(self.on_format_changed)

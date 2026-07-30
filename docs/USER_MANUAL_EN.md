@@ -36,12 +36,13 @@ OpenFocus is a professional multi-focus image fusion desktop application designe
 ### Supported Input Formats
 
 - Image files: JPG, PNG, BMP, TIFF, WebP, JXL (JPEG XL, with `imagecodecs` installed), and other common formats
+- RAW files: NEF, NRW, DNG (developed by LibRaw, with `rawpy` installed)
 - Video files: MP4 format (automatically decoded into image sequences)
 - Folders containing numbered image sequences
 
 ### Supported Output Formats
 
-- Individual images: JPG, PNG, BMP, TIFF, JXL (JPEG XL, with `imagecodecs` installed)
+- Individual images: JPG, PNG, BMP, TIFF, JXL (JPEG XL, with `imagecodecs` installed), DNG
 - Image sequences: Saved as folders
 - Animations: GIF format
 
@@ -486,6 +487,7 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 - **BMP**: Uncompressed, maximum quality
 - **TIFF**: High quality, supports layers
 - **JXL** (JPEG XL): Lossless and much smaller than PNG, keeps 16-bit depth and carries the EXIF/XMP metadata. Requires `pip install imagecodecs`; without it the format is not offered
+- **DNG**: Uncompressed linear (demosaiced) DNG, keeps 16-bit depth. Written for raw-converter workflows: the file declares sRGB primaries, an already-neutral white balance and the sRGB transfer curve, so Lightroom or RawTherapee renders it as the result you saw. Reloading one into OpenFocus returns the exact pixels, since it is read back without being developed a second time. Files are large — nothing is compressed — and no EXIF/XMP is written
 - **GIF**: Animation format
 
 ---

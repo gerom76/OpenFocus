@@ -11,6 +11,8 @@ OpenFocus delivers focus stacking quality that rivals commercial-grade software,
 ## 📢 News
 
 > [!NOTE]
+> 🎉 **2026.07.30**: **DNG in and out.** `.dng` stacks load like any other source — camera and Adobe DNG Converter files are developed by LibRaw, alongside the NEF/NRW that already were. Results can be saved as DNG too, from the save dialogs, drag-out and the batch format list: an uncompressed **linear** (demosaiced) DNG at full 16-bit depth, tagged with sRGB primaries, an already-neutral white balance and the sRGB transfer curve, so Lightroom and RawTherapee render the result you actually saw rather than putting a second tone curve on top of it. Reloading one into OpenFocus gives back the exact pixels, because a DNG OpenFocus wrote is read straight from its strips instead of being developed twice. Writing needs nothing beyond numpy — OpenCV cannot write DNG and LibRaw cannot write at all, so the container is assembled directly.
+
 > 🎉 **2026.07.29**: **JPEG XL in as well as out.** `.jxl` stacks now load like any other source — in the folder and file dialogs, on drag and drop, and in the folder-input paths of the fusion methods. libjxl does the decoding, so a 16-bit JPEG XL enters the pipeline at 16 bits instead of arriving pre-narrowed, and a `.jxl` source hands its EXIF on to the render the way a JPEG does, read straight out of the container's Exif box. Needs `pip install imagecodecs`; without it `.jxl` is simply not a supported input, exactly as RAW is not without rawpy.
 
 > 🎉 **2026.07.29**: **WebP in and out.** `.webp` stacks load like any other source, and results can be saved as WebP from the save dialogs and the batch format list. Written losslessly, like every other format here, so a fused result is not quietly recompressed. It is an 8-bit container, so a 16-bit render is narrowed on the way out, and its 16383 px per side limit is reported as itself rather than as a failed save.
@@ -91,7 +93,7 @@ OpenFocus is a PyQt6-based multi-focus registration and fusion workstation that 
 - **Beginner-Friendly**: Plug-and-play workflows with unapologetically simple, guided operations.
 - **Flexible Processing Flows**: Run fusion-only, registration-only, or combined registration + fusion pipelines depending on your workload.
 - **Batch Automation**: Kick off batch jobs across multiple folders with live progress, cancellation, and automatic output organization.
-- **Annotation & Export Toolkit**: Overlay labels, export GIF animations, and save processed stacks in JPG/PNG/BMP/TIFF/WebP/JXL with consistent metadata handling.
+- **Annotation & Export Toolkit**: Overlay labels, export GIF animations, and save processed stacks in JPG/PNG/BMP/TIFF/WebP/JXL/DNG with consistent metadata handling.
 - **Metadata Passthrough**: A saved JPG/PNG/JXL result keeps the EXIF of the first source frame, clones its camera tags into a readable XMP `Camera` section, and records the OpenFocus version, render date, render duration and the full set of options the render used in an `OpenFocus` group — enough to reproduce the render, all added without recompressing the image.
 - **AI-Assisted Fusion**: Ship with StackMFF V4 to unlock deep-learning-quality fusion alongside classic signal-processing methods.
 - **16-bit Processing**: RAW and 16-bit TIFF/PNG/JXL stacks stay at full depth from load through alignment, fusion and export — no banding in smooth gradients, and headroom left for blending. Auto-engages on >8-bit sources, or force 8/16-bit from *Settings → Bit Depth*.

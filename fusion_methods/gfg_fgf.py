@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils import bitdepth, jxl
+from utils import bitdepth, dng, jxl
 from utils.image_utils import read_image_any_depth
 
 # -----------------------------------------------------------------------------
@@ -91,7 +91,8 @@ def gfgfgf_impl(input_source, img_resize=None, kernel_size=7, thread_count: int 
              
         files = os.listdir(input_source)
         # Simple filtering by image extension
-        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'} | set(jxl.extensions())
+        valid_exts = ({'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
+                      | set(jxl.extensions()) | set(dng.extensions()))
         img_paths = [
             os.path.join(input_source, f) for f in files 
             if os.path.splitext(f)[1].lower() in valid_exts
