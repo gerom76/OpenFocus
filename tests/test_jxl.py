@@ -1,7 +1,7 @@
 """Reading and writing JPEG XL.
 
 JPEG XL is the one container OpenCV neither encodes nor decodes, so both
-directions go through utils.jxl and libjxl instead. Four promises are tested
+directions go through utils.jxl and libjxl instead. Six promises are tested
 here:
 
 1. `.jxl` is routed to that encoder by write_image, and what comes back out is
@@ -10,7 +10,12 @@ here:
    into it the way they are for JPEG and PNG (`TestMetadata`).
 3. `.jxl` is a supported input: the loader accepts it, decodes it at its native
    depth, and reads the EXIF back out of the container (`TestLoading`).
-4. A build without the codec offers no JPEG XL anywhere - not in the save
+4. libjxl is given more than the one thread `imagecodecs` defaults to, and the
+   loader divides the cores between its own workers and libjxl's rather than
+   letting the two multiply (`TestThreading`).
+5. The dimensions and bit depth can be read from the header without decoding,
+   so a `.jxl` stack is sized up front like every other format (`TestProbe`).
+6. A build without the codec offers no JPEG XL anywhere - not in the save
    dialogs, and not as an input format (`TestWithoutTheEncoder`).
 
 Run with:  python -m pytest tests/test_jxl.py -v
@@ -304,6 +309,196 @@ class TestLoading:
 
     def test_a_missing_file_reads_as_none(self, tmp_path):
         assert jxl.read(str(tmp_path / "absent.jxl")) is None
+
+
+class TestThreading:
+    def test_a_single_worker_is_left_to_libjxls_own_pool_sizing(self):
+        assert jxl.threads_for_workers(1) == jxl.AUTO_THREADS
+        assert jxl.threads_for_workers(0) == jxl.AUTO_THREADS
+
+    def test_the_cores_are_divided_between_the_workers(self):
+        cores = os.cpu_count() or 1
+        for workers in (2, 3, 4, 8):
+            # Rounded up: a remainder must not be left on the floor.
+            assert jxl.threads_for_workers(workers) == max(1, -(-cores // workers))
+
+    def test_the_split_covers_every_core(self):
+        cores = os.cpu_count() or 1
+        for workers in range(2, cores * 2 + 1):
+            assert jxl.threads_for_workers(workers) * workers >= cores or \
+                jxl.threads_for_workers(workers) == 1
+
+    def test_more_workers_than_cores_still_leaves_a_thread_each(self):
+        # Oversubscribed already; libjxl must not be told to use 0 threads,
+        # which would mean "one per core" and multiply the oversubscription.
+        assert jxl.threads_for_workers((os.cpu_count() or 1) * 4) >= 1
+
+    def test_the_budget_is_restored_afterwards(self):
+        before = jxl.get_decode_threads()
+        with jxl.decode_thread_budget(3):
+            assert jxl.get_decode_threads() == 3
+        assert jxl.get_decode_threads() == before
+
+    def test_the_budget_is_restored_after_a_failure(self):
+        before = jxl.get_decode_threads()
+        with pytest.raises(RuntimeError):
+            with jxl.decode_thread_budget(3):
+                raise RuntimeError("decode blew up")
+        assert jxl.get_decode_threads() == before
+
+    @needs_encoder
+    def test_the_thread_count_does_not_change_the_pixels(self, tmp_path):
+        # Lossless is lossless however many threads libjxl splits the frame
+        # over, so a stack must not depend on the budget it happened to load at.
+        image = _result16()
+
+        one = jxl.encode(image, threads=1)
+        many = jxl.encode(image, threads=jxl.AUTO_THREADS)
+        assert np.array_equal(jxl.decode(one, threads=1), image)
+        assert np.array_equal(jxl.decode(many, threads=1), image)
+        assert np.array_equal(jxl.decode(one, threads=jxl.AUTO_THREADS), image)
+
+    @needs_encoder
+    def test_the_loader_narrows_the_budget_for_the_stack_it_decodes(self, tmp_path, monkeypatch):
+        pytest.importorskip("PyQt6.QtGui", reason="the loader needs PyQt6")
+        from core.image_loader import ImageStackLoader
+
+        for index in range(4):
+            assert write_image(str(tmp_path / f"frame{index}.jxl"), _result8())
+
+        # What each decode was allowed while the loader's own pool was running.
+        seen = []
+        original = jxl.decode
+
+        def record(payload, threads=None):
+            seen.append(jxl.get_decode_threads())
+            return original(payload, threads=threads)
+
+        monkeypatch.setattr(jxl, "decode", record)
+        loader = ImageStackLoader()
+        entries = [(f"frame{i}.jxl", str(tmp_path / f"frame{i}.jxl")) for i in range(4)]
+        results = loader._load_files_parallel(entries, max_workers=4)
+
+        assert all(img is not None for img in results)
+        assert seen and set(seen) == {jxl.threads_for_workers(4)}
+        # And the process-wide default is back to what it was.
+        assert jxl.get_decode_threads() == jxl.AUTO_THREADS
+
+    @needs_encoder
+    def test_rgba_comes_back_as_bgra(self):
+        # The in-place channel swap has a four-channel path of its own, which
+        # nothing else in this file exercises.
+        rng = np.random.default_rng(15)
+        bgra = (rng.random((12, 10, 4)) * 255).astype(np.uint8)
+
+        read_back = jxl.decode(jxl.encode(bgra))
+        assert read_back.shape == (12, 10, 4)
+        assert np.array_equal(read_back, bgra)
+
+
+class TestProbe:
+    @needs_encoder
+    @pytest.mark.parametrize("shape,dtype,bits", [
+        ((24, 32, 3), np.uint8, 8),
+        ((24, 32, 3), np.uint16, 16),
+        ((800, 800, 3), np.uint8, 8),        # a 1:1 aspect ratio, stored as one
+        ((480, 640, 3), np.uint16, 16),      # 4:3, likewise
+        ((1080, 1920, 3), np.uint8, 8),      # 16:9
+        ((8, 8, 3), np.uint8, 8),            # small enough for the div-8 path
+        ((17, 4001, 3), np.uint8, 8),        # and wide enough to escape it
+        ((16, 20), np.uint8, 8),             # greyscale
+        ((16, 20), np.uint16, 16),
+    ])
+    def test_the_header_reports_what_the_decoder_produces(self, tmp_path, shape, dtype, bits):
+        rng = np.random.default_rng(16)
+        scale = 255 if dtype is np.uint8 else 65535
+        image = (rng.random(shape) * scale).astype(dtype)
+        out = str(tmp_path / "frame.jxl")
+
+        assert write_image(out, image)
+
+        height, width = shape[:2]
+        assert jxl.probe(out) == (width, height, bits)
+
+    @needs_encoder
+    def test_a_tagged_file_is_still_probeable(self, tmp_path):
+        # The Exif and XMP boxes sit ahead of the codestream box, so the walk
+        # has to step over them rather than assume the codestream comes first.
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        out = str(tmp_path / "tagged.jxl")
+
+        assert write_image(out, _result16(), metadata=RenderMetadata(source_path=source))
+
+        assert jxl.probe(out) == (32, 24, 16)
+
+    @needs_encoder
+    def test_a_bare_codestream_is_probeable_too(self, tmp_path):
+        # utils.jxl never writes one, but a file from another encoder may be one.
+        import imagecodecs
+        out = tmp_path / "bare.jxl"
+        out.write_bytes(imagecodecs.jpegxl_encode(_result8(), lossless=True, usecontainer=False))
+
+        assert jxl.probe(str(out)) == (32, 24, 8)
+
+    def test_a_file_that_is_not_jpeg_xl_probes_as_none(self, tmp_path):
+        not_jxl = tmp_path / "broken.jxl"
+        not_jxl.write_bytes(b"not a codestream at all")
+
+        assert jxl.probe(str(not_jxl)) is None
+
+    def test_a_truncated_header_probes_as_none_rather_than_raising(self, tmp_path):
+        cut = tmp_path / "cut.jxl"
+        cut.write_bytes(b"\xff\x0a")  # the signature and nothing behind it
+
+        assert jxl.probe(str(cut)) is None
+
+    def test_a_missing_file_probes_as_none(self, tmp_path):
+        assert jxl.probe(str(tmp_path / "absent.jxl")) is None
+
+    @needs_encoder
+    def test_probing_does_not_need_the_codec(self, tmp_path, monkeypatch):
+        # The header parser is this module's own, so a build that cannot decode
+        # JPEG XL can still say how big a stack of it would be.
+        out = str(tmp_path / "frame.jxl")
+        assert write_image(out, _result16())
+
+        jxl.clear_probe_cache()
+        monkeypatch.setattr(jxl, "_AVAILABLE", False)
+        assert jxl.probe(out) == (32, 24, 16)
+
+    @needs_encoder
+    def test_a_rewritten_file_is_probed_again(self, tmp_path):
+        out = str(tmp_path / "frame.jxl")
+        assert write_image(out, _result8())
+        assert jxl.probe(out) == (32, 24, 8)
+
+        # Same path, different image: the cache key carries size and mtime, so
+        # the stale answer must not survive.
+        rng = np.random.default_rng(17)
+        assert write_image(out, (rng.random((40, 50, 3)) * 65535).astype(np.uint16))
+        assert jxl.probe(out) == (50, 40, 16)
+
+    @needs_encoder
+    def test_the_loader_sizes_a_jxl_frame_from_its_header(self, tmp_path):
+        pytest.importorskip("PyQt6.QtGui", reason="the loader needs PyQt6")
+        from core.image_loader import ImageStackLoader
+
+        out = str(tmp_path / "deep.jxl")
+        assert write_image(out, _result16())
+
+        # 32x24 at 16 bits, stored as 3-channel BGR - the same arithmetic the
+        # DNG and RAW paths are held to.
+        assert ImageStackLoader._probe_frame_bytes(out) == 32 * 24 * 3 * 2
+
+    @needs_encoder
+    def test_the_estimate_follows_the_scale_factor(self, tmp_path):
+        pytest.importorskip("PyQt6.QtGui", reason="the loader needs PyQt6")
+        from core.image_loader import ImageStackLoader
+
+        out = str(tmp_path / "frame.jxl")
+        assert write_image(out, _result8())
+
+        assert ImageStackLoader._probe_frame_bytes(out, 0.5) == 16 * 12 * 3 * 1
 
 
 class TestWithoutTheEncoder:

@@ -128,6 +128,7 @@ class ImageStackLoader:
                          | JXL_FORMATS)
     SUPPORTED_VIDEO_FORMATS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
     # Formats nvJPEG can decode on the GPU; everything else stays on OpenCV.
+    # JPEG XL is absent on purpose - no GPU JPEG XL decoder exists, see utils.jxl.
     GPU_DECODE_FORMATS = {'.jpg', '.jpeg'}
 
     # How many GPU JPEGs to decode per burst. Progress and the stop flag are
@@ -138,6 +139,11 @@ class ImageStackLoader:
     # 4-channel image, the RGB result it hands back, and numpy's copy of it.
     # Used to size the decode thread pool against free memory.
     RAW_DECODE_FRAMES = 4
+
+    # The same figure for JPEG XL: libjxl decodes into float internally, so a
+    # decode peaks at about three times the frame it hands back. Measured on
+    # 12 MP frames at both 8 and 16 bits.
+    JXL_DECODE_FRAMES = 3
 
     # Warn once the projected stack passes this share of free memory. Below it
     # the load is merely large; above it the machine will start swapping.
@@ -214,15 +220,18 @@ class ImageStackLoader:
         about to build before it allocates any of it. Returns None when the
         dimensions cannot be read cheaply, in which case callers carry on
         without the estimate rather than paying a full decode for it.
-
-        JPEG XL is one such case: imagecodecs exposes no header-only reader, so
-        unless Pillow has a JPEG XL plugin registered a `.jxl` stack loads
-        without the up-front size line. The load itself is unaffected.
         """
         ext = os.path.splitext(full_path)[1].lower()
         try:
             own_dng = dng.probe(full_path) if dng.is_dng(ext) else None
-            if own_dng is not None:
+            jxl_header = jxl.probe(full_path) if jxl.is_jxl(ext) else None
+            if jxl_header is not None:
+                # imagecodecs exposes no header reader, so utils.jxl parses the
+                # codestream header itself - the depth it reports is the one the
+                # frame decodes at, before the mode narrows or widens it.
+                width, height, bits = jxl_header
+                native = bitdepth.UINT16 if bits > 8 else bitdepth.UINT8
+            elif own_dng is not None:
                 # An OpenFocus DNG is read verbatim, so its stored depth is the
                 # depth the frame arrives at - LibRaw would report 16 either way.
                 width, height, bits = own_dng
@@ -296,13 +305,18 @@ class ImageStackLoader:
         frame_bytes = self._probe_frame_bytes(entries[0][1], scale_factor) if entries else None
         self._report_stack_memory(frame_bytes, total)
 
-        # RAW is the only format whose decode holds several full frames per
-        # thread, so it is the only one whose thread count has to answer to
+        # RAW and JPEG XL are the formats whose decode holds several full frames
+        # per thread, so they are the ones whose thread count has to answer to
         # free memory; JPEG and PNG decoders allocate one output buffer.
-        if any(os.path.splitext(filename)[1].lower() in self.RAW_FORMATS for filename, _ in entries):
-            bounded = memory.decode_worker_limit(frame_bytes, self.RAW_DECODE_FRAMES, max_workers)
+        stack_formats = {os.path.splitext(filename)[1].lower() for filename, _ in entries}
+        heavy = (('RAW', self.RAW_DECODE_FRAMES) if stack_formats & self.RAW_FORMATS
+                 else ('JPEG XL', self.JXL_DECODE_FRAMES) if stack_formats & self.JXL_FORMATS
+                 else None)
+        if heavy is not None:
+            label, frames_in_flight = heavy
+            bounded = memory.decode_worker_limit(frame_bytes, frames_in_flight, max_workers)
             if bounded < max_workers:
-                print(f"[Memory] Limiting RAW decode to {bounded} thread(s) "
+                print(f"[Memory] Limiting {label} decode to {bounded} thread(s) "
                       f"(was {max_workers}) to keep decode buffers in memory", flush=True)
                 max_workers = bounded
 
@@ -317,6 +331,15 @@ class ImageStackLoader:
         if use_gpu:
             print(f"[Loader] Decoding {len(gpu_set)} JPEG(s) on GPU "
                   f"({gpu_decode.device_name()})", flush=True)
+
+        # libjxl decodes on a thread pool of its own, so the two levels of
+        # parallelism have to be divided between the cores rather than
+        # multiplied over them - see utils.jxl. A stack with fewer frames than
+        # cores gets the whole machine per frame.
+        jxl_threads = jxl.threads_for_workers(max_workers)
+        if stack_formats & self.JXL_FORMATS:
+            print(f"[Loader] Decoding JPEG XL on {max_workers} worker(s) x "
+                  f"{jxl_threads or os.cpu_count() or 1} libjxl thread(s)", flush=True)
 
         def decode(index: int, filename: str, full_path: str):
             if not os.path.exists(full_path):
@@ -380,7 +403,8 @@ class ImageStackLoader:
                 results[index] = img
                 note(filename, img, error)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with jxl.decode_thread_budget(jxl_threads), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             cpu_futures = [
                 executor.submit(decode, i, filename, full_path)
                 for i, (filename, full_path) in enumerate(entries) if i not in gpu_set
