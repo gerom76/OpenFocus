@@ -1,0 +1,537 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1640 2570" width="1640" height="2570" font-family="Inter, 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif">
+  <title>Focus Stacking with the Laplacian Pyramid</title>
+  <desc>Step-by-step infographic: a stack of shallow depth-of-field frames is decomposed into Laplacian bands, scored by local focus energy, merged band by band, and collapsed back into one fully sharp image.</desc>
+
+  <defs>
+    <!-- ============================ palette ============================ -->
+    <linearGradient id="gPage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F7FAFF"/>
+      <stop offset="1" stop-color="#EEF3FA"/>
+    </linearGradient>
+    <linearGradient id="gHeader" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B2545"/>
+      <stop offset="0.62" stop-color="#123C6E"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="gScene" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EAF1FB"/>
+      <stop offset="1" stop-color="#CFDDF0"/>
+    </linearGradient>
+    <linearGradient id="gBand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12233A"/>
+      <stop offset="1" stop-color="#0B1728"/>
+    </linearGradient>
+    <linearGradient id="gOrangeBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FDBA74"/>
+      <stop offset="1" stop-color="#F97316"/>
+    </linearGradient>
+    <linearGradient id="gBlueBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#93C5FD"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="gHeatScale" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0B1728"/>
+      <stop offset="0.35" stop-color="#1D4ED8"/>
+      <stop offset="0.68" stop-color="#F97316"/>
+      <stop offset="1" stop-color="#FFEDD5"/>
+    </linearGradient>
+
+    <radialGradient id="gHot">
+      <stop offset="0" stop-color="#FFF1DC" stop-opacity="1"/>
+      <stop offset="0.3" stop-color="#FB923C" stop-opacity="0.95"/>
+      <stop offset="0.62" stop-color="#F97316" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#F97316" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gWarm">
+      <stop offset="0" stop-color="#60A5FA" stop-opacity="0.75"/>
+      <stop offset="0.6" stop-color="#2563EB" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#1D4ED8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gCool">
+      <stop offset="0" stop-color="#1D4ED8" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#1D4ED8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- ============================ filters ============================ -->
+    <filter id="blurSoft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.4"/>
+    </filter>
+    <filter id="blurHard" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5.6"/>
+    </filter>
+    <filter id="card" x="-12%" y="-12%" width="124%" height="130%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#0B2545" flood-opacity="0.13"/>
+    </filter>
+    <filter id="cardSm" x="-16%" y="-16%" width="132%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#0B2545" flood-opacity="0.14"/>
+    </filter>
+
+    <!-- ============================ markers ============================ -->
+    <marker id="arrBlue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L11 6 L1 11 z" fill="#2563EB"/>
+    </marker>
+    <marker id="arrOrange" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L11 6 L1 11 z" fill="#F97316"/>
+    </marker>
+    <marker id="arrInk" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1 1 L11 6 L1 11 z" fill="#64748B"/>
+    </marker>
+
+    <!-- ======================= reusable scene parts ==================== -->
+    <!-- concentric-ring target: sharpness is obvious the moment it is blurred -->
+    <g id="tgt">
+      <circle r="27" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle r="27" fill="none" stroke="#0B2545" stroke-width="2.4"/>
+      <circle r="19" fill="none" stroke="#0B2545" stroke-width="1.8"/>
+      <circle r="11.5" fill="none" stroke="#0B2545" stroke-width="1.6"/>
+      <circle r="4.2" fill="#F97316"/>
+      <path d="M-27 0 h-9 M27 0 h9 M0 -27 v-9 M0 27 v9" stroke="#0B2545" stroke-width="1.6" stroke-linecap="round"/>
+    </g>
+    <g id="tgtSoft" filter="url(#blurSoft)"><use href="#tgt"/></g>
+    <g id="tgtHard" filter="url(#blurHard)"><use href="#tgt"/></g>
+
+    <clipPath id="clipFrame"><rect x="0" y="0" width="250" height="176" rx="11"/></clipPath>
+    <clipPath id="clipHeat"><rect x="0" y="0" width="228" height="150" rx="9"/></clipPath>
+    <clipPath id="clipBig"><rect x="0" y="0" width="330" height="232" rx="13"/></clipPath>
+
+    <!-- the same scene, three depths; only the named plane resolves -->
+    <g id="sceneA" clip-path="url(#clipFrame)">
+      <rect width="250" height="176" fill="url(#gScene)"/>
+      <path d="M0 128 H250" stroke="#B7C9E0" stroke-width="1.5"/>
+      <ellipse cx="62" cy="150" rx="46" ry="9" fill="#0B2545" opacity="0.08"/>
+      <use href="#tgtHard" transform="translate(190,64) scale(0.72)"/>
+      <use href="#tgtSoft" transform="translate(128,96) scale(0.88)"/>
+      <use href="#tgt"     transform="translate(62,128) scale(1.04)"/>
+    </g>
+    <g id="sceneB" clip-path="url(#clipFrame)">
+      <rect width="250" height="176" fill="url(#gScene)"/>
+      <path d="M0 128 H250" stroke="#B7C9E0" stroke-width="1.5"/>
+      <ellipse cx="62" cy="150" rx="46" ry="9" fill="#0B2545" opacity="0.08"/>
+      <use href="#tgtSoft" transform="translate(190,64) scale(0.72)"/>
+      <use href="#tgt"     transform="translate(128,96) scale(0.88)"/>
+      <use href="#tgtSoft" transform="translate(62,128) scale(1.04)"/>
+    </g>
+    <g id="sceneC" clip-path="url(#clipFrame)">
+      <rect width="250" height="176" fill="url(#gScene)"/>
+      <path d="M0 128 H250" stroke="#B7C9E0" stroke-width="1.5"/>
+      <ellipse cx="62" cy="150" rx="46" ry="9" fill="#0B2545" opacity="0.08"/>
+      <use href="#tgt"     transform="translate(190,64) scale(0.72)"/>
+      <use href="#tgtSoft" transform="translate(128,96) scale(0.88)"/>
+      <use href="#tgtHard" transform="translate(62,128) scale(1.04)"/>
+    </g>
+    <g id="sceneAll" clip-path="url(#clipBig)">
+      <rect width="330" height="232" fill="url(#gScene)"/>
+      <path d="M0 169 H330" stroke="#B7C9E0" stroke-width="1.6"/>
+      <ellipse cx="82" cy="198" rx="61" ry="12" fill="#0B2545" opacity="0.08"/>
+      <use href="#tgt" transform="translate(251,84) scale(0.95)"/>
+      <use href="#tgt" transform="translate(169,127) scale(1.16)"/>
+      <use href="#tgt" transform="translate(82,169) scale(1.37)"/>
+    </g>
+  </defs>
+
+  <rect width="1640" height="2570" fill="url(#gPage)"/>
+
+  <!-- ================================================================= -->
+  <!-- HEADER                                                            -->
+  <!-- ================================================================= -->
+  <g>
+    <rect x="0" y="0" width="1640" height="196" fill="url(#gHeader)"/>
+    <g opacity="0.22" stroke="#93C5FD" stroke-width="1">
+      <path d="M1180 0 v196 M1260 0 v196 M1340 0 v196 M1420 0 v196 M1500 0 v196 M1580 0 v196"/>
+      <path d="M1140 44 H1640 M1140 88 H1640 M1140 132 H1640"/>
+    </g>
+    <g opacity="0.5">
+      <rect x="1206" y="46" width="72" height="72" rx="6" fill="none" stroke="#FDBA74" stroke-width="1.6"/>
+      <rect x="1298" y="60" width="52" height="52" rx="5" fill="none" stroke="#FDBA74" stroke-width="1.6"/>
+      <rect x="1370" y="70" width="34" height="34" rx="4" fill="none" stroke="#FDBA74" stroke-width="1.6"/>
+      <rect x="1424" y="78" width="20" height="20" rx="3" fill="none" stroke="#FDBA74" stroke-width="1.6"/>
+      <rect x="1464" y="83" width="11" height="11" rx="2" fill="#FDBA74"/>
+    </g>
+    <text x="88" y="82" fill="#FDBA74" font-size="17" font-weight="600" letter-spacing="4.4">DIGITAL PHOTOGRAPHY &#183; MULTI-FOCUS FUSION</text>
+    <text x="88" y="139" fill="#FFFFFF" font-size="52" font-weight="700" letter-spacing="-0.8">Focus Stacking with the Laplacian Pyramid</text>
+    <text x="88" y="172" fill="#BFDBFE" font-size="19">Burt &amp; Adelson (1983) decomposition &#183; energy-weighted band selection &#183; one all-in-focus render</text>
+  </g>
+
+  <!-- ================================================================= -->
+  <!-- STEP 1 - CAPTURE                                                  -->
+  <!-- ================================================================= -->
+  <g transform="translate(0,246)">
+    <circle cx="112" cy="16" r="25" fill="#1D4ED8"/>
+    <text x="112" y="25" fill="#FFFFFF" font-size="25" font-weight="700" text-anchor="middle">1</text>
+    <text x="152" y="10" fill="#0B2545" font-size="30" font-weight="700">Capture the stack</text>
+    <text x="152" y="38" fill="#4A6180" font-size="18">Each frame is taken at a different focus distance. At macro magnification only a thin slab of the subject resolves.</text>
+
+    <!-- frames -->
+    <g transform="translate(112,74)">
+      <g filter="url(#card)"><rect width="250" height="176" rx="11" fill="#FFFFFF"/></g>
+      <use href="#sceneA"/>
+      <rect width="250" height="176" rx="11" fill="none" stroke="#F97316" stroke-width="2.6"/>
+      <rect x="10" y="10" width="72" height="24" rx="5" fill="#F97316"/>
+      <text x="46" y="27" fill="#FFFFFF" font-size="14" font-weight="700" text-anchor="middle">FRAME 01</text>
+      <text x="0" y="200" fill="#4A6180" font-size="16">focus @ near plane</text>
+    </g>
+    <g transform="translate(392,74)">
+      <g filter="url(#card)"><rect width="250" height="176" rx="11" fill="#FFFFFF"/></g>
+      <use href="#sceneB"/>
+      <rect width="250" height="176" rx="11" fill="none" stroke="#F97316" stroke-width="2.6"/>
+      <rect x="10" y="10" width="72" height="24" rx="5" fill="#F97316"/>
+      <text x="46" y="27" fill="#FFFFFF" font-size="14" font-weight="700" text-anchor="middle">FRAME 02</text>
+      <text x="0" y="200" fill="#4A6180" font-size="16">focus @ mid plane</text>
+    </g>
+    <g transform="translate(672,74)">
+      <g filter="url(#card)"><rect width="250" height="176" rx="11" fill="#FFFFFF"/></g>
+      <use href="#sceneC"/>
+      <rect width="250" height="176" rx="11" fill="none" stroke="#F97316" stroke-width="2.6"/>
+      <rect x="10" y="10" width="72" height="24" rx="5" fill="#F97316"/>
+      <text x="46" y="27" fill="#FFFFFF" font-size="14" font-weight="700" text-anchor="middle">FRAME 03</text>
+      <text x="0" y="200" fill="#4A6180" font-size="16">focus @ far plane</text>
+    </g>
+    <g transform="translate(952,74)">
+      <rect width="86" height="176" rx="11" fill="#E4ECF8" stroke="#C2D3E9" stroke-width="1.6" stroke-dasharray="7 6"/>
+      <text x="43" y="94" fill="#7C8FA8" font-size="27" font-weight="700" text-anchor="middle">&#8943;</text>
+      <text x="43" y="120" fill="#7C8FA8" font-size="14" text-anchor="middle">N frames</text>
+    </g>
+
+    <!-- side note -->
+    <g transform="translate(1090,74)">
+      <rect width="438" height="176" rx="12" fill="#FFFFFF" stroke="#D6E1F0" stroke-width="1.6"/>
+      <rect x="0" y="0" width="6" height="176" rx="3" fill="#1D4ED8"/>
+      <text x="26" y="38" fill="#0B2545" font-size="19" font-weight="700">Why one exposure is not enough</text>
+      <text x="26" y="70" fill="#4A6180" font-size="16.5">Depth of field shrinks with magnification. At 1:1</text>
+      <text x="26" y="94" fill="#4A6180" font-size="16.5">and f/8 it can fall below a millimetre, so no single</text>
+      <text x="26" y="118" fill="#4A6180" font-size="16.5">aperture renders the whole subject &#8212; stopping</text>
+      <text x="26" y="142" fill="#4A6180" font-size="16.5">down further trades focus for diffraction blur.</text>
+      <text x="26" y="166" fill="#F97316" font-size="15" font-weight="700">Solution: fuse many frames, not one.</text>
+    </g>
+
+    <path d="M820 350 V392" stroke="#64748B" stroke-width="2.4" marker-end="url(#arrInk)" fill="none"/>
+  </g>
+
+  <!-- ================================================================= -->
+  <!-- STEP 2 - DECOMPOSE                                                -->
+  <!-- ================================================================= -->
+  <g transform="translate(0,678)">
+    <circle cx="112" cy="16" r="25" fill="#1D4ED8"/>
+    <text x="112" y="25" fill="#FFFFFF" font-size="25" font-weight="700" text-anchor="middle">2</text>
+    <text x="152" y="10" fill="#0B2545" font-size="30" font-weight="700">Decompose &#8212; build the Laplacian pyramid</text>
+    <text x="152" y="38" fill="#4A6180" font-size="18">Every frame is split into scales: repeated 2&#215;-downsampling gives a Gaussian pyramid; each band is what one level loses to the next.</text>
+
+    <g transform="translate(112,80)">
+      <rect width="1416" height="352" rx="14" fill="#FFFFFF" stroke="#D6E1F0" stroke-width="1.6" filter="url(#card)"/>
+
+      <!-- gaussian row -->
+      <text x="30" y="44" fill="#1D4ED8" font-size="16" font-weight="700" letter-spacing="1.6">GAUSSIAN PYRAMID &#8212; pyrDown, blur + decimate</text>
+      <g transform="translate(30,60)">
+        <rect x="0"   y="0"  width="128" height="128" rx="7" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.2"/>
+        <text x="64"  y="70" fill="#1D4ED8" font-size="20" font-weight="700" text-anchor="middle">G&#8320;</text>
+        <text x="64"  y="150" fill="#7C8FA8" font-size="13.5" text-anchor="middle">full res</text>
+
+        <rect x="196" y="18" width="92"  height="92"  rx="6" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.2"/>
+        <text x="242" y="70" fill="#1D4ED8" font-size="18" font-weight="700" text-anchor="middle">G&#8321;</text>
+        <text x="242" y="150" fill="#7C8FA8" font-size="13.5" text-anchor="middle">1/2</text>
+
+        <rect x="332" y="32" width="64"  height="64"  rx="5" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.2"/>
+        <text x="364" y="70" fill="#1D4ED8" font-size="16" font-weight="700" text-anchor="middle">G&#8322;</text>
+        <text x="364" y="150" fill="#7C8FA8" font-size="13.5" text-anchor="middle">1/4</text>
+
+        <rect x="440" y="42" width="44"  height="44"  rx="4" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.2"/>
+        <text x="462" y="70" fill="#1D4ED8" font-size="14" font-weight="700" text-anchor="middle">G&#8323;</text>
+        <text x="462" y="150" fill="#7C8FA8" font-size="13.5" text-anchor="middle">1/8</text>
+
+        <rect x="528" y="50" width="28"  height="28"  rx="3" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.2"/>
+        <text x="542" y="98" fill="#1D4ED8" font-size="13" font-weight="700" text-anchor="middle">G&#8324;</text>
+        <text x="542" y="150" fill="#7C8FA8" font-size="13.5" text-anchor="middle">1/16</text>
+
+        <g stroke="#2563EB" stroke-width="2.2" fill="none" marker-end="url(#arrBlue)">
+          <path d="M136 64 H188"/>
+          <path d="M296 64 H324"/>
+          <path d="M404 64 H432"/>
+          <path d="M492 64 H520"/>
+        </g>
+        <text x="162" y="52" fill="#2563EB" font-size="13" font-weight="700" text-anchor="middle">&#8595;2</text>
+      </g>
+
+      <!-- laplacian row -->
+      <text x="30" y="252" fill="#F97316" font-size="16" font-weight="700" letter-spacing="1.6">LAPLACIAN BANDS &#8212; L&#7522; = G&#7522; &#8722; pyrUp(G&#7522;&#8330;&#8321;)</text>
+      <g transform="translate(30,266)">
+        <g>
+          <rect x="0" y="0" width="128" height="60" rx="7" fill="url(#gBand)" stroke="#F97316" stroke-width="2"/>
+          <g stroke="#FB923C" stroke-width="1.7" fill="none" opacity="0.95">
+            <path d="M12 44 q16 -30 30 -6 t24 -16 t26 10 t24 -8"/>
+            <path d="M12 22 q22 12 40 -6 t34 8 t30 -10"/>
+          </g>
+          <text x="64" y="78" fill="#F97316" font-size="14" font-weight="700" text-anchor="middle">L&#8320; finest detail</text>
+        </g>
+        <g transform="translate(196,0)">
+          <rect x="0" y="0" width="92" height="60" rx="6" fill="url(#gBand)" stroke="#F97316" stroke-width="2"/>
+          <g stroke="#FB923C" stroke-width="2" fill="none" opacity="0.95">
+            <path d="M10 40 q18 -24 34 -4 t34 -14"/>
+            <path d="M10 20 q24 14 40 -4 t30 6"/>
+          </g>
+          <text x="46" y="78" fill="#F97316" font-size="14" font-weight="700" text-anchor="middle">L&#8321;</text>
+        </g>
+        <g transform="translate(332,0)">
+          <rect x="0" y="0" width="64" height="60" rx="5" fill="url(#gBand)" stroke="#F97316" stroke-width="2"/>
+          <g stroke="#FB923C" stroke-width="2.4" fill="none" opacity="0.95">
+            <path d="M8 40 q16 -22 24 -2 t22 -12"/>
+          </g>
+          <text x="32" y="78" fill="#F97316" font-size="14" font-weight="700" text-anchor="middle">L&#8322;</text>
+        </g>
+        <g transform="translate(440,0)">
+          <rect x="0" y="0" width="44" height="60" rx="4" fill="url(#gBand)" stroke="#F97316" stroke-width="2"/>
+          <path d="M6 38 q12 -20 18 -2 t14 -10" stroke="#FB923C" stroke-width="2.6" fill="none"/>
+          <text x="22" y="78" fill="#F97316" font-size="14" font-weight="700" text-anchor="middle">L&#8323;</text>
+        </g>
+        <g transform="translate(516,0)">
+          <rect x="0" y="0" width="52" height="60" rx="4" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+          <text x="26" y="36" fill="#1D4ED8" font-size="15" font-weight="700" text-anchor="middle">G&#8324;</text>
+          <text x="26" y="78" fill="#2563EB" font-size="14" font-weight="700" text-anchor="middle">base</text>
+        </g>
+        <g stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="4 4" fill="none">
+          <path d="M64 -42 V-4"/><path d="M242 -42 V-4"/><path d="M364 -42 V-4"/><path d="M462 -42 V-4"/>
+        </g>
+      </g>
+
+      <!-- explainer panel -->
+      <g transform="translate(660,52)">
+        <rect width="726" height="272" rx="11" fill="#F5F8FD" stroke="#D6E1F0" stroke-width="1.5"/>
+        <text x="26" y="40" fill="#0B2545" font-size="20" font-weight="700">The pyramid is lossless &#8212; and that is the point</text>
+        <text x="26" y="72" fill="#4A6180" font-size="16.5">The bands add back exactly to the original image, so anything decided</text>
+        <text x="26" y="96" fill="#4A6180" font-size="16.5">band by band can be reassembled without inventing pixels.</text>
+        <text x="26" y="132" fill="#0B2545" font-size="16.5" font-weight="700">Each band answers a different question:</text>
+        <g>
+          <circle cx="36" cy="158" r="5" fill="#F97316"/>
+          <text x="54" y="164" fill="#4A6180" font-size="16.5">L&#8320;&#8211;L&#8321; &#8212; pore-level texture, grain, the finest hairs</text>
+          <circle cx="36" cy="190" r="5" fill="#F97316"/>
+          <text x="54" y="196" fill="#4A6180" font-size="16.5">L&#8322;&#8211;L&#8323; &#8212; contours, structural edges, coarse relief</text>
+          <circle cx="36" cy="222" r="5" fill="#2563EB"/>
+          <text x="54" y="228" fill="#4A6180" font-size="16.5">G&#8324; base &#8212; overall tone and colour, no detail at all</text>
+        </g>
+        <rect x="26" y="242" width="674" height="1.4" fill="#D6E1F0"/>
+        <text x="26" y="264" fill="#7C8FA8" font-size="15">Working across scales is what stops a single sharp speck from dragging a whole region with it.</text>
+      </g>
+    </g>
+    <path d="M820 452 V494" stroke="#64748B" stroke-width="2.4" marker-end="url(#arrInk)" fill="none"/>
+  </g>
+
+  <!-- ================================================================= -->
+  <!-- STEP 3 - MEASURE FOCUS                                            -->
+  <!-- ================================================================= -->
+  <g transform="translate(0,1222)">
+    <circle cx="112" cy="16" r="25" fill="#F97316"/>
+    <text x="112" y="25" fill="#FFFFFF" font-size="25" font-weight="700" text-anchor="middle">3</text>
+    <text x="152" y="10" fill="#0B2545" font-size="30" font-weight="700">Measure focus &#8212; local energy per band</text>
+    <text x="152" y="38" fill="#4A6180" font-size="18">A single |Laplacian| pixel is noise. Pooling its square over a 5&#215;5 window turns it into a region measure: a focus heatmap per frame, per band.</text>
+
+    <!-- three heatmaps -->
+    <g transform="translate(112,74)">
+      <g filter="url(#cardSm)"><rect width="228" height="150" rx="9" fill="#0B1728"/></g>
+      <g clip-path="url(#clipHeat)">
+        <rect width="228" height="150" fill="url(#gBand)"/>
+        <circle cx="56" cy="112" r="62" fill="url(#gHot)"/>
+        <circle cx="117" cy="82" r="48" fill="url(#gWarm)"/>
+        <circle cx="174" cy="55" r="40" fill="url(#gCool)"/>
+        <circle cx="56" cy="112" r="27" fill="none" stroke="#FFF1DC" stroke-width="1.3" opacity="0.65"/>
+      </g>
+      <rect width="228" height="150" rx="9" fill="none" stroke="#F97316" stroke-width="2"/>
+      <text x="10" y="22" fill="#FFEDD5" font-size="13.5" font-weight="700">e&#8321; &#8212; frame 01</text>
+      <text x="0" y="174" fill="#4A6180" font-size="15.5">near plane wins here</text>
+    </g>
+    <g transform="translate(370,74)">
+      <g filter="url(#cardSm)"><rect width="228" height="150" rx="9" fill="#0B1728"/></g>
+      <g clip-path="url(#clipHeat)">
+        <rect width="228" height="150" fill="url(#gBand)"/>
+        <circle cx="56" cy="112" r="48" fill="url(#gWarm)"/>
+        <circle cx="117" cy="82" r="58" fill="url(#gHot)"/>
+        <circle cx="174" cy="55" r="42" fill="url(#gWarm)"/>
+        <circle cx="117" cy="82" r="24" fill="none" stroke="#FFF1DC" stroke-width="1.3" opacity="0.65"/>
+      </g>
+      <rect width="228" height="150" rx="9" fill="none" stroke="#F97316" stroke-width="2"/>
+      <text x="10" y="22" fill="#FFEDD5" font-size="13.5" font-weight="700">e&#8322; &#8212; frame 02</text>
+      <text x="0" y="174" fill="#4A6180" font-size="15.5">mid plane wins here</text>
+    </g>
+    <g transform="translate(628,74)">
+      <g filter="url(#cardSm)"><rect width="228" height="150" rx="9" fill="#0B1728"/></g>
+      <g clip-path="url(#clipHeat)">
+        <rect width="228" height="150" fill="url(#gBand)"/>
+        <circle cx="56" cy="112" r="40" fill="url(#gCool)"/>
+        <circle cx="117" cy="82" r="46" fill="url(#gWarm)"/>
+        <circle cx="174" cy="55" r="54" fill="url(#gHot)"/>
+        <circle cx="174" cy="55" r="21" fill="none" stroke="#FFF1DC" stroke-width="1.3" opacity="0.65"/>
+      </g>
+      <rect width="228" height="150" rx="9" fill="none" stroke="#F97316" stroke-width="2"/>
+      <text x="10" y="22" fill="#FFEDD5" font-size="13.5" font-weight="700">e&#8323; &#8212; frame 03</text>
+      <text x="0" y="174" fill="#4A6180" font-size="15.5">far plane wins here</text>
+    </g>
+
+    <!-- heat legend -->
+    <g transform="translate(112,254)">
+      <rect x="0" y="0" width="744" height="16" rx="8" fill="url(#gHeatScale)"/>
+      <text x="0" y="36" fill="#7C8FA8" font-size="14">no detail resolved &#8212; defocus, flat tone, grain only</text>
+      <text x="744" y="36" fill="#7C8FA8" font-size="14" text-anchor="end">high band energy &#8212; genuinely in focus</text>
+    </g>
+
+    <!-- formula + noise gate -->
+    <g transform="translate(900,74)">
+      <rect width="628" height="216" rx="12" fill="#FFFFFF" stroke="#D6E1F0" stroke-width="1.6" filter="url(#card)"/>
+      <rect x="0" y="0" width="6" height="216" rx="3" fill="#F97316"/>
+      <text x="28" y="40" fill="#0B2545" font-size="20" font-weight="700">Focus energy, normalised</text>
+      <g transform="translate(28,58)">
+        <rect width="572" height="46" rx="7" fill="#F5F8FD" stroke="#D6E1F0" stroke-width="1.3"/>
+        <text x="20" y="31" fill="#0B2545" font-size="18" font-family="'Cascadia Mono','JetBrains Mono',Consolas,monospace">e&#7522; = box&#8325;&#8339;&#8325;( L&#7522;&#178; )  /  n&#7522;</text>
+      </g>
+      <text x="28" y="140" fill="#4A6180" font-size="16.5">Dividing by n&#7522;, the frame's own noise level (10th percentile of</text>
+      <text x="28" y="164" fill="#4A6180" font-size="16.5">its live band energies), stops a bright defocused veil from</text>
+      <text x="28" y="188" fill="#4A6180" font-size="16.5">outscoring a dark sharp frame on grain alone. Every frame then</text>
+    </g>
+    <text x="928" y="286" fill="#4A6180" font-size="16.5">reads about 1.0 where it resolves nothing &#8212; so those regions tie.</text>
+
+    <path d="M820 322 V366" stroke="#64748B" stroke-width="2.4" marker-end="url(#arrInk)" fill="none"/>
+  </g>
+
+  <!-- ================================================================= -->
+  <!-- STEP 4 - SELECT & MERGE                                           -->
+  <!-- ================================================================= -->
+  <g transform="translate(0,1636)">
+    <circle cx="112" cy="16" r="25" fill="#F97316"/>
+    <text x="112" y="25" fill="#FFFFFF" font-size="25" font-weight="700" text-anchor="middle">4</text>
+    <text x="152" y="10" fill="#0B2545" font-size="30" font-weight="700">Select &amp; merge &#8212; band by band, pixel by pixel</text>
+    <text x="152" y="38" fill="#4A6180" font-size="18">The classic rule copies the strongest coefficient. A soft exponent keeps that decision where it is real and averages where nothing is in focus.</text>
+
+    <g transform="translate(112,74)">
+      <rect width="700" height="276" rx="14" fill="#FFFFFF" stroke="#D6E1F0" stroke-width="1.6" filter="url(#card)"/>
+      <text x="28" y="42" fill="#0B2545" font-size="20" font-weight="700">Weighting rule</text>
+      <g transform="translate(28,58)">
+        <rect width="644" height="48" rx="7" fill="#0B1728"/>
+        <text x="20" y="32" fill="#FFEDD5" font-size="19">w&#7522; = ( e&#7522; / e_max ) ^ &#946;      with  &#946; = 8</text>
+      </g>
+
+      <!-- weight bars -->
+      <g transform="translate(28,132)">
+        <text x="0" y="0" fill="#7C8FA8" font-size="14.5" letter-spacing="1.2">CONTRIBUTION TO THE FUSED BAND</text>
+        <g transform="translate(0,18)">
+          <text x="0" y="18" fill="#4A6180" font-size="15.5">frame 02</text>
+          <rect x="86" y="4" width="470" height="18" rx="9" fill="#EEF3FA"/>
+          <rect x="86" y="4" width="470" height="18" rx="9" fill="url(#gOrangeBar)"/>
+          <text x="570" y="18" fill="#F97316" font-size="15" font-weight="700">100 %</text>
+        </g>
+        <g transform="translate(0,50)">
+          <text x="0" y="18" fill="#4A6180" font-size="15.5">frame 01</text>
+          <rect x="86" y="4" width="470" height="18" rx="9" fill="#EEF3FA"/>
+          <rect x="86" y="4" width="58" height="18" rx="9" fill="url(#gBlueBar)"/>
+          <text x="570" y="18" fill="#2563EB" font-size="15" font-weight="700">4 %</text>
+        </g>
+        <g transform="translate(0,82)">
+          <text x="0" y="18" fill="#4A6180" font-size="15.5">frame 03</text>
+          <rect x="86" y="4" width="470" height="18" rx="9" fill="#EEF3FA"/>
+          <rect x="86" y="4" width="12" height="18" rx="6" fill="#93C5FD"/>
+          <text x="570" y="18" fill="#7C8FA8" font-size="15" font-weight="700">0.4 %</text>
+        </g>
+      </g>
+      <text x="28" y="262" fill="#7C8FA8" font-size="15">A frame 2&#215; behind the winner contributes 2&#8315;&#8312; &#8776; 0.4 % &#8212; effectively a decision, without the speckle.</text>
+    </g>
+
+    <!-- winner map -->
+    <g transform="translate(848,74)">
+      <rect width="680" height="276" rx="14" fill="#FFFFFF" stroke="#D6E1F0" stroke-width="1.6" filter="url(#card)"/>
+      <text x="28" y="42" fill="#0B2545" font-size="20" font-weight="700">Selection map for one band</text>
+      <g transform="translate(28,60)">
+        <g clip-path="url(#clipHeat)" transform="scale(1.02)">
+          <rect width="228" height="150" fill="#93C5FD"/>
+          <path d="M96 150 Q70 118 0 96 L0 44 Q92 60 150 118 L172 150 Z" fill="#2563EB"/>
+          <path d="M0 150 L0 96 Q70 118 96 150 Z" fill="#F97316"/>
+          <g stroke="#0B1728" stroke-width="1.6" fill="none" opacity="0.55">
+            <path d="M0 96 Q70 118 96 150"/>
+            <path d="M0 44 Q92 60 150 118 L172 150"/>
+          </g>
+        </g>
+        <rect width="233" height="153" rx="9" fill="none" stroke="#CBD8EA" stroke-width="1.6"/>
+      </g>
+      <g transform="translate(292,74)">
+        <rect x="0" y="0" width="14" height="14" rx="3" fill="#F97316"/>
+        <text x="26" y="12" fill="#4A6180" font-size="16">frame 01 carries this region</text>
+        <rect x="0" y="34" width="14" height="14" rx="3" fill="#2563EB"/>
+        <text x="26" y="46" fill="#4A6180" font-size="16">frame 02 carries this region</text>
+        <rect x="0" y="68" width="14" height="14" rx="3" fill="#93C5FD"/>
+        <text x="26" y="80" fill="#4A6180" font-size="16">frame 03 carries this region</text>
+      </g>
+      <text x="320" y="196" fill="#0B2545" font-size="16.5" font-weight="700">Boundaries follow depth, not a grid.</text>
+      <text x="320" y="220" fill="#7C8FA8" font-size="15.5">Where frames tie, the weights average them &#8212;</text>
+      <text x="320" y="242" fill="#7C8FA8" font-size="15.5">the correct answer for &#8220;nothing resolves here&#8221;.</text>
+    </g>
+
+    <path d="M820 372 V416" stroke="#64748B" stroke-width="2.4" marker-end="url(#arrInk)" fill="none"/>
+  </g>
+
+  <!-- ================================================================= -->
+  <!-- STEP 5 - RECONSTRUCT                                              -->
+  <!-- ================================================================= -->
+  <g transform="translate(0,2100)">
+    <circle cx="112" cy="16" r="25" fill="#1D4ED8"/>
+    <text x="112" y="25" fill="#FFFFFF" font-size="25" font-weight="700" text-anchor="middle">5</text>
+    <text x="152" y="10" fill="#0B2545" font-size="30" font-weight="700">Collapse the pyramid &#8212; one fully focused image</text>
+    <text x="152" y="38" fill="#4A6180" font-size="18">From the coarsest level down: upsample, add the fused band, repeat. The stack is gone; the detail of every frame is not.</text>
+  </g>
+
+  <g transform="translate(112,2212)">
+    <!-- collapse chain: F4 -> F3 -> F2 -> F1 -> F0, one fused band added per step -->
+    <g transform="translate(0,26)">
+      <rect x="0"   y="57" width="36"  height="36"  rx="4" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+      <text x="18"  y="80" fill="#1D4ED8" font-size="13" font-weight="700" text-anchor="middle">F&#8324;</text>
+      <rect x="76"  y="48" width="54"  height="54"  rx="5" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+      <text x="103" y="81" fill="#1D4ED8" font-size="14" font-weight="700" text-anchor="middle">F&#8323;</text>
+      <rect x="182" y="35" width="80"  height="80"  rx="5" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+      <text x="222" y="82" fill="#1D4ED8" font-size="16" font-weight="700" text-anchor="middle">F&#8322;</text>
+      <rect x="314" y="19" width="112" height="112" rx="6" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+      <text x="370" y="82" fill="#1D4ED8" font-size="17" font-weight="700" text-anchor="middle">F&#8321;</text>
+      <rect x="480" y="0"  width="150" height="150" rx="7" fill="#DBEAFE" stroke="#2563EB" stroke-width="2.4"/>
+      <text x="555" y="83" fill="#1D4ED8" font-size="19" font-weight="700" text-anchor="middle">F&#8320;</text>
+
+      <g stroke="#2563EB" stroke-width="2.2" fill="none" marker-end="url(#arrBlue)">
+        <path d="M44 75 H68"/><path d="M138 75 H174"/><path d="M270 75 H306"/><path d="M434 75 H472"/>
+      </g>
+      <g fill="#F97316" font-size="13.5" font-weight="700" text-anchor="middle">
+        <text x="56"  y="56">+ L&#770;&#8323;</text>
+        <text x="156" y="56">+ L&#770;&#8322;</text>
+        <text x="288" y="56">+ L&#770;&#8321;</text>
+        <text x="453" y="56">+ L&#770;&#8320;</text>
+      </g>
+      <text x="315" y="180" fill="#7C8FA8" font-size="15" text-anchor="middle">F&#7522; = L&#770;&#7522; + pyrUp(F&#7522;&#8330;&#8321;)   &#8212;   coarsest level first, fused band added at every scale</text>
+    </g>
+
+    <path d="M648 101 H700" stroke="#F97316" stroke-width="3" fill="none" marker-end="url(#arrOrange)"/>
+
+    <!-- final image -->
+    <g transform="translate(716,-14)">
+      <g filter="url(#card)"><rect width="330" height="232" rx="13" fill="#FFFFFF"/></g>
+      <use href="#sceneAll"/>
+      <rect width="330" height="232" rx="13" fill="none" stroke="#F97316" stroke-width="3"/>
+      <rect x="12" y="12" width="180" height="28" rx="6" fill="#F97316"/>
+      <text x="102" y="32" fill="#FFFFFF" font-size="15" font-weight="700" text-anchor="middle">ALL-IN-FOCUS RENDER</text>
+      <text x="0" y="258" fill="#0B2545" font-size="17" font-weight="700">Front to back sharp &#8212; from a stack no single exposure could capture.</text>
+    </g>
+
+    <!-- pipeline recap -->
+    <g transform="translate(1082,-14)">
+      <rect width="334" height="232" rx="12" fill="#0B2545"/>
+      <text x="24" y="42" fill="#FDBA74" font-size="15" font-weight="700" letter-spacing="2.2">PIPELINE AT A GLANCE</text>
+      <g fill="#DBEAFE" font-size="15.5">
+        <text x="24" y="78">align &#8594; decompose &#8594; score</text>
+        <text x="24" y="102">&#8594; weight &#8594; merge &#8594; collapse</text>
+      </g>
+      <rect x="24" y="122" width="286" height="1.3" fill="#1D4ED8"/>
+      <g font-size="15">
+        <text x="24" y="150" fill="#93C5FD">levels</text><text x="310" y="150" fill="#FFFFFF" text-anchor="end" font-weight="700">5</text>
+        <text x="24" y="176" fill="#93C5FD">pooling window</text><text x="310" y="176" fill="#FFFFFF" text-anchor="end" font-weight="700">5 &#215; 5</text>
+        <text x="24" y="202" fill="#93C5FD">selectivity &#946;</text><text x="310" y="202" fill="#FFFFFF" text-anchor="end" font-weight="700">8.0</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- footer -->
+  <g transform="translate(0,2470)">
+    <rect x="112" y="0" width="1416" height="1.6" fill="#CBD8EA"/>
+    <text x="112" y="34" fill="#7C8FA8" font-size="15">Burt P. J., Adelson E. H. &#8212; &#8220;The Laplacian pyramid as a compact image code&#8221;, IEEE Trans. Communications 31(4), 1983.</text>
+    <text x="1528" y="34" fill="#7C8FA8" font-size="15" text-anchor="end">OpenFocus &#183; fusion_methods/pyramid.py</text>
+  </g>
+</svg>
