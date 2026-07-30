@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 )
 from ui.styles import ADD_LABEL_DIALOG_STYLE, PRIMARY_BLUE
 from locales import trans
-from utils import resource_path
+from utils import dng, resource_path
 
 
 class DurationDialog(QDialog):
@@ -754,6 +754,154 @@ class ThreadSettingsDialog(QDialog):
         val = int(self.spin_threads.value())
         if self.parent_window:
             setattr(self.parent_window, "thread_count", val)
+        self.accept()
+
+
+class DngSettingsDialog(QDialog):
+    """How DNG files are written: compression, its quality, and the preview.
+
+    The three settings live in utils.dng rather than on the window, because that
+    is where the writer reads them from - image_utils.write_image is reached from
+    every save path in the app and none of them carries a codec choice. This
+    dialog is therefore a view onto that module, not onto the main window.
+
+    Only the modes this build can round trip are offered; see
+    utils.dng.available_compressions.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setWindowTitle(trans.t("dialog_dng_title"))
+        self.resize(520, 260)
+
+        # Apply the same dark dialog styling as the other settings dialogs
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: #2b2b2b;
+                color: #ffffff;
+                font-family: "Segoe UI", "Microsoft YaHei";
+            }}
+            QLabel {{
+                color: #ffffff;
+            }}
+            QComboBox, QSpinBox {{
+                background-color: #3c3c3c;
+                color: #ffffff;
+                border: 1px solid #555;
+                padding: 5px;
+                selection-background-color: {PRIMARY_BLUE};
+                min-height: 28px;
+            }}
+            QCheckBox {{
+                color: #ffffff;
+            }}
+            QPushButton {{
+                background-color: #444;
+                color: white;
+                border: 1px solid #222;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-weight: normal;
+            }}
+            QPushButton:hover {{
+                background-color: #555;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+
+        from PyQt6.QtWidgets import QCheckBox, QGridLayout, QGroupBox
+
+        group = QGroupBox(trans.t("dialog_dng_group"))
+        grid = QGridLayout(group)
+
+        label_compression = QLabel(trans.t("dialog_dng_compression_label"))
+        label_compression.setMinimumWidth(150)
+        self.combo_compression = QComboBox()
+        for mode in dng.available_compressions():
+            self.combo_compression.addItem(trans.t(f"dng_compression_{mode}"), mode)
+        self.combo_compression.currentIndexChanged.connect(self._sync_quality)
+        grid.addWidget(label_compression, 0, 0)
+        grid.addWidget(self.combo_compression, 0, 1)
+
+        self.label_quality = QLabel(trans.t("dialog_dng_quality_label"))
+        self.spin_quality = QSpinBox()
+        self.spin_quality.setRange(dng.MIN_LOSSY_QUALITY, dng.MAX_LOSSY_QUALITY)
+        self.spin_quality.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        grid.addWidget(self.label_quality, 1, 0)
+        grid.addWidget(self.spin_quality, 1, 1)
+
+        self.cb_fast_load = QCheckBox(trans.t("dialog_dng_fast_load"))
+        grid.addWidget(self.cb_fast_load, 2, 0, 1, 2)
+
+        # One line under each control saying what it costs, so the choice does
+        # not have to be made from the mode name alone.
+        self.hint = QLabel("")
+        self.hint.setWordWrap(True)
+        self.hint.setStyleSheet("color: #aaa; font-size: 11px; font-style: italic;")
+        grid.addWidget(self.hint, 3, 0, 1, 2)
+
+        layout.addWidget(group)
+
+        btn_layout = QHBoxLayout()
+        help_btn = QPushButton("")
+        help_btn.setToolTip("Show help for DNG output settings")
+        help_btn.setFixedSize(26, 26)
+        help_btn.setIcon(QIcon(resource_path('assets', 'help_white.svg')))
+        help_btn.setIconSize(QSize(18, 18))
+        help_btn.setStyleSheet(
+            "QPushButton { background-color: transparent; border: none; padding: 0px; }"
+        )
+        help_btn.clicked.connect(self.show_help)
+        btn_layout.addWidget(help_btn)
+        btn_layout.addStretch()
+
+        ok_btn = QPushButton(trans.t("btn_ok"))
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self.on_accept)
+        cancel_btn = QPushButton(trans.t("btn_cancel"))
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+
+        layout.addLayout(btn_layout)
+
+        self.load_defaults()
+
+    def show_help(self):
+        from dialogs.help import HelpDialog
+        dlg = HelpDialog(trans.t("dialog_dng_help_title"),
+                         trans.t("dialog_dng_help_text"), parent=self)
+        dlg.exec()
+
+    def _sync_quality(self):
+        """Enable the quality spin box only where it means anything, and explain."""
+        mode = self.combo_compression.currentData()
+        lossy = mode == dng.COMPRESSION_LOSSY
+        self.label_quality.setEnabled(lossy)
+        self.spin_quality.setEnabled(lossy)
+        self.hint.setText(trans.t(f"dng_compression_hint_{mode}"))
+
+    def load_defaults(self):
+        index = self.combo_compression.findData(dng.get_compression())
+        if index >= 0:
+            self.combo_compression.setCurrentIndex(index)
+        self.spin_quality.setValue(dng.get_lossy_quality())
+        self.cb_fast_load.setChecked(dng.get_fast_load())
+        self._sync_quality()
+
+    def on_accept(self):
+        mode = self.combo_compression.currentData()
+        try:
+            dng.set_compression(mode)
+        except (ValueError, RuntimeError):
+            # The combo only offers round-trippable modes, so this means the
+            # build changed under a stale dialog; keep the writer on something
+            # that works rather than leaving it half-applied.
+            dng.set_compression(dng.DEFAULT_COMPRESSION)
+        dng.set_lossy_quality(int(self.spin_quality.value()))
+        dng.set_fast_load(self.cb_fast_load.isChecked())
         self.accept()
 
 

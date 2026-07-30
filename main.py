@@ -26,6 +26,8 @@ from dialogs import (
 
     StackMFFV4BatchSettingsDialog,
 
+    DngSettingsDialog,
+
 )
 
 from utils import (
@@ -1046,6 +1048,16 @@ class OpenFocus(QMainWindow):
     def show_stackmffv4_batch_settings(self):
         """Show the StackMFF V4 batch-size settings dialog"""
         dialog = StackMFFV4BatchSettingsDialog(self)
+        dialog.exec()
+
+    def show_dng_settings(self):
+        """Show the DNG output settings dialog.
+
+        Nothing is read back from it: the dialog writes straight to utils.dng,
+        which is where the writer looks, so there is no window attribute to keep
+        in step.
+        """
+        dialog = DngSettingsDialog(self)
         dialog.exec()
 
     def save_all_settings(self):

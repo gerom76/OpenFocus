@@ -99,7 +99,8 @@ def get_imwrite_params(extension: str) -> list:
     else:
         # JPEG XL and DNG land here too: neither is encoded by OpenCV at all, so
         # they have no imwrite parameters - see utils.jxl for JPEG XL's quality
-        # settings, and utils.dng, which is always uncompressed.
+        # settings, and utils.dng for DNG's compression mode and preview, which
+        # are module settings rather than per-call parameters.
         return []
 
 
@@ -136,7 +137,10 @@ def write_image(
 
     JPEG XL is encoded by utils.jxl rather than OpenCV, whose wheels are not
     built with libjxl, and DNG by utils.dng, which OpenCV cannot write at all;
-    everything else, WebP included, goes through cv2.imwrite.
+    everything else, WebP included, goes through cv2.imwrite. Both of those
+    modules carry their own settings - DNG's compression mode and fast-load
+    preview among them - so nothing about the codec has to be threaded through
+    here from the save paths that share this function.
 
     `metadata` describes the render behind the image. When given, and when the
     container is JPEG, PNG or JPEG XL, the source EXIF and OpenFocus' XMP group

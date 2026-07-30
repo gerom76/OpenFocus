@@ -3,7 +3,7 @@ import os
 import sys
 from typing import Any
 
-from utils import show_error_box, show_success_box, bitdepth
+from utils import show_error_box, show_success_box, bitdepth, dng
 from locales import trans
 
 CONFIG_FILENAME = "openfocus.cfg.json"
@@ -201,6 +201,9 @@ class SettingsManager:
             "stackmffv4_batch_size": window.stackmffv4_batch_size,
             "gpu_loading": getattr(window, "gpu_loading_enabled", True),
             "bit_depth_mode": bitdepth.get_mode(),
+            "dng_compression": dng.get_compression(),
+            "dng_lossy_quality": dng.get_lossy_quality(),
+            "dng_fast_load": dng.get_fast_load(),
             "contrast_method": getattr(window, "contrast_method", "off"),
             "contrast_strength": getattr(window, "contrast_strength", 50),
             "fusion_method": self._selected_fusion_method(),
@@ -355,6 +358,23 @@ class SettingsManager:
             action = getattr(window, "ui_objs", {}).get(f"action_depth_{depth_mode}")
             if action is not None:
                 action.setChecked(True)
+
+        # DNG output settings. Applied to utils.dng, which is what the writer
+        # reads, rather than to the window - the same arrangement as the depth
+        # mode above. A mode this build cannot round trip (lossless without
+        # imagecodecs) is refused by set_compression, so a settings file carried
+        # over from a fuller install falls back to the default instead of
+        # producing files that cannot be reopened.
+        compression = data.get("dng_compression")
+        if compression in dng.VALID_COMPRESSIONS:
+            try:
+                dng.set_compression(compression)
+            except RuntimeError:
+                dng.set_compression(dng.DEFAULT_COMPRESSION)
+        if isinstance(data.get("dng_lossy_quality"), (int, float)):
+            dng.set_lossy_quality(int(data["dng_lossy_quality"]))
+        if isinstance(data.get("dng_fast_load"), bool):
+            dng.set_fast_load(data["dng_fast_load"])
 
         # Post-fusion contrast. Driving the widgets is enough: their signals set
         # the window attributes and refresh the preview through the same path a

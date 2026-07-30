@@ -1,7 +1,7 @@
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QMenu, QMainWindow
 from locales import trans
-from utils import bitdepth
+from utils import bitdepth, dng
 
 
 def setup_menus(window: QMainWindow) -> None:
@@ -270,6 +270,14 @@ def setup_menus(window: QMainWindow) -> None:
     thread_settings_action.triggered.connect(lambda: window.show_thread_settings())
     settings_menu.addAction(thread_settings_action)
     window.ui_objs['action_thread_settings'] = thread_settings_action
+
+    # Only shown where DNG can be written at all, so the menu does not offer
+    # settings for a format this build leaves out of the save dialogs.
+    if dng.is_available():
+        dng_action = QAction(trans.t('action_dng_settings'), window)
+        dng_action.triggered.connect(lambda: window.show_dng_settings())
+        settings_menu.addAction(dng_action)
+        window.ui_objs['action_dng_settings'] = dng_action
 
     stackmffv4_batch_action = QAction(trans.t('action_stackmffv4_batch_settings'), window)
     stackmffv4_batch_action.triggered.connect(lambda: window.show_stackmffv4_batch_settings())

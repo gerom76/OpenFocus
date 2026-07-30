@@ -64,6 +64,7 @@ class TranslationManager(QObject):
                 'action_thread_settings': 'Thread Settings',
                 'action_reg_settings': 'Registration Settings',
                 'action_tile_settings': 'Tile Settings',
+                'action_dng_settings': 'DNG Output...',
                 'action_stackmffv4_batch_settings': 'StackMFF V4 Batch Size',
                 'action_gpu_loading': 'GPU Image Loading',
                 'menu_bit_depth': 'Bit Depth',
@@ -455,6 +456,61 @@ class TranslationManager(QObject):
         <p>Note: Installing <code>opencv-contrib-python</code> can accelerate certain
         operations (e.g., guided filtering).</p>''',
 
+                # DNG output settings dialog
+                'dialog_dng_title': 'DNG Output Settings',
+                'dialog_dng_group': 'DNG Output',
+                'dialog_dng_compression_label': 'Compression:',
+                'dialog_dng_quality_label': 'Lossy quality:',
+                'dialog_dng_fast_load': 'Embed fast-load preview',
+                'dng_compression_none': 'Uncompressed',
+                'dng_compression_lossless': 'Lossless (JPEG)',
+                'dng_compression_lossy': 'Lossy (JPEG)',
+                'dng_compression_hint_none': 'Largest files, fastest to save. '
+                                             'The strips are the pixels.',
+                'dng_compression_hint_lossless': 'Identical pixels, roughly half the '
+                                                 'size at 16-bit and a third at 8-bit. '
+                                                 'Slower to save.',
+                'dng_compression_hint_lossy': 'Smallest files, but 8-bit only - a '
+                                              '16-bit result is narrowed on the way '
+                                              'out. For proxies, not masters.',
+                'dialog_dng_help_title': 'DNG Output Settings Help',
+                'dialog_dng_help_text': '''<h3>DNG Output Settings</h3>
+        <p>These settings apply whenever a result is saved as <code>.dng</code>, whether
+        from Save, a folder export or batch processing.</p>
+
+        <h4>Compression</h4>
+        <ul>
+        <li><b>Uncompressed</b> - the default. No encode cost, and the file holds the
+        pixels exactly as the pipeline produced them.</li>
+        <li><b>Lossless (JPEG)</b> - lossless Huffman JPEG, the only lossless codec DNG
+        permits for 16-bit linear data. The pixels come back identical; expect roughly
+        50-55% of the uncompressed size at 16-bit and 35-40% at 8-bit. Saving takes a
+        few seconds on a large frame.</li>
+        <li><b>Lossy (JPEG)</b> - baseline DCT JPEG. DNG allows this only for 8-bit
+        data, so a 16-bit result is narrowed to 8-bit on the way out and the loss is
+        permanent. Useful for proxies and for sharing, not for a master.</li>
+        </ul>
+
+        <p><b>Note:</b> the lossless mode is only offered when the <code>imagecodecs</code>
+        package is installed. OpenFocus can write it without that package, but could not
+        read the file back, and a saved result has to be usable as the input to the next
+        stack.</p>
+
+        <h4>Lossy quality</h4>
+        <p>The JPEG quality used by the lossy mode, from 1 to 100. The default of 92 is
+        high enough that the compression is not what limits the image. The setting has no
+        effect in the other two modes.</p>
+
+        <h4>Embed fast-load preview</h4>
+        <p>Stores a half-resolution JPEG rendering of the result inside the DNG. Without
+        it, anything that wants a thumbnail - a file browser, Lightroom, a raw converter -
+        has to decode the full-resolution linear raw first, which for a fused stack is the
+        slowest thing in the file. The preview costs a few hundred kilobytes.</p>
+
+        <p>This is the DNG specification's own preview mechanism. It is not Adobe's
+        proprietary "Fast Load Data", which is a Camera Raw cache that only Adobe's
+        converter can produce, but it serves the same purpose and works in more readers.</p>''',
+
                 # StackMFF V4 Batch settings dialog
                 'dialog_stackmffv4_batch_title': 'StackMFF V4 Batch Settings',
                 'dialog_stackmffv4_batch_group': 'Batch Processing',
@@ -586,6 +642,7 @@ class TranslationManager(QObject):
                 'action_thread_settings': '线程设置',
                 'action_reg_settings': '配准设置',
                 'action_tile_settings': '分块设置',
+                'action_dng_settings': 'DNG 输出...',
                 'action_stackmffv4_batch_settings': 'StackMFF V4 批量大小',
                 'action_gpu_loading': 'GPU 图像加载',
                 'menu_bit_depth': '位深度',
@@ -970,6 +1027,51 @@ class TranslationManager(QObject):
 
         <p>注意：安装 <code>opencv-contrib-python</code> 可以加速某些操作（例如引导滤波）。</p>
         ''',
+
+                # DNG output settings dialog
+                'dialog_dng_title': 'DNG 输出设置',
+                'dialog_dng_group': 'DNG 输出',
+                'dialog_dng_compression_label': '压缩方式:',
+                'dialog_dng_quality_label': '有损质量:',
+                'dialog_dng_fast_load': '嵌入快速加载预览',
+                'dng_compression_none': '不压缩',
+                'dng_compression_lossless': '无损 (JPEG)',
+                'dng_compression_lossy': '有损 (JPEG)',
+                'dng_compression_hint_none': '文件最大，保存最快。条带中存放的就是像素本身。',
+                'dng_compression_hint_lossless': '像素完全一致，16 位约为原来的一半，'
+                                                 '8 位约为三分之一。保存较慢。',
+                'dng_compression_hint_lossy': '文件最小，但仅支持 8 位——16 位结果在'
+                                              '写出时会被降位。适合代理文件，不适合母版。',
+                'dialog_dng_help_title': 'DNG 输出设置帮助',
+                'dialog_dng_help_text': '''<h3>DNG 输出设置</h3>
+        <p>无论是通过"保存"、文件夹导出还是批处理，只要结果保存为 <code>.dng</code>，
+        这些设置都会生效。</p>
+
+        <h4>压缩方式</h4>
+        <ul>
+        <li><b>不压缩</b> - 默认值。没有编码开销，文件中保存的正是处理流程输出的像素。</li>
+        <li><b>无损 (JPEG)</b> - 无损霍夫曼 JPEG，这是 DNG 规范允许用于 16 位线性数据的
+        唯一无损编码。像素可以完全还原；16 位约为不压缩体积的 50-55%，8 位约为 35-40%。
+        大尺寸图像保存需要几秒钟。</li>
+        <li><b>有损 (JPEG)</b> - 基线 DCT JPEG。DNG 仅允许它用于 8 位数据，因此 16 位结果
+        在写出时会被降为 8 位，且不可恢复。适合代理文件和分享，不适合作为母版。</li>
+        </ul>
+
+        <p><b>注意：</b>只有安装了 <code>imagecodecs</code> 包时才会提供无损模式。
+        即使没有该包，OpenFocus 也能写出无损文件，但无法再读回来；而保存的结果必须能够
+        作为下一次堆栈的输入。</p>
+
+        <h4>有损质量</h4>
+        <p>有损模式使用的 JPEG 质量，范围 1 到 100。默认值 92 足够高，压缩不会成为画质瓶颈。
+        该设置对其他两种模式无效。</p>
+
+        <h4>嵌入快速加载预览</h4>
+        <p>在 DNG 内部保存一份半分辨率的 JPEG 渲染结果。如果不嵌入，任何需要缩略图的程序
+        （文件浏览器、Lightroom、RAW 转换器）都必须先解码完整分辨率的线性 RAW，而对于融合
+        后的图像堆栈，这是文件中最慢的一步。预览只占几百 KB。</p>
+
+        <p>这是 DNG 规范自带的预览机制，并非 Adobe 专有的"Fast Load Data"（那是只有 Adobe
+        转换器才能生成的 Camera Raw 缓存），但用途相同，且兼容更多读取程序。</p>''',
 
                 # StackMFF V4 Batch settings dialog
                 'dialog_stackmffv4_batch_title': 'StackMFF V4 批量设置',

@@ -7,6 +7,7 @@ Modules:
 - bitdepth: 8/16-bit depth policy and conversion
 - jxl: JPEG XL encoding and decoding, optional and off when imagecodecs is absent
 - dng: DNG reading (LibRaw for camera files, verbatim for our own) and writing
+- ljpeg: lossless JPEG encoding, the codec DNG's lossless compression is built on
 - ui_utils: UI-related functions (message boxes, dialogs)
 - metadata: EXIF passthrough and OpenFocus XMP for saved results
 - validators: Validation and utility functions

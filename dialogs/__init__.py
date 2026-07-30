@@ -29,6 +29,7 @@ from dialogs.settings import (
     TileSettingsDialog,
     RegistrationSettingsDialog,
     ThreadSettingsDialog,
+    DngSettingsDialog,
     StackMFFV4BatchSettingsDialog,
 )
 
@@ -57,6 +58,7 @@ __all__ = [
     'TileSettingsDialog',
     'RegistrationSettingsDialog',
     'ThreadSettingsDialog',
+    'DngSettingsDialog',
     'StackMFFV4BatchSettingsDialog',
     # Batch dialogs
     'BatchProcessingDialog',

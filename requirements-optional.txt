@@ -16,6 +16,11 @@ PyWavelets
 # JPEG XL input and output; without it utils/jxl.py reports the format as
 # unavailable, the save dialogs, batch format list and export filters leave it
 # out, and `.jxl` is not a supported input format.
+#
+# Also gates DNG's lossless compression mode. utils/ljpeg.py writes that codec
+# without help, but reading one back needs the lossless-JPEG decoder from here,
+# so utils/dng.py leaves the mode out of the settings dialog rather than let the
+# app write files it could not reopen. The other DNG modes are unaffected.
 imagecodecs
 
 # FLOP counting, used only by the __main__ block of core/models/stackmffv4_network.py
