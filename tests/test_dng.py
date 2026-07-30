@@ -7,12 +7,14 @@ read, so utils.dng assembles it by hand. Nine promises are tested here:
    bit-for-bit what went in - at 8 bits, at 16, in colour and in mono, and
    across the multi-strip boundary (`TestRoundTrip`).
 2. The bytes really are a DNG: a little-endian TIFF whose tags say LinearRaw,
-   carry a DNGVersion, and describe the pixels' sRGB encoding through a
-   LinearizationTable rather than leaving a converter to guess (`TestContainer`).
+   carry a DNGVersion, and describe the pixels' encoding through a
+   LinearizationTable rather than leaving a converter to guess - and the curve
+   that table declares is the one the develop actually applied, not a different
+   standard's (`TestContainer`).
 3. An independent reader agrees. LibRaw opens the file, finds the right
-   dimensions, and renders a neutral ramp back as neutral - which only holds if
-   the colour matrix, the neutral and the linearization table are all right
-   (`TestInterop`).
+   dimensions, and renders a neutral ramp back as the ramp that went in - which
+   only holds if the colour matrix, the neutral and the linearization table are
+   all right (`TestInterop`).
 4. `.dng` is a supported input, read verbatim when OpenFocus wrote it and left to
    LibRaw when a camera did (`TestLoading`).
 5. A build without rawpy offers DNG nowhere, but can still read back the files
@@ -216,8 +218,57 @@ class TestContainer:
         matrix = _rationals(tags[dng._COLOR_MATRIX_1], signed=True)
         assert np.allclose(matrix.reshape(3, 3), np.asarray(dng._XYZ_D65_TO_SRGB), atol=1e-6)
 
+    def test_the_embedded_profile_asks_for_no_rendering(self, tmp_path):
+        """The tags that stop a converter developing an already-developed frame.
+
+        A raw converter's job is to render scene-referred data, so left to its
+        own devices it puts a baseline tone curve, a black-point rendering and a
+        baseline exposure on top of whatever it opens. On a fused result that is
+        a second rendering, and it is what made a saved DNG open brighter and
+        flatter than the frame it was saved from even once the
+        LinearizationTable described the right curve.
+        """
+        out = str(tmp_path / "result.dng")
+        assert write_image(out, _result8())
+        tags = _tags(out)
+
+        # An identity tone curve - the two endpoints and nothing between them -
+        # is how a profile says "no curve"; absent the tag the converter's own
+        # baseline curve applies instead.
+        assert tags[dng._PROFILE_TONE_CURVE] == [0.0, 0.0, 1.0, 1.0]
+        assert tags[dng._DEFAULT_BLACK_RENDER] == [dng._DEFAULT_BLACK_RENDER_NONE]
+        assert _rationals(tags[dng._BASELINE_EXPOSURE], signed=True) == 0.0
+        assert _rationals(tags[dng._BASELINE_EXPOSURE_OFFSET], signed=True) == 0.0
+        # Named, so a converter shows the result's own profile rather than the
+        # camera's - the pixels left camera space during the develop.
+        assert tags[dng._PROFILE_NAME] == dng._PROFILE_NAME_TEXT
+
+    def test_the_forward_matrix_sends_the_neutral_to_d50(self, tmp_path):
+        out = str(tmp_path / "result.dng")
+        assert write_image(out, _result8())
+
+        forward = _rationals(_tags(out)[dng._FORWARD_MATRIX_1], signed=True).reshape(3, 3)
+        # DNG requires a ForwardMatrix to map the camera neutral onto the D50
+        # white point of the connection space. AsShotNeutral is (1,1,1) here, so
+        # the neutral is (1,1,1) and the requirement is that the rows sum to D50
+        # - which is what lets a profile-aware converter use this matrix instead
+        # of inverting ColorMatrix1 and guessing at the white balance.
+        assert np.allclose(forward.sum(axis=1), [0.96422, 1.0, 0.82521], atol=2e-4)
+
+    def test_a_mono_result_still_asks_for_no_rendering(self, tmp_path):
+        out = str(tmp_path / "grey.dng")
+        assert write_image(out, _result8()[:, :, 0])
+        tags = _tags(out)
+
+        # The profile is colorimetry and goes with the colour tags, but "the
+        # tones are finished" is as true of one channel as of three.
+        assert dng._PROFILE_TONE_CURVE not in tags
+        assert dng._FORWARD_MATRIX_1 not in tags
+        assert tags[dng._DEFAULT_BLACK_RENDER] == [dng._DEFAULT_BLACK_RENDER_NONE]
+        assert _rationals(tags[dng._BASELINE_EXPOSURE], signed=True) == 0.0
+
     @pytest.mark.parametrize("image,bits", [(_result8(), 8), (_result16(), 16)])
-    def test_the_linearization_table_is_the_srgb_transfer_function(self, tmp_path, image, bits):
+    def test_the_linearization_table_is_the_bt709_transfer_function(self, tmp_path, image, bits):
         out = str(tmp_path / "result.dng")
         assert write_image(out, image)
         tags = _tags(out)
@@ -226,18 +277,45 @@ class TestContainer:
         assert len(table) == 1 << bits
 
         # This tag is what stops a raw converter from treating already-encoded
-        # values as scene-linear and rendering the image far too bright, so it is
-        # checked against the sRGB EOTF itself rather than against the writer.
+        # values as scene-linear, so it is checked against the EOTF itself rather
+        # than against the writer. BT.709 and not sRGB, because the develop
+        # encodes with dcraw's default gamma - a table describing the other curve
+        # is what made a saved frame darker than the raw it came from.
         encoded = np.linspace(0.0, 1.0, 1 << bits)
         expected = np.where(
-            encoded <= 0.04045, encoded / 12.92, ((encoded + 0.055) / 1.055) ** 2.4
+            encoded < 0.081, encoded / 4.5, ((encoded + 0.099) / 1.099) ** 2.222
         )
-        assert np.array_equal(table, np.rint(expected * dng._LINEAR_MAX))
+        # The writer uses the knee dcraw solves for rather than the figures the
+        # standard quotes, which is a difference of a few parts in 65535.
+        assert np.abs(table - np.rint(expected * dng._LINEAR_MAX)).max() <= 8
 
         # WhiteLevel has to agree with what the table maps onto, not with the
         # stored sample range, or the top of the image would clip or fall short.
         assert tags[dng._WHITE_LEVEL] == [dng._LINEAR_MAX] * 3
         assert table[-1] == dng._LINEAR_MAX
+
+    def test_the_table_inverts_the_curve_the_develop_applies(self, tmp_path):
+        """The table has to describe *this* pipeline, not a standard in general.
+
+        The bug it guards against was a disagreement between two modules: the
+        develop encoded with dcraw's gamma while the writer declared sRGB, so a
+        converter linearised the samples through a curve they had never been put
+        through and rendered a saved frame some 13 levels in 255 darker than the
+        raw it was made from. Nothing inside either module was wrong on its own,
+        which is why the check has to span both.
+        """
+        out = str(tmp_path / "result.dng")
+        assert write_image(out, _result8())
+        table = np.asarray(_tags(out)[dng._LINEARIZATION_TABLE], dtype=np.float64)
+
+        # core.gpu_decode's output curve, on the scene-linear values the table
+        # claims each stored sample stands for. Encoding those has to give the
+        # sample back, or the two modules disagree about what the pixels are.
+        linear = table / dng._LINEAR_MAX
+        encoded = np.where(linear < 0.018,
+                           linear * 4.5,
+                           1.099 * np.maximum(linear, 0.018) ** (1.0 / 2.222) - 0.099)
+        assert np.abs(encoded * 255.0 - np.arange(256)).max() <= 0.5
 
     def test_a_mono_dng_carries_no_colorimetry(self, tmp_path):
         out = str(tmp_path / "grey.dng")
@@ -283,16 +361,15 @@ class TestInterop:
         assert np.abs(row[:, 0] - row[:, 1]).max() <= 1
         assert np.abs(row[:, 1] - row[:, 2]).max() <= 1
 
-        # The endpoints must land exactly, and the ramp must stay monotonic. The
-        # midtones are deliberately not pinned: LibRaw applies its own BT.709
-        # output curve, which is not identical to sRGB's, and a converter
-        # choosing its own rendering is the whole point of a raw file. What is
-        # pinned is that no *second* encoding is applied - were the
-        # LinearizationTable missing, mid grey would come back near 186, not 128.
+        # The ramp has to come back as the ramp that went in. LibRaw's output
+        # curve is dcraw's default gamma, which is the curve the
+        # LinearizationTable now declares, so the two cancel and the render is
+        # the stored samples again - where a table describing sRGB instead left
+        # mid grey near 115, and no table at all would leave it near 186.
         assert row[0, 0] == 0
         assert row[-1, 0] == 255
         assert np.all(np.diff(row[:, 0].astype(np.int32)) >= 0)
-        assert abs(int(row[128, 0]) - 128) < 20
+        assert np.abs(row[:, 0] - _grey_ramp()[ramp.shape[0] // 2][:, 0].astype(np.int16)).max() <= 2
 
 
 class TestLoading:
@@ -527,10 +604,21 @@ class TestCompression:
                         use_camera_wb=True, output_bps=8, no_auto_bright=True))
 
         difference = np.abs(rendered[1].astype(int) - rendered[0].astype(int)).mean()
-        limit = 6 if mode == dng.COMPRESSION_LOSSY else 0
+        # The lossy mode is allowed a wide margin here because `_detailed` is a
+        # worst case for it: a sawtooth whose three planes are rolled copies puts
+        # the signal in the chroma, which 4:2:0 subsampling is exactly what
+        # discards. The margin was 6 while the LinearizationTable declared sRGB -
+        # a curve the pixels had not been through, which rendered the file
+        # compressed towards black and shrank every difference measured on it
+        # along with it. Against the corrected table the same file's error
+        # measures at its true amplitude, near 11.
+        limit = 14 if mode == dng.COMPRESSION_LOSSY else 0
         # A codec LibRaw mis-decodes does not fail loudly - it renders part of
         # the frame black - so the whole image is compared, not just the header.
         assert difference <= limit, f"{mode} renders differently: mean {difference}"
+        # A mean alone would let a black band hide behind a generous limit, so
+        # the overall level has to survive the codec too.
+        assert abs(rendered[1].mean() - rendered[0].mean()) <= limit
 
 
 class TestFastLoad:

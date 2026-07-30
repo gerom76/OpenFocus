@@ -487,7 +487,7 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 - **BMP**: Uncompressed, maximum quality
 - **TIFF**: High quality, supports layers
 - **JXL** (JPEG XL): Lossless and much smaller than PNG, keeps 16-bit depth and carries the EXIF/XMP metadata. Requires `pip install imagecodecs`; without it the format is not offered
-- **DNG**: Uncompressed linear (demosaiced) DNG, keeps 16-bit depth. Written for raw-converter workflows: the file declares sRGB primaries, an already-neutral white balance and the sRGB transfer curve, so Lightroom or RawTherapee renders it as the result you saw. Reloading one into OpenFocus returns the exact pixels, since it is read back without being developed a second time. Files are large — nothing is compressed — and no EXIF/XMP is written
+- **DNG**: Uncompressed linear (demosaiced) DNG, keeps 16-bit depth. Written for raw-converter workflows: the file declares sRGB primaries, an already-neutral white balance and the BT.709 transfer curve the develop actually applies, so Lightroom or RawTherapee renders it as the result you saw rather than a darker one. Reloading one into OpenFocus returns the exact pixels, since it is read back without being developed a second time. Files are large — nothing is compressed — and no EXIF/XMP is written
 - **GIF**: Animation format
 
 ---

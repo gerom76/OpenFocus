@@ -27,13 +27,63 @@ rather than merely parse:
   sRGB primaries, so no colour twist is applied on top of it.
 * `AsShotNeutral` = (1, 1, 1) declares it already neutral, so no white balance
   is applied either.
-* `LinearizationTable` carries the sRGB transfer function. The pipeline's frames
-  are display-referred (sRGB-encoded), while a raw converter assumes the values
-  it reads are scene-linear; without the table it would apply its own tone curve
-  on top of the encoding and render the image far too bright. The table is the
-  tag meant for exactly this, and it keeps the stored samples untouched - the
-  alternative, linearising the pixels on the way out, would cost precision and
-  band badly on 8-bit input.
+* `LinearizationTable` carries the transfer function the samples are encoded
+  with. The pipeline's frames are display-referred, while a raw converter
+  assumes the values it reads are scene-linear; without the table it would apply
+  its own tone curve on top of the encoding and render the image far too bright.
+  The table is the tag meant for exactly this, and it keeps the stored samples
+  untouched - the alternative, linearising the pixels on the way out, would cost
+  precision and band badly on 8-bit input.
+
+  That curve is BT.709's, because it is the one the develop actually applies:
+  both `rawpy.postprocess` and core.gpu_decode encode with dcraw's default gamma
+  of (2.222, 4.5). Declaring sRGB instead - which this module did until the
+  table was corrected - describes a curve the pixels were never put through, so
+  a converter linearises them wrongly. The two differ by up to 3109 parts in
+  65535 of linear light, worst in the shadows, which is what made a DNG saved
+  from a NEF render some 13 levels in 255 darker than the NEF it came from.
+  Primaries and white point are shared between the two standards, so only the
+  table changes and `ColorMatrix1` is unaffected.
+
+Rendering
+---------
+The tags above describe what the pixels *are*. They do not, on their own, stop a
+converter deciding what to *do* with them, and that is a separate problem with a
+separate answer.
+
+A raw converter exists to render scene-referred sensor data into a picture, so
+by default it applies a baseline tone curve, a black-point rendering and a
+baseline exposure on top of whatever it reads. Against a camera raw that is the
+whole point. Against a linear DNG it is a second rendering of a frame that has
+already been rendered once, and it is what made a saved result open in Lightroom
+brighter and flatter than the same frame in OpenFocus even after the
+LinearizationTable was corrected - the table settles the transfer function, not
+the converter's intentions.
+
+DNG's answer is the embedded camera profile, so one is written:
+
+* `ProfileToneCurve` is the identity, two points from (0,0) to (1,1). A
+  converter with no profile to consult uses its own baseline curve; given one
+  that says "no curve", it applies none.
+* `DefaultBlackRender` = None says the black point is already where it belongs,
+  so no automatic shadow rendering is applied on top.
+* `BaselineExposure` and `BaselineExposureOffset` are zero, for the same reason
+  in the other direction.
+* `ForwardMatrix1` maps the camera neutral straight onto D50, which is what a
+  profile-aware converter uses in preference to inverting `ColorMatrix1`, and
+  removes the white-balance guesswork that inversion leaves it.
+* `ProfileName` gives the result a profile a converter can name in its menu
+  instead of showing a camera's, which is what a file that left camera space
+  during the develop should say for itself.
+
+What this cannot do is make the file render the way the *source raw* renders in
+the same converter. The DNG holds pixels a develop has already finished with;
+the NEF beside it holds a mosaic that Lightroom develops with Adobe's own engine
+and Adobe's own profile for that camera, which is not the engine that produced
+these pixels. Those two are different renderings of the same exposure and no tag
+reconciles them - that would take un-rendering the frame. What the profile buys
+is the achievable half: the DNG renders as the frame OpenFocus produced, rather
+than as that frame with a converter's rendering stacked on it.
 
 Compression
 -----------
@@ -216,6 +266,11 @@ _PREVIEW_MIN_EDGE = 160
 # ----------------------------------------------------------------------
 _BYTE, _ASCII, _SHORT, _LONG, _RATIONAL, _SRATIONAL = 1, 2, 3, 4, 5, 10
 
+# FLOAT is written for one tag only - ProfileToneCurve, which the spec defines
+# as pairs of floats rather than as the rationals the rest of the colorimetry
+# uses.
+_FLOAT = 11
+
 _NEW_SUBFILE_TYPE = 254
 _IMAGE_WIDTH = 256
 _IMAGE_LENGTH = 257
@@ -255,7 +310,14 @@ _LINEARIZATION_TABLE = 50712
 _WHITE_LEVEL = 50717
 _COLOR_MATRIX_1 = 50721
 _AS_SHOT_NEUTRAL = 50728
+_BASELINE_EXPOSURE = 50730
 _CALIBRATION_ILLUMINANT_1 = 50778
+_PROFILE_NAME = 50936
+_PROFILE_TONE_CURVE = 50940
+_PROFILE_EMBED_POLICY = 50941
+_FORWARD_MATRIX_1 = 50964
+_BASELINE_EXPOSURE_OFFSET = 51109
+_DEFAULT_BLACK_RENDER = 51110
 
 # PhotometricInterpretation for demosaiced raw data - the whole point of a
 # linear DNG, as opposed to 32803 (CFA) for a sensor mosaic.
@@ -287,18 +349,59 @@ _PREVIEW_COLOR_SPACE_SRGB = 2
 _ILLUMINANT_D65 = 21
 
 # Everything the LinearizationTable maps into, and therefore WhiteLevel. 8-bit
-# samples are given the same 16-bit linear range as 16-bit ones: linearising
-# sRGB compresses the shadows hard, and 256 output levels there would band.
+# samples are given the same 16-bit linear range as 16-bit ones: undoing a
+# display curve compresses the shadows hard, and 256 output levels there would
+# band.
 _LINEAR_MAX = 65535
+
+# dcraw's default gamma, which is BT.709's: an exponent of 0.45 on the way out
+# with a linear segment of slope 4.5 near black. LibRaw exposes it as
+# (2.222, 4.5) - the reciprocal - and applies it unless a caller overrides it,
+# so it is the curve on every frame the pipeline develops from a raw file, by
+# way of `rawpy.postprocess` or of core.gpu_decode's reimplementation.
+_BT709_POWER = 0.45
+_BT709_SLOPE = 4.5
 
 # XYZ (D65) -> linear sRGB. ColorMatrix1 is defined in that direction: it takes
 # XYZ under the calibration illuminant into the "camera" space, which for this
-# writer is sRGB itself.
+# writer is sRGB itself. sRGB and BT.709 share primaries and white point - they
+# part company only over the transfer function - so this matrix describes the
+# pixels whichever of the two curves the LinearizationTable declares.
 _XYZ_D65_TO_SRGB = (
     (3.2406, -1.5372, -0.4986),
     (-0.9689, 1.8758, 0.0415),
     (0.0557, -0.2040, 1.0570),
 )
+
+# Linear sRGB -> XYZ (D50), Bradford-adapted: the matrix an ICC sRGB profile
+# carries. ForwardMatrix1 is defined into D50 whatever the calibration
+# illuminant is, because D50 is the profile connection space, so this is not
+# the inverse of ColorMatrix1 and the two coexist without contradiction. It has
+# to map the camera neutral onto the D50 white point, and with AsShotNeutral
+# (1, 1, 1) the camera neutral is (1, 1, 1); the rows sum to (0.9642, 1.0000,
+# 0.8252), which is exactly D50, so the requirement holds by construction.
+_SRGB_TO_XYZ_D50 = (
+    (0.4360747, 0.3850649, 0.1430804),
+    (0.2225045, 0.7168786, 0.0606169),
+    (0.0139322, 0.0971045, 0.7141733),
+)
+
+# The profile's name, which is what a converter shows in its profile menu. A
+# linear DNG has no camera to name - the pixels left camera space during the
+# develop - so it names what it actually is.
+_PROFILE_NAME_TEXT = "OpenFocus Linear"
+
+# ProfileEmbedPolicy 0, "allow copying": the profile describes nothing
+# proprietary, so there is no reason to stop a converter carrying it elsewhere.
+_PROFILE_EMBED_ALLOW_COPYING = 0
+
+# ProfileToneCurve as the two points of the identity, which is what stops a
+# converter applying its own baseline curve - see the "Rendering" section.
+_IDENTITY_TONE_CURVE = (0.0, 0.0, 1.0, 1.0)
+
+# DefaultBlackRender 1, "none": the result already has its black point where it
+# belongs, so a converter must not go looking for another one.
+_DEFAULT_BLACK_RENDER_NONE = 1
 
 # Denominator for the SRATIONAL colour matrix entries; six digits is well past
 # the precision the matrix itself is quoted to.
@@ -436,18 +539,46 @@ def get_fast_load() -> bool:
 # ----------------------------------------------------------------------
 # Writing
 # ----------------------------------------------------------------------
-def _srgb_linearization_table(bits: int) -> np.ndarray:
-    """The sRGB EOTF, tabulated for every value a sample of `bits` can hold.
+def _bt709_knee() -> Tuple[float, float]:
+    """Where BT.709's linear segment meets its power segment, and the offset.
+
+    Returns the breakpoint in *encoded* terms and the offset the power segment
+    is shifted by - dcraw's ``g[2]`` and ``g[4]``. The standard quotes these as
+    0.081 and 0.099, but dcraw does not use the quoted figures: it solves for
+    the pair that makes the two segments meet with a continuous slope, by the
+    same 48-step bisection reproduced here. The difference is small - seven
+    parts in 65535 at worst - but this is the tag that has to invert what LibRaw
+    applies, and solving costs a few dozen floating-point operations once.
+    """
+    low, high = 0.0, 1.0
+    for _ in range(48):
+        knee = (low + high) / 2.0
+        # Slope of the power segment at `knee` against the linear segment's.
+        if ((knee / _BT709_SLOPE) ** -_BT709_POWER - 1) / _BT709_POWER - 1 / knee > -1:
+            high = knee
+        else:
+            low = knee
+    knee = (low + high) / 2.0
+    return knee, knee * (1.0 / _BT709_POWER - 1.0)
+
+
+def _linearization_table(bits: int) -> np.ndarray:
+    """The pipeline's EOTF, tabulated for every value a sample of `bits` can hold.
 
     Entry *i* is the scene-linear value that stored sample *i* stands for, scaled
     to 0..`_LINEAR_MAX`. This is what lets the samples themselves be written
     untouched: the encoding is described rather than undone.
+
+    The curve is BT.709's, which is what the develop puts the pixels through -
+    see the module docstring for why declaring sRGB here rendered a saved frame
+    darker than the raw it was made from.
     """
+    knee, offset = _bt709_knee()
     encoded = np.linspace(0.0, 1.0, 1 << bits, dtype=np.float64)
     linear = np.where(
-        encoded <= 0.04045,
-        encoded / 12.92,
-        ((encoded + 0.055) / 1.055) ** 2.4,
+        encoded < knee,
+        encoded / _BT709_SLOPE,
+        ((encoded + offset) / (1.0 + offset)) ** (1.0 / _BT709_POWER),
     )
     return np.rint(linear * _LINEAR_MAX).astype(np.uint16)
 
@@ -482,6 +613,8 @@ def _pack(field_type: int, values) -> bytes:
         return np.asarray(values, dtype="<u4").tobytes()
     if field_type == _SRATIONAL:
         return np.asarray(values, dtype="<i4").tobytes()
+    if field_type == _FLOAT:
+        return np.asarray(values, dtype="<f4").tobytes()
     raise ValueError(f"Unsupported TIFF field type: {field_type}")
 
 
@@ -1007,16 +1140,31 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
         (_DNG_VERSION, _BYTE, _DNG_VERSION_BYTES),
         (_DNG_BACKWARD_VERSION, _BYTE, backward),
         (_UNIQUE_CAMERA_MODEL, _ASCII, CAMERA_MODEL),
-        (_LINEARIZATION_TABLE, _SHORT, _srgb_linearization_table(bits)),
+        (_LINEARIZATION_TABLE, _SHORT, _linearization_table(bits)),
         (_WHITE_LEVEL, _LONG, [_LINEAR_MAX] * samples),
     ]
+
+    # Neither tag is colorimetry, so both are written for a monochrome result
+    # too: they say the tones are finished, which is as true of one channel as
+    # of three.
+    entries.append((_BASELINE_EXPOSURE, _SRATIONAL, [0, _MATRIX_DENOMINATOR]))
+    entries.append((_BASELINE_EXPOSURE_OFFSET, _SRATIONAL, [0, _MATRIX_DENOMINATOR]))
+    entries.append((_DEFAULT_BLACK_RENDER, _LONG, [_DEFAULT_BLACK_RENDER_NONE]))
 
     if samples == 3:
         # Colorimetry only means anything for a colour image. A monochrome DNG
         # carries no matrix and no neutral, which is what DNG 1.4 expects.
         entries.append((_COLOR_MATRIX_1, _SRATIONAL, _rational_matrix(_XYZ_D65_TO_SRGB)))
+        entries.append((_FORWARD_MATRIX_1, _SRATIONAL, _rational_matrix(_SRGB_TO_XYZ_D50)))
         entries.append((_CALIBRATION_ILLUMINANT_1, _SHORT, [_ILLUMINANT_D65]))
         entries.append((_AS_SHOT_NEUTRAL, _RATIONAL, [1, 1, 1, 1, 1, 1]))
+        # The rest of the embedded profile. Without these a converter has no
+        # profile to use and falls back to its own default rendering, which is
+        # built to develop a camera's scene-referred data and puts a second
+        # tone curve on a result that is already finished.
+        entries.append((_PROFILE_NAME, _ASCII, _PROFILE_NAME_TEXT))
+        entries.append((_PROFILE_EMBED_POLICY, _LONG, [_PROFILE_EMBED_ALLOW_COPYING]))
+        entries.append((_PROFILE_TONE_CURVE, _FLOAT, _IDENTITY_TONE_CURVE))
     sub_ifds = exif_sub_ifds(exif)
     for pointer, _ in sub_ifds:
         entries.append((pointer, _LONG, [0]))  # patched once the layout is fixed
