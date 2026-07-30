@@ -25,8 +25,9 @@ read, so utils.dng assembles it by hand. Nine promises are tested here:
 7. The fast-load preview is a real, findable preview - a reduced-resolution
    JPEG SubIFD that LibRaw hands back as a thumbnail (`TestFastLoad`).
 8. A source file's EXIF is carried in as tags of the DNG's own - camera, shot
-   and position - with the offsets that cannot move left behind, and without
-   disturbing the pixels or LibRaw (`TestSourceExif`).
+   and position - with the offsets that cannot move left behind, a MakerNote
+   kept only when it is measured from itself, and without disturbing the pixels
+   or LibRaw (`TestSourceExif`).
 9. A write that fails part way leaves no file, since the file is streamed rather
    than assembled in memory first (`TestPartialWrites`), and a camera DNG is
    developed on the GPU wherever the stack loader would have been, falling back
@@ -841,12 +842,13 @@ class TestSourceExif:
     DNG cannot be tagged after the fact the way a JPEG can - a TIFF's offsets all
     move when anything is inserted - so the block is taken apart and re-laid out
     while the file is being written. That is what these check: the tags arrive,
-    they arrive as tags and not as a copied blob, and the pixels are untouched by
-    any of it.
+    they arrive as tags and not as a copied blob, the ones whose values are
+    offsets into the source are decided on their merits, and the pixels are
+    untouched by any of it.
     """
 
     @staticmethod
-    def _source(path):
+    def _source(path, maker_note=b"\x00\x01binary maker note"):
         """A small JPEG with a camera-like EXIF block, and that block.
 
         Pillow writes big-endian ("MM") blocks, which is what makes this a test
@@ -859,11 +861,15 @@ class TestSourceExif:
         exif[dng._MAKE] = "Nikon"
         exif[dng._MODEL] = "Z 8"
         exif[dng._ARTIST] = "A Photographer"
+        exif[dng._X_RESOLUTION] = IFDRational(300, 1)
+        exif[dng._Y_RESOLUTION] = IFDRational(300, 1)
+        exif[dng._RESOLUTION_UNIT] = 2
+        exif[dng._DATE_TIME_ORIGINAL] = "2026:07:20 11:22:33"
         camera = exif.get_ifd(0x8769)
         camera[0x829A] = IFDRational(1, 200)      # ExposureTime
         camera[0x8827] = 400                      # ISOSpeedRatings
         camera[0x9003] = "2026:07:20 11:22:33"    # DateTimeOriginal
-        camera[0x927C] = b"\x00\x01binary maker note"
+        camera[0x927C] = maker_note
         gps = exif.get_ifd(0x8825)
         gps[1] = "N"
         Image.new("RGB", (16, 16), (9, 9, 9)).save(str(path), exif=exif.tobytes())
@@ -872,6 +878,42 @@ class TestSourceExif:
         blob = blob[len(b"Exif\x00\x00"):] if blob.startswith(b"Exif\x00\x00") else blob
         assert blob.startswith(b"MM"), "expected Pillow to write a big-endian block"
         return blob
+
+    # A recognisable stand-in for the JPEG a Nikon note embeds. It opens with a
+    # start-of-image marker, because half the point of removing it is that a
+    # reader scanning for one must not find it.
+    PREVIEW = b"\xff\xd8\xff" + b"not the fused result" + b"\xff\xd9"
+
+    @classmethod
+    def _nikon_note(cls, lens=b"NIKKOR Z 100mm\x00", values_at=None, preview=None):
+        """A MakerNote in the shape Nikon writes: a header, then a TIFF of its own.
+
+        Everything inside is measured from that embedded header rather than from
+        the file around it, which is what makes such a note safe to write at a
+        new position - and what utils.dng checks before it agrees to. Passing
+        `values_at` overrides where the lens value claims to be, which is how
+        that check is shown to be a check and not a guess at the header alone.
+
+        With `preview`, the note also carries a preview IFD holding a JPEG, as a
+        real one does - the part that has to be taken out on the way into a DNG.
+        """
+        entries = 1 if preview is None else 2
+        lens_at = 8 + 2 + 12 * entries + 4
+        preview_ifd_at = lens_at + len(lens)
+        preview_at = preview_ifd_at + 2 + 12 * 2 + 4
+
+        inner = struct.pack("<2sHI", b"II", 42, 8) + struct.pack("<H", entries)
+        if preview is not None:
+            inner += struct.pack("<HHII", 0x0011, 4, 1, preview_ifd_at)
+        inner += struct.pack("<HHII", 0x0084, 2, len(lens),
+                             lens_at if values_at is None else values_at)
+        inner += struct.pack("<I", 0) + lens
+        if preview is not None:
+            inner += struct.pack("<H", 2)
+            inner += struct.pack("<HHII", 0x0201, 4, 1, preview_at)
+            inner += struct.pack("<HHII", 0x0202, 4, 1, len(preview))
+            inner += struct.pack("<I", 0) + preview
+        return b"Nikon\x00\x02\x11\x00\x00" + inner
 
     @staticmethod
     def _sub_ifd(path, pointer):
@@ -911,18 +953,94 @@ class TestSourceExif:
 
         assert 1 in self._sub_ifd(out, dng._GPS_IFD)
 
+    def test_the_shot_reaches_ifd0_where_the_source_put_it_there_too(self, tmp_path):
+        source = self._source(tmp_path / "src.jpg")
+        out = str(tmp_path / "with_exif.dng")
+        assert dng.write(out, _result16(), exif=source)
+
+        tags = _tags(out)
+        # A raw file records its nominal resolution and, per TIFF/EP, the
+        # capture date in IFD 0 as well as in the EXIF IFD; a DNG made from it
+        # should not come out filling one of the two.
+        assert _rationals(tags[dng._X_RESOLUTION]) == 300
+        assert _rationals(tags[dng._Y_RESOLUTION]) == 300
+        assert tags[dng._RESOLUTION_UNIT] == [2]
+        assert tags[dng._DATE_TIME_ORIGINAL] == "2026:07:20 11:22:33"
+        # DateTime is when *this* file was made, so it stays the writer's own.
+        assert tags[dng._DATE_TIME] != "2026:07:20 11:22:33"
+        # Orientation is not copied: the result is already the right way up.
+        assert tags[dng._ORIENTATION] == [1]
+
     def test_offsets_that_cannot_move_are_left_behind(self, tmp_path):
         source = self._source(tmp_path / "src.jpg")
         out = str(tmp_path / "with_exif.dng")
         assert dng.write(out, _result16(), exif=source)
 
-        # A MakerNote holds offsets into the file it came from, so a copy at a
-        # new position decodes as noise; dropping it beats writing it broken.
+        # A MakerNote whose offsets run from the file it came from decodes as
+        # noise anywhere else; dropping it beats writing it broken.
         camera = self._sub_ifd(out, dng._EXIF_IFD)
         assert dng._MAKER_NOTE not in camera
         assert dng._INTEROP_IFD not in camera
         with open(out, "rb") as handle:
             assert b"binary maker note" not in handle.read()
+
+    def test_a_self_contained_maker_note_travels(self, tmp_path):
+        # A Nikon note brings its own TIFF header and is measured from it, so it
+        # can be moved - and it is where the lens, the shutter count and the
+        # rest of a Nikon's private record live.
+        note = self._nikon_note()
+        source = self._source(tmp_path / "src.jpg", maker_note=note)
+        out = str(tmp_path / "with_exif.dng")
+        assert dng.write(out, _result16(), exif=source)
+
+        camera = self._sub_ifd(out, dng._EXIF_IFD)
+        assert camera[dng._MAKER_NOTE] == note
+
+    def test_the_preview_inside_a_note_does_not_travel(self, tmp_path):
+        # A Nikon note embeds a JPEG of the frame it came from. A DNG is a raw
+        # file, so a browser takes any preview it finds in preference to
+        # decoding: left in, that JPEG is what gets shown instead of the fused
+        # result. The rest of the note is what it is carried for and stays.
+        note = self._nikon_note(preview=self.PREVIEW)
+        source = self._source(tmp_path / "src.jpg", maker_note=note)
+        out = str(tmp_path / "with_exif.dng")
+        assert dng.write(out, _result16(), exif=source, fast_load=False)
+
+        carried = self._sub_ifd(out, dng._EXIF_IFD)[dng._MAKER_NOTE]
+        assert len(carried) == len(note), "the note may not change length"
+        assert b"NIKKOR Z 100mm" in carried
+        assert b"not the fused result" not in carried
+
+        # Nothing anywhere in the file for a reader to mistake for a preview.
+        with open(out, "rb") as handle:
+            assert b"\xff\xd8\xff" not in handle.read()
+
+    def test_the_written_preview_is_the_only_one(self, tmp_path):
+        # With the fast-load preview on there is exactly one JPEG in the file,
+        # and it is the one this module rendered from the result.
+        note = self._nikon_note(preview=self.PREVIEW)
+        source = self._source(tmp_path / "src.jpg", maker_note=note)
+        out = str(tmp_path / "with_preview.dng")
+        assert dng.write(out, _detailed(400, 400), exif=source, fast_load=True)
+
+        tags = _tags(out)
+        assert dng._SUB_IFDS in tags
+        with open(out, "rb") as handle:
+            data = handle.read()
+        # The tag table is where the note sits, and it holds no image of its
+        # own; the preview this module rendered is written past the strips.
+        assert b"\xff\xd8\xff" not in data[:min(tags[dng._STRIP_OFFSETS])]
+        assert b"not the fused result" not in data
+
+    def test_a_note_whose_offsets_do_not_fit_is_left_behind(self, tmp_path):
+        # The header shape is not taken on trust: a note claiming a value past
+        # its own end is one whose offsets mean something else.
+        note = self._nikon_note(values_at=4096)
+        source = self._source(tmp_path / "src.jpg", maker_note=note)
+        out = str(tmp_path / "with_exif.dng")
+        assert dng.write(out, _result16(), exif=source)
+
+        assert dng._MAKER_NOTE not in self._sub_ifd(out, dng._EXIF_IFD)
 
     def test_the_pixels_are_the_same_either_way(self, tmp_path):
         source = self._source(tmp_path / "src.jpg")

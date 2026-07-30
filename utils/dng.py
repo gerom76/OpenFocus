@@ -149,10 +149,22 @@ out as the file is written, which is also why `write` is the one that takes it.
 
 That is a translation and not a copy. An EXIF block is itself a TIFF stream, so
 its tags are already in the right shape, but its offsets are measured from its
-own start; the tags whose values *are* offsets - the IFD pointers, the embedded
-thumbnail, and MakerNote, whose contents are vendor-specific and full of them -
-are left behind rather than written pointing at nothing. Everything else moves
-across, byte order included, since camera blocks are as often big-endian as not.
+own start; the tags whose values *are* offsets - the IFD pointers and the
+embedded thumbnail - are left behind rather than written pointing at nothing.
+Everything else moves across, byte order included, since camera blocks are as
+often big-endian as not.
+
+MakerNote is decided one note at a time, by `_relocatable_maker_note`. A note
+whose offsets run from the file it was written into cannot be moved and is
+dropped; a note that brings its own TIFF header, as Nikon's does, is measured
+from itself and travels intact - which is what puts the lens, the shutter count
+and the rest of a Nikon's private record in the DNG rather than only in the NEF.
+
+One thing such a note may not bring is a preview. A Nikon's holds a small JPEG
+of the frame it came from, and a browser looking for a raw file's preview will
+take it whichever IFD it is in - so a DNG written without a fast-load preview
+would show one source frame at 640x424 in place of the fused result.
+`_without_maker_note_preview` takes it out; see there for why the bytes go too.
 
 Memory
 ------
@@ -284,10 +296,14 @@ _ORIENTATION = 274
 _SAMPLES_PER_PIXEL = 277
 _ROWS_PER_STRIP = 278
 _STRIP_BYTE_COUNTS = 279
+_X_RESOLUTION = 282
+_Y_RESOLUTION = 283
 _PLANAR_CONFIG = 284
+_RESOLUTION_UNIT = 296
 _SUB_IFDS = 330
 _SOFTWARE = 305
 _DATE_TIME = 306
+_DATE_TIME_ORIGINAL = 36867
 _YCBCR_SUB_SAMPLING = 530
 _SAMPLE_FORMAT = 339
 _IMAGE_DESCRIPTION = 270
@@ -704,22 +720,58 @@ def _build_ifd(entries: list, base_offset: int) -> Tuple[bytes, Dict[int, int]]:
 # payload is an offset - or contains one - cannot simply be copied.
 #
 # Those are the ones left behind. The IFD pointers are re-created by the writer,
-# since it is the one that knows where the sub-IFDs landed. The embedded
-# thumbnail is a JPEG the DNG has no use for - it carries its own preview. And
-# MakerNote is the awkward case: most vendors' notes hold offsets into the
-# original file, and a copy at a new position decodes as noise, so it is dropped
-# rather than written broken.
+# since it is the one that knows where the sub-IFDs landed, and the embedded
+# thumbnail is a JPEG the DNG has no use for - it carries its own preview.
 _UNRELOCATABLE_TAGS = frozenset({
-    _EXIF_IFD, _GPS_IFD, _INTEROP_IFD, _MAKER_NOTE,
+    _EXIF_IFD, _GPS_IFD, _INTEROP_IFD,
     _JPEG_INTERCHANGE_FORMAT, _JPEG_INTERCHANGE_LENGTH,
 })
+
+# MakerNote is the awkward case, and it is decided per note rather than by that
+# set. Most vendors measure the offsets inside a note from the start of the file
+# it was written into, so a copy anywhere else decodes as noise; some write a
+# note that carries its own TIFF header and is measured from *that*, and such a
+# note travels intact. `_relocatable_maker_note` is where the two are told apart.
+#
+# Nikon's is the shape recognised: `Nikon\0`, two version bytes, a 16-bit pad,
+# then a TIFF header at offset 10. It is worth recognising because the note is
+# where a Nikon records the lens, the shutter count, the focus distance and the
+# picture control - none of which has a standard EXIF tag, and all of which a
+# reader shows for the source raw and would otherwise not show for the DNG.
+_MAKER_NOTE_NIKON_PREFIX = b"Nikon\x00"
+_MAKER_NOTE_NIKON_TIFF_AT = 10
+
+# What such a note may not bring with it. A Nikon's holds a preview IFD of its
+# own, and inside it a JPEG of the frame the note came from - a few hundred
+# kilopixels of *one source frame*, at a fraction of the result's size.
+#
+# A DNG is a raw file, so a browser looks for an embedded preview before it will
+# decode anything, and it does not care which IFD the preview came out of. Left
+# in, that JPEG is what XnView shows in place of the fused result whenever the
+# fast-load preview is switched off and there is no other preview to prefer. So
+# it is removed - the offset that points at it, and the bytes themselves, since
+# a reader that hunts for a JPEG start marker would otherwise still find them.
+# Everything the note is carried *for* is elsewhere in it and is untouched.
+_MAKER_NOTE_PREVIEW_IFD = 0x0011
 
 # Tags of the source's IFD 0 that describe the shot rather than the source file,
 # and so belong in the DNG's IFD 0 too. Make and Model name the camera the frames
 # came out of, which is what those tags mean in DNG as well; the writer's own
 # identity is in Software and UniqueCameraModel, and that is what `read` looks
 # for when it decides whether a file is its own.
-_CAMERA_IFD0_TAGS = frozenset({_IMAGE_DESCRIPTION, _MAKE, _MODEL, _ARTIST, _COPYRIGHT})
+#
+# The resolution tags travel because they are what a print pipeline reads a
+# nominal size out of, and a raw converter writes them into a DNG for the same
+# reason; they say nothing about the strips, so nothing here contradicts them.
+# DateTimeOriginal is here as well as in the EXIF IFD because TIFF/EP puts it in
+# both, and a source that fills both should not come out of a save filling one -
+# DateTime stays the writer's own, since it is when *this* file was created.
+# Orientation is deliberately absent: a fused result is already the right way up,
+# and copying a rotated source's value would turn it.
+_CAMERA_IFD0_TAGS = frozenset({
+    _IMAGE_DESCRIPTION, _MAKE, _MODEL, _ARTIST, _COPYRIGHT,
+    _X_RESOLUTION, _Y_RESOLUTION, _RESOLUTION_UNIT, _DATE_TIME_ORIGINAL,
+})
 
 # numpy element type of each TIFF field type, for the byte-order conversion. The
 # two byte-stream types are absent: ASCII and UNDEFINED have no element wider
@@ -796,6 +848,104 @@ def _copied_entry(tag: int, field_type: int, count: int,
     return (tag, field_type, _Raw(_little_endian(payload, field_type, endian), count))
 
 
+def _relocatable_maker_note(payload: bytes) -> bool:
+    """Whether a MakerNote can be written at a new offset and still decode.
+
+    True only for a note that opens with a TIFF header of its own, because that
+    is what says its internal offsets are measured from the note rather than
+    from the file around it. Nikon writes one; the check is deliberately narrow,
+    since a note wrongly judged self-contained is worse than one left behind - a
+    reader would parse it and report another shot's values as this one's.
+
+    The shape is not taken on trust either. The note's IFD is walked and every
+    out-of-line value has to fall inside the note; one that reaches past its end
+    is a note whose offsets mean something else, and it is dropped.
+    """
+    if not payload.startswith(_MAKER_NOTE_NIKON_PREFIX):
+        return False
+
+    inner = payload[_MAKER_NOTE_NIKON_TIFF_AT:]
+    header = _tiff_header(inner)
+    if header is None:
+        return False
+    endian, offset = header
+
+    if offset <= 0 or offset + 2 > len(inner):
+        return False
+    (count,) = struct.unpack_from(endian + "H", inner, offset)
+    table = offset + 2
+    if count == 0 or table + 12 * count + 4 > len(inner):
+        return False
+
+    for index in range(table, table + 12 * count, 12):
+        _tag, field_type, values = struct.unpack_from(endian + "HHI", inner, index)
+        size = _READ_TYPE_SIZE.get(field_type)
+        if size is None:
+            continue
+        total = size * values
+        if total > 4:
+            (position,) = struct.unpack_from(endian + "I", inner, index + 8)
+            if position + total > len(inner):
+                return False
+    return True
+
+
+def _without_maker_note_preview(payload: bytes) -> bytes:
+    """The same note with the preview image it embeds taken out.
+
+    See `_MAKER_NOTE_PREVIEW_IFD` for why one has to go. The edits are made
+    where the values sit rather than by re-laying the note out: every offset
+    inside it is measured from its own header, so anything that moved would
+    point at the wrong thing. The note keeps its length, and the space the
+    preview occupied is left as zeros.
+
+    A note with no preview in it comes back unchanged, as does one whose preview
+    IFD does not parse - there is nothing to remove and nothing to risk.
+    """
+    inner = payload[_MAKER_NOTE_NIKON_TIFF_AT:]
+    header = _tiff_header(inner)
+    if header is None:
+        return payload
+    endian, offset = header
+
+    preview_ifd = None
+    for tag, field_type, count, value in _blob_entries(inner, endian, offset):
+        if tag == _MAKER_NOTE_PREVIEW_IFD and field_type == _LONG and count == 1:
+            (preview_ifd,) = struct.unpack(endian + "I", value)
+    if not preview_ifd or preview_ifd + 2 > len(inner):
+        return payload
+
+    (entries,) = struct.unpack_from(endian + "H", inner, preview_ifd)
+    table = preview_ifd + 2
+    if table + 12 * entries + 4 > len(inner):
+        return payload
+
+    note = bytearray(payload)
+    start = length = 0
+    for index in range(table, table + 12 * entries, 12):
+        tag, _field_type, count = struct.unpack_from(endian + "HHI", inner, index)
+        if tag not in (_JPEG_INTERCHANGE_FORMAT, _JPEG_INTERCHANGE_LENGTH) or count != 1:
+            continue
+        (value,) = struct.unpack_from(endian + "I", inner, index + 8)
+        if tag == _JPEG_INTERCHANGE_FORMAT:
+            start = value
+        else:
+            length = value
+        struct.pack_into(endian + "I", note, _MAKER_NOTE_NIKON_TIFF_AT + index + 8, 0)
+
+    if start and length and start + length <= len(inner):
+        at = _MAKER_NOTE_NIKON_TIFF_AT + start
+        note[at:at + length] = b"\x00" * length
+    return bytes(note)
+
+
+def _carried_maker_note(payload: bytes) -> Optional[bytes]:
+    """A source MakerNote as the DNG should hold it, or None to leave it behind."""
+    if not _relocatable_maker_note(payload):
+        return None
+    return _without_maker_note_preview(payload)
+
+
 def exif_camera_entries(exif: Optional[bytes]) -> List[Tuple[int, int, _Raw]]:
     """The source's IFD 0 tags that describe the camera, ready for the DNG's IFD 0."""
     header = _tiff_header(exif) if exif else None
@@ -830,10 +980,18 @@ def exif_sub_ifds(exif: Optional[bytes]) -> List[Tuple[int, List[Tuple[int, int,
     for pointer in (_EXIF_IFD, _GPS_IFD):
         if pointer not in pointers:
             continue
-        entries = [_copied_entry(tag, field_type, count, payload, endian)
-                   for tag, field_type, count, payload
-                   in _blob_entries(exif, endian, pointers[pointer])
-                   if tag not in _UNRELOCATABLE_TAGS]
+        entries = []
+        for tag, field_type, count, payload in _blob_entries(exif, endian, pointers[pointer]):
+            if tag == _MAKER_NOTE:
+                # Kept, dropped or trimmed on its own merits; the length never
+                # changes, so the count the source declared still stands.
+                carried = _carried_maker_note(payload)
+                if carried is None:
+                    continue
+                payload = carried
+            elif tag in _UNRELOCATABLE_TAGS:
+                continue
+            entries.append(_copied_entry(tag, field_type, count, payload, endian))
         if entries:
             sub_ifds.append((pointer, entries))
     return sub_ifds

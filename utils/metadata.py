@@ -18,10 +18,19 @@ round trip at all, since Pillow has no matching mode. Inserting a JPEG APP1
 segment, a PNG chunk or a JPEG XL box leaves every encoded pixel byte untouched.
 
 JPEG, PNG and JPEG XL are handled here; TIFF and BMP saves are left alone.
+
+Reading the source block is a second asymmetry. A JPEG hands its EXIF over as
+the bytes it was stored as, but a TIFF-based source - a NEF, a DNG, a .tif - has
+no such segment, and letting an imaging library parse and re-encode the tags
+changes them: types collapse, rationals get reduced, unknown tags vanish. Those
+sources are therefore read by `_tiff_exif`, which copies the tags byte for byte
+and recomputes only the offsets.
 """
 
+import io
 import os
 import re
+import struct
 import zlib
 from dataclasses import dataclass
 from datetime import datetime
@@ -65,6 +74,46 @@ _JXL_XMP_BOX = b"xml "
 
 # Byte order marks of a TIFF header, which is what an EXIF block really is.
 _TIFF_HEADERS = (b"II*\x00", b"MM\x00*")
+
+# Field type codes of a TIFF entry mapped to the width of one value. Used to
+# walk a source block, so every type a camera may write has to be here even
+# though this module never constructs one.
+_TIFF_TYPE_SIZE = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1,
+                   8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4}
+_TIFF_LONG = 4
+
+# Tags of a TIFF-based source's IFD 0 that describe the shot rather than the
+# file it was stored in. A whitelist rather than a blacklist, because IFD 0 of a
+# raw file is mostly about that file - the geometry and strip offsets of its
+# embedded thumbnail, its colour profile, its own XMP - and, if the source is a
+# DNG, a linearization table and a colour matrix that would be nonsense in the
+# EXIF block of a JPEG. What is left is the camera, the timestamps and the
+# people the file credits.
+_SOURCE_IFD0_TAGS = frozenset({
+    270,    # ImageDescription
+    271,    # Make
+    272,    # Model
+    274,    # Orientation
+    282,    # XResolution
+    283,    # YResolution
+    296,    # ResolutionUnit
+    305,    # Software
+    306,    # DateTime
+    315,    # Artist
+    316,    # HostComputer
+    33432,  # Copyright
+    36867,  # DateTimeOriginal - TIFF/EP puts it here as well as in the EXIF IFD
+    37398,  # TIFF/EPStandardID
+    40091, 40092, 40093, 40094, 40095,  # XPTitle, XPComment, XPAuthor, XPKeywords, XPSubject
+})
+
+# Tags dropped from a copied sub-IFD. The EXIF and GPS IFDs are about the shot
+# from end to end, so everything else in them travels; these three are the
+# exceptions, and both reasons are that the value is an offset into a file that
+# is being left behind - the Interoperability IFD and the thumbnail.
+_SOURCE_SUB_IFD_DROPPED = frozenset({40965, 513, 514})
+
+_MAKER_NOTE = 0x927C
 
 # EXIF IFDs cloned into the Camera section, in the order they are written.
 # Their tag names come from Pillow, which uses the names of the EXIF standard.
@@ -147,6 +196,11 @@ def read_source_exif(path: Optional[str]) -> Optional[bytes]:
     JPEG XL is read from its own Exif box rather than through Pillow, which has
     no JPEG XL reader; that is the same box this module writes, so a `.jxl`
     stack carries its camera tags through a render like any other source.
+
+    A TIFF-based source - a NEF, a DNG, a plain TIFF - is read by `_tiff_exif`
+    instead, for the reason given there: Pillow can open those, but only by
+    re-encoding what it read, and the block that comes back is no longer the
+    block the camera wrote.
     """
     if not path or not os.path.isfile(path):
         return None
@@ -154,6 +208,14 @@ def read_source_exif(path: Optional[str]) -> Optional[bytes]:
     if os.path.splitext(path)[1].lower() == ".jxl":
         blob = _jxl_exif(path)
         return _as_tiff_stream(blob)
+
+    try:
+        with open(path, "rb") as handle:
+            if handle.read(4) in _TIFF_HEADERS:
+                return _tiff_exif(handle)
+    except OSError as exc:
+        print(f"[Metadata] No EXIF read from {os.path.basename(path)}: {exc}", flush=True)
+        return None
 
     try:
         from PIL import Image
@@ -188,6 +250,180 @@ def _as_tiff_stream(blob: Optional[bytes]) -> Optional[bytes]:
         return None
 
     return blob
+
+
+# ----------------------------------------------------------------------
+# EXIF from a TIFF-based source
+# ----------------------------------------------------------------------
+# A TIFF-based source needs a reader of its own, because Pillow does not have
+# one that gives the block back unchanged. For a JPEG it does: the APP1 segment
+# is handed over as the bytes it was read as. For a TIFF - which is what a NEF,
+# a CR2, a DNG and a .tif all are - there is no such segment, so Pillow parses
+# the tags into Python values and `Exif.tobytes()` writes them out again, and
+# what comes back is not what went in:
+#
+# * A rational is reduced. The camera wrote ExposureTime 10/800 and FocalLength
+#   1000/10, because a Nikon quotes 1/80 s in tenths of a millisecond and 100 mm
+#   in tenths of a millimetre; the round trip returns 1/80 and 100/1. The number
+#   is the same and the precision the camera claimed is not.
+# * A field type changes. UserComment, FileSource and SceneType are UNDEFINED in
+#   the source and come back as BYTE, which is a different tag as far as a
+#   strict reader is concerned - UserComment's leading character-set marker only
+#   means anything in an UNDEFINED field.
+# * Anything Pillow has no decoder for is dropped rather than copied.
+#
+# So the block is rebuilt here from the source's own bytes instead: the tags
+# worth keeping are copied with their type, their count and their payload
+# untouched, in the byte order the camera used, and only the offsets - which are
+# the one thing that cannot survive a move - are recomputed. The result is a
+# small stand-alone TIFF stream, which is exactly what the rest of this module
+# and utils.dng already expect.
+def _tiff_entries(stream, endian: str,
+                  offset: int) -> List[Tuple[int, int, int, bytes]]:
+    """(tag, type, count, payload) of the IFD at `offset`, payloads verbatim.
+
+    Reads through the stream rather than from a copy of the file, so extracting
+    a few hundred kilobytes of tags out of a 27 MB raw costs a handful of small
+    reads. A truncated value, or one whose offset points past the end, is
+    skipped: the file was written by something else, and one bad tag must not
+    cost the whole block.
+    """
+    entries: List[Tuple[int, int, int, bytes]] = []
+    if offset <= 0:
+        return entries
+
+    try:
+        stream.seek(offset)
+        raw_count = stream.read(2)
+        if len(raw_count) < 2:
+            return entries
+        (count,) = struct.unpack(endian + "H", raw_count)
+        table = stream.read(12 * count)
+    except (OSError, ValueError, struct.error):
+        return entries
+    if len(table) < 12 * count:
+        return entries
+
+    for index in range(count):
+        tag, field_type, values = struct.unpack_from(endian + "HHI", table, 12 * index)
+        size = _TIFF_TYPE_SIZE.get(field_type)
+        if size is None:
+            continue
+        total = size * values
+        if total <= 4:
+            payload = table[12 * index + 8:12 * index + 8 + total]
+        else:
+            (position,) = struct.unpack_from(endian + "I", table, 12 * index + 8)
+            try:
+                stream.seek(position)
+                payload = stream.read(total)
+            except (OSError, ValueError):
+                continue
+        if len(payload) < total:
+            continue
+        entries.append((tag, field_type, values, payload))
+    return entries
+
+
+def _pack_ifd(entries: List[Tuple[int, int, int, bytes]], base: int,
+              endian: str) -> Tuple[bytes, Dict[int, int]]:
+    """Lay out one IFD, and its out-of-line values, at `base`.
+
+    Returns the assembled bytes and, for every tag, the position at which its
+    value begins - inline in the 4-byte entry or out in the value block. The
+    caller patches the sub-IFD pointers through those positions, since where a
+    sub-IFD lands is only known once the table pointing at it has been sized.
+
+    TIFF requires the entries be sorted by tag, and any value longer than the
+    four bytes an entry holds to live elsewhere and be referenced by offset.
+    """
+    entries = sorted(entries, key=lambda entry: entry[0])
+    values_offset = base + 2 + 12 * len(entries) + 4
+
+    table = bytearray(struct.pack(endian + "H", len(entries)))
+    values = bytearray()
+    positions: Dict[int, int] = {}
+
+    for tag, field_type, count, payload in entries:
+        head = struct.pack(endian + "HHI", tag, field_type, count)
+        if len(payload) <= 4:
+            table += head + payload.ljust(4, b"\x00")
+            positions[tag] = base + len(table) - 4
+        else:
+            positions[tag] = values_offset + len(values)
+            table += head + struct.pack(endian + "I", positions[tag])
+            values += payload
+            if len(values) % 2:
+                values += b"\x00"  # keep the next value word-aligned
+    table += struct.pack(endian + "I", 0)  # no thumbnail IFD follows
+
+    return bytes(table + values), positions
+
+
+def _tiff_exif(stream, keep_maker_note: bool = True) -> Optional[bytes]:
+    """The EXIF of an open TIFF stream, rebuilt as a stand-alone block.
+
+    `stream` is a seekable binary stream positioned anywhere - a source file, or
+    a block already in memory. Returns None when it is not a TIFF at all, or
+    carries nothing worth keeping.
+
+    IFD 0 is filtered to `_SOURCE_IFD0_TAGS`, and the EXIF and GPS IFDs are
+    copied whole apart from the handful of tags that are offsets into the file
+    being left behind. The thumbnail IFD is not copied: the saved result has its
+    own preview, or none.
+
+    `keep_maker_note` exists for the one container that cannot always take the
+    block whole - see `_jpeg_with_metadata`.
+    """
+    try:
+        stream.seek(0)
+        head = stream.read(8)
+    except (OSError, ValueError):
+        return None
+    if len(head) < 8 or head[:4] not in _TIFF_HEADERS:
+        return None
+
+    endian = "<" if head[:2] == b"II" else ">"
+    magic, first_ifd = struct.unpack(endian + "HI", head[2:8])
+    if magic != 42:
+        return None
+
+    dropped = set(_SOURCE_SUB_IFD_DROPPED)
+    if not keep_maker_note:
+        dropped.add(_MAKER_NOTE)
+
+    pointers: Dict[int, int] = {}
+    kept: List[Tuple[int, int, int, bytes]] = []
+    for tag, field_type, count, payload in _tiff_entries(stream, endian, first_ifd):
+        if tag in (_EXIF_IFD_POINTER, _GPS_IFD_POINTER):
+            # Re-created below, once the sub-IFDs have been placed.
+            if field_type == _TIFF_LONG and count == 1:
+                (pointers[tag],) = struct.unpack(endian + "I", payload)
+        elif tag in _SOURCE_IFD0_TAGS:
+            kept.append((tag, field_type, count, payload))
+
+    sub_ifds = []
+    for pointer in (_EXIF_IFD_POINTER, _GPS_IFD_POINTER):
+        if pointer not in pointers:
+            continue
+        entries = [entry for entry in _tiff_entries(stream, endian, pointers[pointer])
+                   if entry[0] not in dropped]
+        if entries:
+            sub_ifds.append((pointer, entries))
+
+    if not kept and not sub_ifds:
+        return None
+
+    for pointer, _entries in sub_ifds:
+        kept.append((pointer, _TIFF_LONG, 1, b"\x00" * 4))  # patched once placed
+
+    table, positions = _pack_ifd(kept, 8, endian)
+    blob = bytearray(struct.pack(endian + "2sHI", head[:2], 42, 8)) + table
+    for pointer, entries in sub_ifds:
+        struct.pack_into(endian + "I", blob, positions[pointer], len(blob))
+        blob += _pack_ifd(entries, len(blob), endian)[0]
+
+    return bytes(blob)
 
 
 def _properties(prefix: str, pairs: Iterable[Tuple[str, str]]) -> str:
@@ -450,8 +686,14 @@ def _jpeg_with_metadata(data: bytes, exif: Optional[bytes],
     if exif:
         exif_segment = _jpeg_app1(_EXIF_PREFIX + exif)
         if exif_segment is None:
-            # Bulky maker notes and an embedded thumbnail can push a source
-            # block past what one segment holds; the XMP group still goes in.
+            # A camera's MakerNote alone routinely exceeds the 64 KB a segment
+            # holds - a Nikon one runs to about 180 KB - and it is the part of
+            # the block a JPEG reader can do least with. Dropping it and trying
+            # again keeps the camera, the lens and the exposure, where before
+            # they went over the side along with it.
+            trimmed = _tiff_exif(io.BytesIO(exif), keep_maker_note=False)
+            exif_segment = _jpeg_app1(_EXIF_PREFIX + trimmed) if trimmed else None
+        if exif_segment is None:
             print("[Metadata] Source EXIF is larger than a JPEG segment; "
                   "saved without it.", flush=True)
         else:

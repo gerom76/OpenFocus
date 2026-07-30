@@ -1,22 +1,25 @@
 """What a saved result carries besides pixels.
 
-Two promises are tested here:
+Three promises are tested here:
 
 1. The EXIF block of the first source frame reaches the saved JPEG and PNG, and
    arrives in a form a normal reader (Pillow) understands (`TestExif`).
 2. The OpenFocus XMP group is present and holds the version, the render date and
    the time the render took (`TestXmp`), and the Camera section next to it
    repeats the source's camera tags as readable text (`TestCameraSection`).
+3. A TIFF-based source - a raw file - hands its block over as the camera wrote
+   it, down to the field types and the unreduced rationals (`TestTiffSources`).
 
-Both are spliced into an already-encoded file, so the third promise - that the
-pixels are left exactly as the encoder wrote them, including 16-bit PNG - is
-what `TestPixelsUntouched` checks.
+The first two are spliced into an already-encoded file, so the fourth promise -
+that the pixels are left exactly as the encoder wrote them, including 16-bit
+PNG - is what `TestPixelsUntouched` checks.
 
 Run with:  python -m pytest tests/test_metadata.py -v
 """
 
 import os
 import re
+import struct
 import sys
 from datetime import datetime
 from xml.etree import ElementTree
@@ -408,3 +411,206 @@ class TestCopyExif:
         # The save still succeeds; only the tags are dropped.
         assert write_image(out, _result8(), source_path=source)
         assert meta.copy_exif(out, source) is False
+
+
+# ----------------------------------------------------------------------
+# TIFF-based sources
+# ----------------------------------------------------------------------
+def _pack_ifd(entries, base, endian):
+    """Lay out one IFD and its out-of-line values at `base`.
+
+    Written out here rather than borrowed from utils.metadata, so that the
+    fixture and the code reading it do not share one layout.
+    """
+    entries = sorted(entries)
+    values_offset = base + 2 + 12 * len(entries) + 4
+    table = struct.pack(endian + "H", len(entries))
+    values = b""
+    positions = {}
+
+    for tag, field_type, count, payload in entries:
+        head = struct.pack(endian + "HHI", tag, field_type, count)
+        if len(payload) <= 4:
+            table += head + payload.ljust(4, b"\x00")
+            positions[tag] = base + len(table) - 4
+        else:
+            positions[tag] = values_offset + len(values)
+            table += head + struct.pack(endian + "I", positions[tag])
+            values += payload
+            if len(values) % 2:
+                values += b"\x00"
+    table += struct.pack(endian + "I", 0)
+    return table + values, positions
+
+
+def _read_ifd(blob, endian, offset):
+    """{tag: (type, count, payload)} of the IFD at `offset` in `blob`."""
+    sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8}
+    (count,) = struct.unpack_from(endian + "H", blob, offset)
+    tags = {}
+    for index in range(offset + 2, offset + 2 + 12 * count, 12):
+        tag, field_type, values = struct.unpack_from(endian + "HHI", blob, index)
+        total = sizes[field_type] * values
+        if total <= 4:
+            payload = blob[index + 8:index + 8 + total]
+        else:
+            (position,) = struct.unpack_from(endian + "I", blob, index + 8)
+            payload = blob[position:position + total]
+        tags[tag] = (field_type, values, payload)
+    return tags
+
+
+def _maker_note(size=24):
+    """A vendor note of `size` bytes, recognisable wherever it ends up."""
+    return (b"\x00\x01vendor note" * size)[:size]
+
+
+def _tiff_source(path, endian="<", maker_note=None):
+    """A TIFF file whose tags are exactly the bytes written here.
+
+    It stands in for a camera raw, so the awkward parts of one are present on
+    purpose: rationals the camera never reduced - a Nikon quotes 1/80 s in
+    tenths of a millisecond and 100 mm in tenths of a millimetre - UNDEFINED
+    fields, a MakerNote, and IFD 0 tags that describe the file's own embedded
+    thumbnail rather than the shot.
+    """
+    note = _maker_note() if maker_note is None else maker_note
+    exif = [
+        (0x829A, 5, 1, struct.pack(endian + "2I", 10, 800)),    # ExposureTime
+        (0x829D, 5, 1, struct.pack(endian + "2I", 280, 100)),   # FNumber
+        (0x920A, 5, 1, struct.pack(endian + "2I", 1000, 10)),   # FocalLength
+        (0x9204, 10, 1, struct.pack(endian + "2i", 0, 6)),      # ExposureBiasValue
+        (0x8832, 4, 1, struct.pack(endian + "I", 140)),         # RecommendedExposureIndex
+        (0x9003, 2, 20, b"2025:05:21 13:17:29\x00"),            # DateTimeOriginal
+        (0x9286, 7, 13, b"ASCII\x00\x00\x00hello"),             # UserComment
+        (0xA300, 7, 1, b"\x03"),                                # FileSource
+        (0xA434, 2, 15, b"NIKKOR Z 100mm\x00"),                 # LensModel
+        (0x927C, 7, len(note), note),                           # MakerNote
+    ]
+    ifd0 = [
+        (256, 4, 1, struct.pack(endian + "I", 160)),            # ImageWidth - the thumbnail's
+        (257, 4, 1, struct.pack(endian + "I", 120)),            # ImageLength
+        (273, 4, 1, struct.pack(endian + "I", 0)),              # StripOffsets
+        (271, 2, 18, b"NIKON CORPORATION\x00"),                 # Make
+        (272, 2, 12, b"NIKON Z 6_2\x00"),                       # Model
+        (282, 5, 1, struct.pack(endian + "2I", 300, 1)),        # XResolution
+        (283, 5, 1, struct.pack(endian + "2I", 300, 1)),        # YResolution
+        (296, 3, 1, struct.pack(endian + "H", 2)),              # ResolutionUnit
+        (306, 2, 20, b"2025:05:21 13:17:29\x00"),               # DateTime
+        (50712, 3, 4, struct.pack(endian + "4H", 0, 1, 2, 3)),  # LinearizationTable
+        (0x8769, 4, 1, b"\x00" * 4),                            # ExifOffset - patched below
+    ]
+
+    table, positions = _pack_ifd(ifd0, 8, endian)
+    order = b"II" if endian == "<" else b"MM"
+    blob = bytearray(struct.pack(endian + "2sHI", order, 42, 8)) + table
+    struct.pack_into(endian + "I", blob, positions[0x8769], len(blob))
+    blob += _pack_ifd(exif, len(blob), endian)[0]
+
+    with open(str(path), "wb") as handle:
+        handle.write(bytes(blob))
+    return str(path)
+
+
+class TestTiffSources:
+    """A TIFF-based source's EXIF, read as the camera wrote it.
+
+    A JPEG hands its block over as the bytes it was stored as, so nothing can
+    happen to it on the way. A NEF, a DNG or a .tif has no such segment, and
+    letting an imaging library parse and re-encode the tags changes them - which
+    is what these pin down does not happen any more.
+    """
+
+    @staticmethod
+    def _exif_ifd(blob):
+        endian = "<" if blob[:2] == b"II" else ">"
+        (offset,) = struct.unpack(endian + "I", blob[4:8])
+        ifd0 = _read_ifd(blob, endian, offset)
+        (pointer,) = struct.unpack(endian + "I", ifd0[0x8769][2])
+        return endian, ifd0, _read_ifd(blob, endian, pointer)
+
+    def test_rationals_keep_the_denominator_the_camera_wrote(self, tmp_path):
+        blob = meta.read_source_exif(_tiff_source(tmp_path / "src.tif"))
+        endian, ifd0, camera = self._exif_ifd(blob)
+
+        # Reduced, these would be 1/80, 14/5, 100/1 and 0/1: the same numbers,
+        # and no longer the precision the camera claimed for them.
+        assert struct.unpack(endian + "2I", camera[0x829A][2]) == (10, 800)
+        assert struct.unpack(endian + "2I", camera[0x829D][2]) == (280, 100)
+        assert struct.unpack(endian + "2I", camera[0x920A][2]) == (1000, 10)
+        assert struct.unpack(endian + "2i", camera[0x9204][2]) == (0, 6)
+        assert struct.unpack(endian + "2I", ifd0[282][2]) == (300, 1)
+
+    def test_field_types_are_the_ones_the_source_used(self, tmp_path):
+        blob = meta.read_source_exif(_tiff_source(tmp_path / "src.tif"))
+        _endian, _ifd0, camera = self._exif_ifd(blob)
+
+        # UNDEFINED, not BYTE: UserComment's leading character-set marker only
+        # means anything in an UNDEFINED field.
+        assert camera[0x9286][0] == 7
+        assert camera[0x9286][2] == b"ASCII\x00\x00\x00hello"
+        assert camera[0xA300][0] == 7
+        # LONG, not the SHORT it would fit in.
+        assert camera[0x8832][0] == 4
+
+    def test_the_vendors_own_note_travels_whole(self, tmp_path):
+        blob = meta.read_source_exif(_tiff_source(tmp_path / "src.tif"))
+        _endian, _ifd0, camera = self._exif_ifd(blob)
+
+        assert camera[0x927C][2] == _maker_note()
+        assert camera[0xA434][2].rstrip(b"\x00") == b"NIKKOR Z 100mm"
+
+    def test_tags_describing_the_source_file_are_left_behind(self, tmp_path):
+        blob = meta.read_source_exif(_tiff_source(tmp_path / "src.tif"))
+        _endian, ifd0, _camera = self._exif_ifd(blob)
+
+        # The geometry and strip offsets belong to the source's own thumbnail,
+        # and a LinearizationTable to its raw data; carried into another file's
+        # block they would describe pixels that are not there.
+        for tag in (256, 257, 273, 50712):
+            assert tag not in ifd0
+        # What the shot is actually recorded in does travel.
+        assert ifd0[271][2].rstrip(b"\x00") == b"NIKON CORPORATION"
+        assert ifd0[296][2][:2] == struct.pack("<H", 2)
+        assert 306 in ifd0 and 283 in ifd0
+
+    def test_a_big_endian_source_keeps_its_byte_order(self, tmp_path):
+        blob = meta.read_source_exif(_tiff_source(tmp_path / "src.tif", endian=">"))
+        endian, _ifd0, camera = self._exif_ifd(blob)
+
+        assert blob[:4] == b"MM\x00*"
+        assert endian == ">"
+        assert struct.unpack(">2I", camera[0x829A][2]) == (10, 800)
+
+    def test_the_camera_section_still_reads_it(self, tmp_path):
+        # The readable XMP group is built from the same block, so a change to
+        # how it is produced has to leave Pillow able to parse it.
+        blob = meta.read_source_exif(_tiff_source(tmp_path / "src.tif"))
+        tags = dict(meta.read_camera_tags(blob))
+
+        assert tags["Make"] == "NIKON CORPORATION"
+        assert tags["LensModel"] == "NIKKOR Z 100mm"
+        assert tags["ExposureTime"] == "10/800"
+
+    def test_a_source_that_is_not_a_tiff_is_unaffected(self, tmp_path):
+        # JPEG keeps the Pillow path, which hands the APP1 segment over as read.
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        blob = meta.read_source_exif(source)
+
+        assert blob is not None and blob[:4] in (b"II*\x00", b"MM\x00*")
+        assert dict(meta.read_camera_tags(blob))["Model"] == "Stack 1"
+
+    def test_an_oversized_block_loses_only_the_maker_note(self, tmp_path):
+        # A Nikon MakerNote runs to about 180 KB, well past the 64 KB a JPEG
+        # segment holds. Before, the camera tags went over the side with it.
+        source = _tiff_source(tmp_path / "src.tif", maker_note=_maker_note(80_000))
+        out = str(tmp_path / "result.jpg")
+
+        assert write_image(out, _result8(), metadata=_metadata(source))
+
+        with Image.open(out) as img:
+            img.load()
+            tags = dict(img.getexif())
+        assert tags.get(0x010F) == "NIKON CORPORATION"
+        with open(out, "rb") as handle:
+            assert _maker_note(80_000) not in handle.read()
