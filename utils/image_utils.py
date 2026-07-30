@@ -9,7 +9,12 @@ from PyQt6.QtGui import QPixmap, QImage
 from utils import bitdepth
 from utils import dng
 from utils import jxl
-from utils.metadata import RenderMetadata, embed as embed_metadata
+from utils.metadata import (
+    RenderMetadata,
+    copy_exif,
+    embed as embed_metadata,
+    read_source_exif,
+)
 
 
 # WebP is written losslessly, like every other container here: OpenCV selects
@@ -126,6 +131,7 @@ def write_image(
     image: np.ndarray,
     announce: bool = False,
     metadata: Optional[RenderMetadata] = None,
+    source_path: Optional[str] = None,
 ) -> bool:
     """Write an image, narrowing it first if the container cannot hold its depth.
 
@@ -146,7 +152,17 @@ def write_image(
     container is JPEG, PNG or JPEG XL, the source EXIF and OpenFocus' XMP group
     are added to the encoded file afterwards - see utils.metadata. Metadata
     failures never fail the save: the image is already on disk by then. WebP,
-    like TIFF, BMP and DNG, is written without them.
+    like TIFF and BMP, is written without them.
+
+    `source_path` is the file this image came from, for the saves that are not
+    renders - a processed input frame, above all. Its EXIF block is carried into
+    the written file, and nothing else is: there is no render to describe, so no
+    XMP packet is added. A `metadata` record supersedes it, since that already
+    names the source it should inherit from.
+
+    DNG takes its EXIF a different way. A TIFF cannot have tags spliced in after
+    the fact without moving every offset behind them, so the block is handed to
+    the writer and laid out with the rest of the file.
     """
     ext = os.path.splitext(file_path)[1]
     if announce and bitdepth.is_high_depth(image) and not bitdepth.supports_16bit(ext):
@@ -162,13 +178,16 @@ def write_image(
         if not jxl.write(file_path, image):
             return False
     elif dng.is_dng(ext):
-        if not dng.write(file_path, image):
+        source = metadata.source_path if metadata is not None else source_path
+        if not dng.write(file_path, image, exif=read_source_exif(source)):
             return False
     elif not cv2.imwrite(file_path, image, get_imwrite_params(ext)):
         return False
 
     if metadata is not None:
         embed_metadata(file_path, metadata)
+    elif source_path:
+        copy_exif(file_path, source_path)
     return True
 
 

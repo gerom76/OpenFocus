@@ -307,3 +307,104 @@ class TestPixelsUntouched:
         assert np.array_equal(cv2.imread(tagged, cv2.IMREAD_UNCHANGED),
                               cv2.imread(untagged, cv2.IMREAD_UNCHANGED))
         assert os.path.getsize(tagged) > os.path.getsize(untagged)
+
+
+class TestCopyExif:
+    """The stack-export path: each frame keeps its own camera block, alone.
+
+    `embed` is for a render, and says so in an XMP packet. A processed input
+    frame has no render to describe - it is the frame that came out of the
+    camera, transformed - so `copy_exif` carries the EXIF across and stops there.
+    """
+
+    @pytest.mark.parametrize("ext", [".jpg", ".png"])
+    def test_the_source_block_reaches_the_saved_frame(self, tmp_path, ext):
+        source = _source_with_exif(str(tmp_path / "src.jpg"), make="Nikon", model="Z 8")
+        out = str(tmp_path / f"processed{ext}")
+
+        assert write_image(out, _result8(), source_path=source)
+
+        with Image.open(out) as saved:
+            saved.load()
+            exif = saved.getexif()
+            assert exif.get(0x010F) == "Nikon"
+            assert exif.get(0x0110) == "Z 8"
+            assert exif.get_ifd(0x8769).get(0x9003) == "2026:07:20 11:22:33"
+
+    def test_it_writes_no_render_record(self, tmp_path):
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        out = str(tmp_path / "processed.jpg")
+
+        assert write_image(out, _result8(), source_path=source)
+
+        # Nothing was rendered, so nothing may claim there was: no XMP packet,
+        # and so no version, duration or Camera section either.
+        assert _read_xmp(out) is None
+
+    def test_each_frame_keeps_its_own_block(self, tmp_path):
+        # A stack export walks frames and sources together; the exposure of one
+        # frame must not be written onto another.
+        first = _source_with_exif(str(tmp_path / "a.jpg"), model="Frame A")
+        second = _source_with_exif(str(tmp_path / "b.jpg"), model="Frame B")
+        outputs = []
+        for index, source in enumerate((first, second)):
+            out = str(tmp_path / f"out{index}.jpg")
+            assert write_image(out, _result8(), source_path=source)
+            outputs.append(out)
+
+        models = []
+        for path in outputs:
+            with Image.open(path) as saved:
+                saved.load()
+                models.append(saved.getexif().get(0x0110))
+        assert models == ["Frame A", "Frame B"]
+
+    def test_a_render_record_takes_precedence(self, tmp_path):
+        rendered = _source_with_exif(str(tmp_path / "rendered.jpg"), model="Rendered")
+        other = _source_with_exif(str(tmp_path / "other.jpg"), model="Other")
+        out = str(tmp_path / "result.jpg")
+
+        # A fused result inherits from the source its own record names, which is
+        # the first frame of the stack rather than whatever else is passed.
+        assert write_image(out, _result8(), metadata=_metadata(rendered), source_path=other)
+
+        with Image.open(out) as saved:
+            saved.load()
+            assert saved.getexif().get(0x0110) == "Rendered"
+        assert meta.OPENFOCUS_NS in _read_xmp(out)
+
+    def test_a_source_without_exif_is_not_an_error(self, tmp_path):
+        source = str(tmp_path / "plain.png")
+        Image.new("RGB", (8, 8), (1, 2, 3)).save(source)
+        out = str(tmp_path / "processed.jpg")
+
+        assert write_image(out, _result8(), source_path=source)
+        assert meta.copy_exif(out, source) is False
+        assert meta.copy_exif(out, str(tmp_path / "absent.jpg")) is False
+
+    def test_pixels_are_untouched(self, tmp_path):
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        image = _result16()
+        untagged = str(tmp_path / "untagged.png")
+        tagged = str(tmp_path / "tagged.png")
+
+        assert write_image(untagged, image)
+        assert write_image(tagged, image, source_path=source)
+
+        read_back = cv2.imread(tagged, cv2.IMREAD_UNCHANGED)
+        assert read_back.dtype == np.uint16
+        assert np.array_equal(read_back, cv2.imread(untagged, cv2.IMREAD_UNCHANGED))
+
+    def test_containers_that_cannot_carry_it_say_so(self, tmp_path):
+        # What the stack export checks before the loop, so it can warn once
+        # rather than write a folder of frames that quietly lost their tags.
+        assert [ext for ext in (".jpg", ".png", ".jxl", ".dng") if meta.carries_exif(ext)] == \
+            [".jpg", ".png", ".jxl", ".dng"]
+        assert not any(meta.carries_exif(ext) for ext in (".tif", ".tiff", ".bmp", ".webp"))
+        assert meta.carries_exif("jpg") and not meta.carries_exif("")
+
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        out = str(tmp_path / "processed.tif")
+        # The save still succeeds; only the tags are dropped.
+        assert write_image(out, _result8(), source_path=source)
+        assert meta.copy_exif(out, source) is False

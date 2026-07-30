@@ -32,7 +32,7 @@ from utils import auto_params
 from utils import dng
 from utils import jxl
 from utils import metadata
-from utils.metadata import RenderMetadata
+from utils.metadata import RenderMetadata, carries_exif
 
 from utils import bitdepth
 from utils.bitdepth import (
@@ -114,6 +114,7 @@ __all__ = [
     # metadata
     'metadata',
     'RenderMetadata',
+    'carries_exif',
     # bitdepth
     'bitdepth',
     'MODE_AUTO',

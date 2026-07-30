@@ -88,6 +88,35 @@ its contents cannot be reproduced from outside Adobe's converter. What is
 embedded here is the spec's own preview mechanism, which is what gives
 non-Adobe readers - and Adobe's own browsers - a fast path to pixels.
 
+Source EXIF
+-----------
+A DNG written here can carry the EXIF block of the file the frame came from, so
+a processed stack keeps the camera, lens and exposure it was shot with. Unlike
+JPEG, PNG and JPEG XL - where utils.metadata splices a block into the encoded
+file afterwards - a TIFF cannot be added to after the fact: every offset behind
+an insertion would have to move. The block is therefore taken apart and re-laid
+out as the file is written, which is also why `write` is the one that takes it.
+
+That is a translation and not a copy. An EXIF block is itself a TIFF stream, so
+its tags are already in the right shape, but its offsets are measured from its
+own start; the tags whose values *are* offsets - the IFD pointers, the embedded
+thumbnail, and MakerNote, whose contents are vendor-specific and full of them -
+are left behind rather than written pointing at nothing. Everything else moves
+across, byte order included, since camera blocks are as often big-endian as not.
+
+Memory
+------
+A save holds the frame, and beyond that only what the codec forces it to. The
+tag table is laid out before any pixel is touched - an uncompressed strip's size
+follows from its geometry - so the strips are converted and written one at a
+time straight to the file rather than accumulated into a second copy of the
+image and then a third of the whole file. The compressed modes still hold their
+one strip whole, because that strip is the entire image.
+
+Reading is the mirror: the strips of an uncompressed file are read directly into
+the array that will be returned, and the channel swap that follows is done in
+place.
+
 Dependencies
 ------------
 Every mode *writes* with numpy and OpenCV alone. Reading back a lossless file is
@@ -104,9 +133,11 @@ Reading a camera DNG needs `rawpy`, which is a core requirement, so
 """
 
 import datetime
+import io
 import os
 import struct
-from typing import Dict, List, Optional, Sequence, Tuple
+import sys
+from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -204,6 +235,15 @@ _SOFTWARE = 305
 _DATE_TIME = 306
 _YCBCR_SUB_SAMPLING = 530
 _SAMPLE_FORMAT = 339
+_IMAGE_DESCRIPTION = 270
+_ARTIST = 315
+_COPYRIGHT = 33432
+_EXIF_IFD = 34665
+_GPS_IFD = 34853
+_INTEROP_IFD = 40965
+_MAKER_NOTE = 37500
+_JPEG_INTERCHANGE_FORMAT = 513
+_JPEG_INTERCHANGE_LENGTH = 514
 _PREVIEW_APPLICATION_NAME = 50966
 _PREVIEW_APPLICATION_VERSION = 50967
 _PREVIEW_COLOR_SPACE = 50970
@@ -412,8 +452,24 @@ def _srgb_linearization_table(bits: int) -> np.ndarray:
     return np.rint(linear * _LINEAR_MAX).astype(np.uint16)
 
 
+class _Raw(NamedTuple):
+    """A tag's field data already serialised, with the TIFF `count` it stands for.
+
+    Tags copied out of a source EXIF block arrive as bytes of a type this module
+    never constructs itself - FLOAT, UNDEFINED, a vendor's own - so they are
+    carried through the layout as they are rather than decoded into values and
+    re-encoded. The count cannot be derived from the length alone, since it is
+    values and not bytes, so it travels alongside.
+    """
+
+    payload: bytes
+    count: int
+
+
 def _pack(field_type: int, values) -> bytes:
     """Serialise a tag's values as little-endian TIFF field data."""
+    if isinstance(values, _Raw):
+        return values.payload
     if field_type == _BYTE:
         return bytes(values)
     if field_type == _ASCII:
@@ -435,6 +491,8 @@ def _count(field_type: int, values) -> int:
     RATIONALs are stored as numerator/denominator pairs, so the pair is one
     value; ASCII counts the terminating NUL.
     """
+    if isinstance(values, _Raw):
+        return values.count
     if field_type == _ASCII:
         return len(values.encode("ascii", "replace")) + 1
     if field_type == _BYTE:
@@ -504,6 +562,151 @@ def _build_ifd(entries: list, base_offset: int) -> Tuple[bytes, Dict[int, int]]:
 
 
 # ----------------------------------------------------------------------
+# Source EXIF
+# ----------------------------------------------------------------------
+# An EXIF block is itself a TIFF stream, which is the whole reason it can be
+# carried into a DNG: the tags are already in the right shape, and what has to
+# change is only where they sit. A tag's *values* travel unaltered, but every
+# offset in the source is measured from the start of that block, so a tag whose
+# payload is an offset - or contains one - cannot simply be copied.
+#
+# Those are the ones left behind. The IFD pointers are re-created by the writer,
+# since it is the one that knows where the sub-IFDs landed. The embedded
+# thumbnail is a JPEG the DNG has no use for - it carries its own preview. And
+# MakerNote is the awkward case: most vendors' notes hold offsets into the
+# original file, and a copy at a new position decodes as noise, so it is dropped
+# rather than written broken.
+_UNRELOCATABLE_TAGS = frozenset({
+    _EXIF_IFD, _GPS_IFD, _INTEROP_IFD, _MAKER_NOTE,
+    _JPEG_INTERCHANGE_FORMAT, _JPEG_INTERCHANGE_LENGTH,
+})
+
+# Tags of the source's IFD 0 that describe the shot rather than the source file,
+# and so belong in the DNG's IFD 0 too. Make and Model name the camera the frames
+# came out of, which is what those tags mean in DNG as well; the writer's own
+# identity is in Software and UniqueCameraModel, and that is what `read` looks
+# for when it decides whether a file is its own.
+_CAMERA_IFD0_TAGS = frozenset({_IMAGE_DESCRIPTION, _MAKE, _MODEL, _ARTIST, _COPYRIGHT})
+
+# numpy element type of each TIFF field type, for the byte-order conversion. The
+# two byte-stream types are absent: ASCII and UNDEFINED have no element wider
+# than a byte, so they read the same either way.
+_TIFF_ELEMENT = {
+    _BYTE: "u1", _SHORT: "u2", _LONG: "u4", _RATIONAL: "u4",
+    6: "i1", 8: "i2", 9: "i4", _SRATIONAL: "i4", 11: "f4", 12: "f8",
+}
+
+
+def _tiff_header(blob: bytes) -> Optional[Tuple[str, int]]:
+    """The byte order and first-IFD offset of a TIFF stream, or None.
+
+    Camera EXIF is big-endian about as often as little-endian - it follows the
+    camera, not the host - so both are accepted here even though everything this
+    module writes is little-endian.
+    """
+    if len(blob) < 8:
+        return None
+    if blob[:2] == b"II":
+        endian = "<"
+    elif blob[:2] == b"MM":
+        endian = ">"
+    else:
+        return None
+    magic, offset = struct.unpack_from(endian + "HI", blob, 2)
+    return (endian, offset) if magic == 42 else None
+
+
+def _blob_entries(blob: bytes, endian: str, offset: int) -> List[Tuple[int, int, int, bytes]]:
+    """(tag, type, count, payload) of the IFD at `offset`, payloads unconverted.
+
+    Anything that does not fit inside the block - a truncated value, an offset
+    past the end - is skipped rather than raising, because the block came from a
+    file this module did not write and a bad tag must not cost the save.
+    """
+    entries: List[Tuple[int, int, int, bytes]] = []
+    if offset <= 0 or offset + 2 > len(blob):
+        return entries
+    (count,) = struct.unpack_from(endian + "H", blob, offset)
+    table = offset + 2
+    if table + 12 * count > len(blob):
+        return entries
+
+    for index in range(table, table + 12 * count, 12):
+        tag, field_type, values = struct.unpack_from(endian + "HHI", blob, index)
+        size = _READ_TYPE_SIZE.get(field_type)
+        if size is None:
+            continue
+        total = size * values
+        if total <= 4:
+            payload = blob[index + 8:index + 8 + total]
+        else:
+            (position,) = struct.unpack_from(endian + "I", blob, index + 8)
+            payload = blob[position:position + total]
+        if len(payload) < total:
+            continue
+        entries.append((tag, field_type, values, payload))
+    return entries
+
+
+def _little_endian(payload: bytes, field_type: int, endian: str) -> bytes:
+    """A field's payload in the byte order this module writes."""
+    element = _TIFF_ELEMENT.get(field_type)
+    if endian == "<" or element is None:
+        return payload
+    return np.frombuffer(payload, dtype=np.dtype(">" + element)).astype(
+        np.dtype("<" + element)).tobytes()
+
+
+def _copied_entry(tag: int, field_type: int, count: int,
+                  payload: bytes, endian: str) -> Tuple[int, int, _Raw]:
+    """One source tag as an entry the layout can place."""
+    return (tag, field_type, _Raw(_little_endian(payload, field_type, endian), count))
+
+
+def exif_camera_entries(exif: Optional[bytes]) -> List[Tuple[int, int, _Raw]]:
+    """The source's IFD 0 tags that describe the camera, ready for the DNG's IFD 0."""
+    header = _tiff_header(exif) if exif else None
+    if header is None:
+        return []
+    endian, offset = header
+    return [_copied_entry(tag, field_type, count, payload, endian)
+            for tag, field_type, count, payload in _blob_entries(exif, endian, offset)
+            if tag in _CAMERA_IFD0_TAGS]
+
+
+def exif_sub_ifds(exif: Optional[bytes]) -> List[Tuple[int, List[Tuple[int, int, _Raw]]]]:
+    """(pointer tag, entries) of each sub-IFD of the source block worth keeping.
+
+    The EXIF IFD is where the shot itself is recorded - exposure, aperture, ISO,
+    lens, the original date - and the GPS IFD where it was taken. Both are
+    re-emitted whole apart from the tags that cannot survive being moved; the
+    Interoperability IFD is not, since it says only which flavour of EXIF the
+    source file claimed to be, which stops being true once it is copied.
+    """
+    header = _tiff_header(exif) if exif else None
+    if header is None:
+        return []
+    endian, offset = header
+
+    pointers: Dict[int, int] = {}
+    for tag, field_type, count, payload in _blob_entries(exif, endian, offset):
+        if tag in (_EXIF_IFD, _GPS_IFD) and count == 1 and field_type == _LONG:
+            (pointers[tag],) = struct.unpack(endian + "I", payload)
+
+    sub_ifds = []
+    for pointer in (_EXIF_IFD, _GPS_IFD):
+        if pointer not in pointers:
+            continue
+        entries = [_copied_entry(tag, field_type, count, payload, endian)
+                   for tag, field_type, count, payload
+                   in _blob_entries(exif, endian, pointers[pointer])
+                   if tag not in _UNRELOCATABLE_TAGS]
+        if entries:
+            sub_ifds.append((pointer, entries))
+    return sub_ifds
+
+
+# ----------------------------------------------------------------------
 # Strip codecs
 # ----------------------------------------------------------------------
 def _encode_strip_lossless(strip: np.ndarray, bits: int) -> bytes:
@@ -569,14 +772,16 @@ def _decode_strip_lossy(payload: bytes, samples: int) -> Optional[np.ndarray]:
 # ----------------------------------------------------------------------
 # Fast-load preview
 # ----------------------------------------------------------------------
-def _preview_jpeg(data: np.ndarray, bits: int) -> Optional[Tuple[bytes, int, int]]:
+def _preview_jpeg(source: np.ndarray, bits: int) -> Optional[Tuple[bytes, int, int]]:
     """A half-resolution baseline JPEG of the image, with its dimensions.
 
-    `data` is the full-resolution frame in file order (RGB, or a single plane).
-    Returns None when the image is too small for a preview to save a reader any
-    work, or when OpenCV declines to encode it.
+    `source` is the full-resolution frame as the pipeline holds it - BGR, or a
+    single plane - rather than in DNG's file order, so that the preview costs a
+    downscale of the frame and not a full-frame channel swap first. Returns None
+    when the image is too small for a preview to save a reader any work, or when
+    OpenCV declines to encode it.
     """
-    height, width = data.shape[:2]
+    height, width = source.shape[:2]
     target_w = max(1, width // _PREVIEW_DIVISOR)
     target_h = max(1, height // _PREVIEW_DIVISOR)
     if max(target_w, target_h) < _PREVIEW_MIN_EDGE:
@@ -585,21 +790,20 @@ def _preview_jpeg(data: np.ndarray, bits: int) -> Optional[Tuple[bytes, int, int
     # INTER_AREA is the right filter for a pure downscale: it averages every
     # source pixel that falls in a target one, so the preview does not alias the
     # fine detail a focus-stacked frame is full of.
-    small = cv2.resize(data, (target_w, target_h), interpolation=cv2.INTER_AREA)
+    small = cv2.resize(source, (target_w, target_h), interpolation=cv2.INTER_AREA)
     if bits == 16:
         # A JPEG preview is 8-bit whatever the raw is. Scaling by 257 rather
-        # than shifting keeps full scale at full scale.
+        # than shifting keeps full scale at full scale. Done on the downscaled
+        # image, so the float temporary is a quarter of the frame.
         small = np.rint(small.astype(np.float32) / 257.0).clip(0, 255).astype(np.uint8)
 
     # The preview is a rendering, not raw data, so it is always three-channel:
     # a viewer showing it never has to know the main image was monochrome.
     if small.ndim == 2:
-        bgr = cv2.cvtColor(small, cv2.COLOR_GRAY2BGR)
-    else:
-        bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
+        small = cv2.cvtColor(small, cv2.COLOR_GRAY2BGR)
 
     ok, buffer = cv2.imencode(
-        ".jpg", bgr,
+        ".jpg", small,
         [cv2.IMWRITE_JPEG_QUALITY, _PREVIEW_QUALITY,
          cv2.IMWRITE_JPEG_SAMPLING_FACTOR, cv2.IMWRITE_JPEG_SAMPLING_FACTOR_420],
     )
@@ -677,12 +881,17 @@ def _resolve_options(compression: Optional[str], lossy_quality: Optional[int],
     return mode, quality, _fast_load if fast_load is None else bool(fast_load)
 
 
-def _as_file_order(image: np.ndarray) -> Tuple[np.ndarray, int]:
-    """A BGR or greyscale image as contiguous file-order samples, and their count.
+def _source_view(image: np.ndarray) -> Tuple[np.ndarray, int]:
+    """A BGR or single-plane view of the image, and how many samples it has.
 
-    DNG, like TIFF, stores a pixel's channels in order, so the pipeline's BGR
-    becomes RGB here. An alpha channel is dropped rather than written as an
-    extra sample no converter would look at - DNG raw data has no place for one.
+    The channel order is left as the pipeline's, and the strips are what get
+    turned into DNG's file order - see `_file_order`. Converting the whole frame
+    here instead would allocate a second copy of the largest array on the save
+    path, for a reordering that a strip needs one strip's worth of at a time.
+
+    An alpha channel is dropped rather than written as an extra sample no
+    converter would look at - DNG raw data has no place for one - and that is the
+    one case where a full copy is unavoidable.
     """
     if image.ndim == 3 and image.shape[2] == 4:
         image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
@@ -690,41 +899,52 @@ def _as_file_order(image: np.ndarray) -> Tuple[np.ndarray, int]:
         image = image[:, :, 0]
 
     if image.ndim == 2:
-        return np.ascontiguousarray(image), 1
+        return image, 1
     if image.ndim == 3 and image.shape[2] == 3:
-        return np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)), 3
+        return image, 3
     raise ValueError(f"Unsupported image shape for DNG: {image.shape}")
 
 
-def encode(image: np.ndarray,
-           software: str = CAMERA_MODEL,
-           compression: Optional[str] = None,
-           lossy_quality: Optional[int] = None,
-           fast_load: Optional[bool] = None) -> bytes:
-    """Encode a BGR (or greyscale) image as a linear DNG.
+def _file_order(rows: np.ndarray, samples: int) -> np.ndarray:
+    """One strip's rows as contiguous file-order samples.
 
-    The samples are written at whatever depth the array carries, 8 or 16 bits,
-    and it is the tags that describe what they mean; see the module docstring for
-    which ones and why. `compression`, `lossy_quality` and `fast_load` default
-    to the module settings, so a caller that has no opinion about the codec does
-    not have to form one.
+    DNG, like TIFF, stores a pixel's channels in order, so the pipeline's BGR
+    becomes RGB. A strip cut from a contiguous frame is already contiguous, so
+    the single-sample case usually costs nothing at all.
+    """
+    if samples == 3:
+        return cv2.cvtColor(rows, cv2.COLOR_BGR2RGB)
+    return np.ascontiguousarray(rows)
 
-    The lossy mode is 8-bit only in DNG, so a 16-bit image handed to it is
-    narrowed here, with a line on stdout - the same way image_utils announces a
-    container that cannot hold the depth it was given.
+
+def _strip_spans(height: int, rows_per_strip: int) -> List[Tuple[int, int]]:
+    """The (first, stop) row range of every strip, in file order."""
+    return [(first, min(first + rows_per_strip, height))
+            for first in range(0, height, rows_per_strip)]
+
+
+def _prepare(image: np.ndarray,
+             compression: Optional[str],
+             lossy_quality: Optional[int],
+             fast_load: Optional[bool]) -> Tuple[np.ndarray, int, int, str, int, bool]:
+    """Validate the image and settle the codec: what is written, and how.
+
+    Returns the frame as it will be stored - which for the lossy mode is a
+    narrowed copy - along with its sample count and depth, and the resolved
+    encode options.
     """
     if image is None:
         raise ValueError("No image to encode.")
     mode, quality, want_preview = _resolve_options(compression, lossy_quality, fast_load)
 
-    data, samples = _as_file_order(image)
+    source, samples = _source_view(image)
 
-    if data.dtype == np.uint8:
+    if source.dtype == np.uint8:
         bits = 8
-    elif data.dtype == np.uint16:
+    elif source.dtype == np.uint16:
         bits = 16
     else:
-        raise ValueError(f"Unsupported image dtype for DNG: {data.dtype}")
+        raise ValueError(f"Unsupported image dtype for DNG: {source.dtype}")
 
     if mode == COMPRESSION_LOSSY and samples == 1:
         # LibRaw's lossy-DNG path reads three components per pixel unconditionally,
@@ -739,27 +959,30 @@ def encode(image: np.ndarray,
     if mode == COMPRESSION_LOSSY and bits == 16:
         print("[DNG] Lossy compression is 8-bit only in DNG; saving 8-bit. "
               "Use the lossless or uncompressed mode to keep 16 bits.", flush=True)
-        data = np.rint(data.astype(np.float32) / 257.0).clip(0, 255).astype(np.uint8)
+        source = np.rint(source.astype(np.float32) / 257.0).clip(0, 255).astype(np.uint8)
         bits = 8
 
-    height, width = data.shape[:2]
+    height, width = source.shape[:2]
     if height <= 0 or width <= 0:
         raise ValueError(f"Invalid image dimensions: {width}x{height}")
 
-    rows_per_strip = _rows_per_strip(mode, width, height, samples, bits)
+    return source, samples, bits, mode, quality, want_preview
 
-    strips: List[bytes] = []
-    for first in range(0, height, rows_per_strip):
-        strip = data[first:first + rows_per_strip]
-        if mode == COMPRESSION_LOSSLESS:
-            strips.append(_encode_strip_lossless(strip, bits))
-        elif mode == COMPRESSION_LOSSY:
-            strips.append(_encode_strip_lossy(strip, quality))
-        else:
-            strips.append(np.ascontiguousarray(strip).tobytes())
 
-    preview = _preview_jpeg(data, bits) if want_preview else None
+def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
+               software: str, counts: Sequence[int], rows_per_strip: int,
+               preview: Optional[Tuple[bytes, int, int]],
+               exif: Optional[bytes]) -> Tuple[bytearray, List[int]]:
+    """Everything ahead of the pixel data, and where each block after it starts.
 
+    The header, IFD 0 and the SubIFDs are laid out together because their sizes
+    depend only on the tags, not on the pixels: once they are known, so is the
+    offset of every strip, which is what the offsets inside them have to record.
+    The returned list is the file position of each strip followed by that of the
+    preview, so the caller writes the blocks in that order and nothing has to be
+    seeked back to.
+    """
+    height, width = source.shape[:2]
     now = datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")
     backward = (_DNG_BACKWARD_VERSION_LOSSY_BYTES if mode == COMPRESSION_LOSSY
                 else _DNG_BACKWARD_VERSION_BYTES)
@@ -772,11 +995,11 @@ def encode(image: np.ndarray,
         (_PHOTOMETRIC, _SHORT, [_LINEAR_RAW]),
         (_MAKE, _ASCII, CAMERA_MODEL),
         (_MODEL, _ASCII, CAMERA_MODEL),
-        (_STRIP_OFFSETS, _LONG, [0] * len(strips)),  # patched after layout
+        (_STRIP_OFFSETS, _LONG, [0] * len(counts)),  # patched once the layout is fixed
         (_ORIENTATION, _SHORT, [1]),
         (_SAMPLES_PER_PIXEL, _SHORT, [samples]),
         (_ROWS_PER_STRIP, _LONG, [rows_per_strip]),
-        (_STRIP_BYTE_COUNTS, _LONG, [len(blob) for blob in strips]),
+        (_STRIP_BYTE_COUNTS, _LONG, list(counts)),
         (_PLANAR_CONFIG, _SHORT, [1]),  # interleaved
         (_SOFTWARE, _ASCII, software),
         (_DATE_TIME, _ASCII, now),
@@ -794,35 +1017,132 @@ def encode(image: np.ndarray,
         entries.append((_COLOR_MATRIX_1, _SRATIONAL, _rational_matrix(_XYZ_D65_TO_SRGB)))
         entries.append((_CALIBRATION_ILLUMINANT_1, _SHORT, [_ILLUMINANT_D65]))
         entries.append((_AS_SHOT_NEUTRAL, _RATIONAL, [1, 1, 1, 1, 1, 1]))
+    sub_ifds = exif_sub_ifds(exif)
+    for pointer, _ in sub_ifds:
+        entries.append((pointer, _LONG, [0]))  # patched once the layout is fixed
+    # After the writer's own tags, so that a camera named by the source block
+    # replaces the placeholder Make and Model rather than colliding with them.
+    entries.extend(exif_camera_entries(exif))
     if preview is not None:
-        entries.append((_SUB_IFDS, _LONG, [0]))  # patched after layout
+        entries.append((_SUB_IFDS, _LONG, [0]))  # patched once the layout is fixed
 
-    # IFD 0 sits straight after the 8-byte TIFF header; the preview's IFD
-    # follows it, and the pixel data follows both, so that every offset either
-    # IFD records points forward into a block whose size is already known.
+    # A tag may only appear once in an IFD, and the later entry is the one meant.
+    entries = list({entry[0]: entry for entry in entries}.values())
+
+    # IFD 0 sits straight after the 8-byte TIFF header; the EXIF, GPS and preview
+    # IFDs follow it, and the pixel data follows them all, so that every offset
+    # any of them records points forward into a block whose size is already known.
     main_ifd, main_positions = _build_ifd(entries, 8)
-    blob = bytearray(struct.pack("<2sHI", b"II", 42, 8))
-    blob += main_ifd
+    header = bytearray(struct.pack("<2sHI", b"II", 42, 8))
+    header += main_ifd
+
+    for pointer, sub_entries in sub_ifds:
+        struct.pack_into("<I", header, main_positions[pointer], len(header))
+        header += _build_ifd(sub_entries, len(header))[0]
 
     preview_positions: Dict[int, int] = {}
     if preview is not None:
         payload, preview_width, preview_height = preview
         preview_ifd, preview_positions = _build_ifd(
             _preview_entries(preview_width, preview_height, len(payload), software, now),
-            len(blob),
+            len(header),
         )
-        struct.pack_into("<I", blob, main_positions[_SUB_IFDS], len(blob))
-        blob += preview_ifd
+        struct.pack_into("<I", header, main_positions[_SUB_IFDS], len(header))
+        header += preview_ifd
 
-    for index, strip in enumerate(strips):
-        struct.pack_into("<I", blob, main_positions[_STRIP_OFFSETS] + 4 * index, len(blob))
-        blob += strip
+    starts: List[int] = []
+    position = len(header)
+    for index, count in enumerate(counts):
+        struct.pack_into("<I", header, main_positions[_STRIP_OFFSETS] + 4 * index, position)
+        starts.append(position)
+        position += count
 
     if preview is not None:
-        struct.pack_into("<I", blob, preview_positions[_STRIP_OFFSETS], len(blob))
-        blob += preview[0]
+        struct.pack_into("<I", header, preview_positions[_STRIP_OFFSETS], position)
+        starts.append(position)
 
-    return bytes(blob)
+    return header, starts
+
+
+def _emit(handle, image: np.ndarray, software: str,
+          compression: Optional[str], lossy_quality: Optional[int],
+          fast_load: Optional[bool], exif: Optional[bytes]) -> None:
+    """Write a complete linear DNG to an open binary file object.
+
+    Nothing larger than one strip is held on top of the frame itself: the tag
+    table is sized before any pixels are touched, so the strips can be converted
+    and handed to the file one at a time rather than accumulated into a copy of
+    the whole image. An uncompressed 24 MP 16-bit save therefore peaks at a few
+    megabytes over the frame, where assembling the file in memory first cost two
+    further copies of it.
+
+    The compressed modes still hold their one strip whole, because that strip is
+    the entire image - see `_rows_per_strip` for why they cannot be split.
+    """
+    source, samples, bits, mode, quality, want_preview = _prepare(
+        image, compression, lossy_quality, fast_load)
+
+    height, width = source.shape[:2]
+    rows_per_strip = _rows_per_strip(mode, width, height, samples, bits)
+    spans = _strip_spans(height, rows_per_strip)
+
+    if mode == COMPRESSION_NONE:
+        # The size of an uncompressed strip follows from its geometry, so the
+        # layout is known without the pixels ever being materialised.
+        payloads: Optional[List[bytes]] = None
+        counts = [(stop - first) * width * samples * (bits // 8) for first, stop in spans]
+    else:
+        payloads = []
+        for first, stop in spans:
+            strip = _file_order(source[first:stop], samples)
+            if mode == COMPRESSION_LOSSLESS:
+                payloads.append(_encode_strip_lossless(strip, bits))
+            else:
+                payloads.append(_encode_strip_lossy(strip, quality))
+        counts = [len(blob) for blob in payloads]
+
+    preview = _preview_jpeg(source, bits) if want_preview else None
+
+    header, _ = _tag_table(source, samples, bits, mode, software, counts,
+                           rows_per_strip, preview, exif)
+    handle.write(header)
+
+    if payloads is None:
+        for first, stop in spans:
+            handle.write(_file_order(source[first:stop], samples).tobytes())
+    else:
+        for blob in payloads:
+            handle.write(blob)
+
+    if preview is not None:
+        handle.write(preview[0])
+
+
+def encode(image: np.ndarray,
+           software: str = CAMERA_MODEL,
+           compression: Optional[str] = None,
+           lossy_quality: Optional[int] = None,
+           fast_load: Optional[bool] = None,
+           exif: Optional[bytes] = None) -> bytes:
+    """Encode a BGR (or greyscale) image as a linear DNG.
+
+    The samples are written at whatever depth the array carries, 8 or 16 bits,
+    and it is the tags that describe what they mean; see the module docstring for
+    which ones and why. `compression`, `lossy_quality` and `fast_load` default
+    to the module settings, so a caller that has no opinion about the codec does
+    not have to form one. `exif` is a source file's EXIF block, as a bare TIFF
+    stream, and is relocated into an EXIF IFD of the written file.
+
+    The lossy mode is 8-bit only in DNG, so a 16-bit image handed to it is
+    narrowed here, with a line on stdout - the same way image_utils announces a
+    container that cannot hold the depth it was given.
+
+    `write` is the path a save takes; this exists for callers that want the
+    bytes, and pays for a copy of the whole file to hand them over.
+    """
+    buffer = io.BytesIO()
+    _emit(buffer, image, software, compression, lossy_quality, fast_load, exif)
+    return buffer.getvalue()
 
 
 def write(file_path: str,
@@ -830,25 +1150,27 @@ def write(file_path: str,
           software: str = CAMERA_MODEL,
           compression: Optional[str] = None,
           lossy_quality: Optional[int] = None,
-          fast_load: Optional[bool] = None) -> bool:
+          fast_load: Optional[bool] = None,
+          exif: Optional[bytes] = None) -> bool:
     """Encode and write a DNG file. Returns False instead of raising.
 
     Mirrors what cv2.imwrite gives the callers in utils.image_utils: a boolean,
     with the reason printed, so a failed DNG save is reported through the same
     "could not write" path as any other format.
+
+    The file is streamed rather than built in memory first, so a partly written
+    one can be left behind by a failure mid-way; it is removed, because a
+    truncated DNG that parses as far as its tag table is worse than no file.
     """
     try:
-        payload = encode(image, software=software, compression=compression,
-                         lossy_quality=lossy_quality, fast_load=fast_load)
-    except Exception as exc:  # pylint: disable=broad-except
-        print(f"[DNG] Could not encode {os.path.basename(file_path)}: {exc}", flush=True)
-        return False
-
-    try:
         with open(file_path, "wb") as handle:
-            handle.write(payload)
-    except OSError as exc:
+            _emit(handle, image, software, compression, lossy_quality, fast_load, exif)
+    except Exception as exc:  # pylint: disable=broad-except
         print(f"[DNG] Could not write {os.path.basename(file_path)}: {exc}", flush=True)
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
         return False
     return True
 
@@ -963,6 +1285,32 @@ def probe(path: str) -> Optional[Tuple[int, int, int]]:
         return None
 
 
+def _read_strips_into(path: str, offsets: Sequence[int],
+                      counts: Sequence[int], out: np.ndarray) -> bool:
+    """Fill `out` from the file's strips; False if any of them is short.
+
+    The strips of an uncompressed DNG *are* the pixels, so they are read straight
+    into the array that will be returned rather than into bytes that are then
+    joined and copied. That is the difference between one allocation the size of
+    the frame and three of them, which at 24 MP and 16 bits is 144 MB against
+    over 400.
+    """
+    view = out.reshape(-1).view(np.uint8)
+    position = 0
+    try:
+        with open(path, "rb") as handle:
+            for offset, count in zip(offsets, counts):
+                if position + count > view.size:
+                    return False
+                handle.seek(offset)
+                if handle.readinto(view[position:position + count]) != count:
+                    return False
+                position += count
+    except OSError:
+        return False
+    return position == view.size
+
+
 def _strip_payloads(path: str, offsets: Sequence[int],
                     counts: Sequence[int]) -> Optional[List[bytes]]:
     """Read each strip's bytes, or None if any of them is short or unreadable."""
@@ -1016,18 +1364,19 @@ def read_linear(path: str) -> Optional[np.ndarray]:
         return None
     expected = width * height * samples
 
-    chunks = _strip_payloads(path, offsets, counts)
-    if chunks is None:
-        return None
-
     if mode == COMPRESSION_NONE:
         if sum(counts) != expected * (bits[0] // 8):
             return None
-        # Samples are little-endian on disk regardless of the host, so the dtype
-        # is byte-ordered explicitly and then normalised to native.
-        flat = np.frombuffer(b"".join(chunks), dtype=np.dtype(dtype).newbyteorder("<"))
-        pixels = flat.reshape(height, width, samples).astype(dtype, copy=False)
+        pixels = np.empty((height, width, samples), dtype=dtype)
+        if not _read_strips_into(path, offsets, counts, pixels):
+            return None
+        if sys.byteorder != "little" and pixels.itemsize > 1:
+            # Samples are little-endian on disk regardless of the host.
+            pixels.byteswap(inplace=True)
     else:
+        chunks = _strip_payloads(path, offsets, counts)
+        if chunks is None:
+            return None
         decoded = []
         for chunk in chunks:
             if mode == COMPRESSION_LOSSLESS:
@@ -1037,22 +1386,51 @@ def read_linear(path: str) -> Optional[np.ndarray]:
             if part is None:
                 return None
             decoded.append(part)
-        flat = np.concatenate(decoded) if decoded else np.empty(0, dtype=dtype)
+        if not decoded:
+            return None
+        # A compressed image is a single strip - see `_rows_per_strip` - so the
+        # usual case has nothing to join and no copy to pay for.
+        flat = decoded[0] if len(decoded) == 1 else np.concatenate(decoded)
         if flat.size != expected:
             return None
         pixels = flat.astype(dtype, copy=False).reshape(height, width, samples)
 
     if samples == 1:
         return np.ascontiguousarray(pixels[:, :, 0])
-    return cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+    # RGB->BGR is a channel swap, done in place so reading a frame does not
+    # allocate a second one alongside it.
+    return cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR, dst=pixels)
+
+
+def _develop(raw, output_bps: int) -> np.ndarray:
+    """Develop an opened camera raw as BGR, on the GPU where that is possible.
+
+    LibRaw unpacks the mosaic either way - there is no GPU LibRaw - but the
+    develop that follows it is the expensive half, and core.gpu_decode
+    reimplements it in torch. Deferring to that module is what gives the paths
+    reaching a camera DNG through `read` - the fusion methods' folder input above
+    all - the same GPU develop the stack loader has, rather than the CPU one they
+    used to get.
+
+    The import is deferred because `utils` is loaded long before `core`, and a
+    save-only run must not pull in torch to write a file. A build without it
+    falls back to LibRaw, which is what a machine without a GPU does anyway.
+    """
+    try:
+        from core import gpu_decode
+    except ImportError:
+        rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR, dst=rgb)
+    return gpu_decode.develop_raw(raw, output_bps)
 
 
 def read(path: str, output_bps: int = 16) -> Optional[np.ndarray]:
     """Read a DNG as BGR, or None if it cannot be read.
 
     An OpenFocus linear DNG is returned verbatim; anything else is a camera raw
-    and is developed by LibRaw at `output_bps` bits, with the camera's own white
-    balance, which is what `.nef` already gets.
+    and is developed at `output_bps` bits with the camera's own white balance -
+    on the GPU when one is available, and by LibRaw otherwise - which is what
+    `.nef` already gets.
 
     Returns None - rather than raising - for a missing, truncated or unreadable
     file, because the callers report a failed frame themselves and carry on with
@@ -1068,9 +1446,6 @@ def read(path: str, output_bps: int = 16) -> Optional[np.ndarray]:
         # same way the loader's RAW path does it.
         with open(path, "rb") as handle:
             with rawpy.imread(handle) as raw:
-                rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
-        # RGB->BGR is a channel swap, done in place so a full-frame temporary is
-        # not added to the heaviest allocation on the load path.
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR, dst=rgb)
+                return _develop(raw, output_bps)
     except Exception:  # pylint: disable=broad-except
         return None

@@ -196,18 +196,9 @@ class ImageStackLoader:
             # Pass a file object to support paths with non-ASCII characters
             with open(full_path, 'rb') as f:
                 with rawpy.imread(f) as raw:
-                    bgr = None
-                    if gpu_decode.is_available():
-                        try:
-                            bgr = gpu_decode.postprocess_raw(raw, output_bps)
-                        except Exception:
-                            bgr = None  # any GPU hiccup falls back to LibRaw
-                    if bgr is None:
-                        rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
-                        # RGB->BGR is a channel swap, so it is done in place:
-                        # a separate destination would double the peak of the
-                        # heaviest allocation in the whole load path.
-                        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR, dst=rgb)
+                    # The GPU develop and its LibRaw fallback live in one place,
+                    # so a RAW read through utils.dng gets the same treatment.
+                    bgr = gpu_decode.develop_raw(raw, output_bps)
             return bitdepth.apply_load_mode(bgr)
 
         return read_image_any_depth(full_path)

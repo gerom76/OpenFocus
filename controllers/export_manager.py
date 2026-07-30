@@ -15,6 +15,7 @@ from dialogs import DurationDialog, ExportFormatDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
     bitdepth,
+    carries_exif,
     dng,
     jxl,
     write_image,
@@ -650,6 +651,15 @@ class ExportManager:
             print(f"[Depth] {extension} cannot store 16-bit; the stack is saved 8-bit. "
                   f"Use PNG, TIFF or JPEG XL to keep the full depth.", flush=True)
 
+        # Each frame keeps the EXIF of the file it was loaded from, so the
+        # camera, lens and exposure of the shot survive the processing. Said
+        # once here for the whole stack when the chosen container has nowhere to
+        # put them, rather than once per frame.
+        source_paths = getattr(window, "image_paths", None) or []
+        if source_paths and not carries_exif(extension):
+            print(f"[Metadata] {extension} cannot carry EXIF; the stack is saved without it. "
+                  f"Use JPG, PNG, JPEG XL or DNG to keep the camera tags.", flush=True)
+
         try:
             saved_count = 0
             for index, image in enumerate(window.raw_images):
@@ -659,7 +669,8 @@ class ExportManager:
                 else:
                     filename = f"processed_{index + 1:04d}{extension}"
                 file_path = os.path.join(folder_path, filename)
-                if write_image(file_path, image_to_save):
+                source = source_paths[index] if index < len(source_paths) else None
+                if write_image(file_path, image_to_save, source_path=source):
                     saved_count += 1
 
             show_success_box(

@@ -194,6 +194,32 @@ _RAW_GPU_LOCK = threading.Lock()
 _kernel_cache: dict = {}
 
 
+def develop_raw(raw, output_bps: int = 16) -> np.ndarray:
+    """Develop an opened rawpy image as BGR, on the GPU where that is possible.
+
+    The GPU/LibRaw choice in one place, so every path that opens a raw file
+    makes it the same way: the stack loader, and utils.dng for the reads that
+    do not go through the loader at all. ``postprocess_raw`` returns None for
+    anything it cannot handle - an unusual sensor, a busy or full GPU - and any
+    other failure is treated the same way, since LibRaw can always finish the
+    job.
+    """
+    import cv2
+
+    try:
+        if is_available():
+            bgr = postprocess_raw(raw, output_bps)
+            if bgr is not None:
+                return bgr
+    except Exception:
+        pass
+
+    rgb = raw.postprocess(use_camera_wb=True, output_bps=output_bps)
+    # RGB->BGR is a channel swap, so it is done in place: a separate destination
+    # would double the peak of the heaviest allocation in the whole load path.
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR, dst=rgb)
+
+
 def postprocess_raw(raw, output_bps: int = 16) -> Optional[np.ndarray]:
     """Develop an opened rawpy image on the GPU; BGR uint8/uint16 out.
 

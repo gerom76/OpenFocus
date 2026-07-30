@@ -29,17 +29,39 @@ The obvious implementation - a loop over samples - is unusable at these sizes: a
 whole-array numpy work, including the bit packing, which is the part that looks
 inherently serial. It is not: the code and its extra bits are known per sample,
 so the *length* of every sample's contribution is known, so a prefix sum gives
-the bit position each one starts at, and the whole stream can be scattered into
-a bit array at once and packed with `np.packbits`.
+the bit position each one starts at.
 
-That bit array costs about one byte per output bit, so it is built a chunk of
-rows at a time rather than for the whole frame, with the leftover bits of one
-chunk carried into the next. Memory stays bounded by the chunk regardless of how
-large the image is, and the output is a single stream - not one per chunk - so
-the file still holds one JPEG per strip.
+Where those bits then go is the part worth spelling out. A sample's code is at
+most 32 bits long, so once its start position is known it falls inside one
+64-bit word of the output, or straddles two - never more. Each sample is
+therefore shifted into place as a whole word, and the words that several samples
+share are combined by summing them: their bit ranges are disjoint by
+construction, so a sum *is* an OR. Since the start positions only increase, the
+samples sharing a word are consecutive, and `np.add.reduceat` collapses each
+such run in one pass. The stream is built one word per handful of samples rather
+than one byte per output *bit*, which is what the earlier scatter-and-`packbits`
+approach cost.
+
+Parallelism
+-----------
+The scan is cut into chunks of rows, and both passes over them run on a thread
+pool - numpy releases the GIL for the array work that dominates either one.
+
+Independence is what makes that possible, and it comes from the first pass
+recording each chunk's category histogram rather than only the total. Once the
+Huffman table is built, a histogram gives the exact number of bits its chunk
+will occupy, so every chunk's position in the output stream is known before any
+of them is encoded. Each one then packs into its own word buffer and the buffers
+are stitched together, adjacent chunks sharing at most the single word their
+boundary falls in.
+
+Memory stays bounded by the chunk however large the image is, and the output is
+a single stream - not one per chunk - so the file still holds one JPEG per strip.
 """
 
-from typing import List, Optional, Tuple
+import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -67,12 +89,22 @@ _WIDE_CATEGORY = 16
 # these gives bit_length(magnitude), which is what the category is.
 _MAGNITUDE_BOUNDS = (1 << np.arange(16, dtype=np.int64))
 
-# Samples per chunk of the bit-packing pass. At roughly a dozen bits per sample
-# this keeps the intermediate arrays - which are per *bit*, not per sample - to
-# something like a hundred megabytes however large the frame is. It also keeps a
-# chunk's bit count inside a signed 32-bit range, which is what lets the packing
-# index with the narrower dtype.
-_CHUNK_SAMPLES = 1 << 20
+# Samples per chunk of each pass. Measured on a 24 MP frame, where this is both
+# the fastest setting and the lightest: a chunk's intermediates are per sample
+# and a few tens of bytes wide, so larger chunks cost a thread's working set more
+# than they save in per-chunk overhead, and by 32K samples that overhead has
+# taken over completely - four times slower than this.
+_CHUNK_SAMPLES = 1 << 17
+
+# Threads the two passes are spread over. Past eight the chunks are the limit
+# rather than the cores: on a 32-thread machine, twelve and sixteen were within
+# the noise of eight.
+_MAX_THREADS = 8
+
+# 64-bit words are what the packer scatters into: a code is at most 32 bits, so a
+# sample lands inside one word or across two, never more.
+_WORD_BITS = 64
+_WORD_BYTES = _WORD_BITS // 8
 
 
 def _prediction_errors(data: np.ndarray, previous_row: Optional[np.ndarray],
@@ -228,38 +260,75 @@ def _canonical_codes(lengths: np.ndarray) -> Tuple[np.ndarray, bytes, bytes]:
     return codes, counts, bytes(values)
 
 
-def _pack_bits(values: np.ndarray, lengths: np.ndarray,
-               carry: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Append variable-length codes to a bit stream; return whole bytes and leftovers.
+def _or_into_words(words: np.ndarray, indices: np.ndarray,
+                   contributions: np.ndarray) -> None:
+    """OR each contribution into the word it belongs to.
 
-    `values` holds each sample's bits right-aligned and `lengths` how many of
-    them count. Because the lengths are known up front, a prefix sum gives the
-    bit position every sample starts at - and since those positions are
-    consecutive, the *n*th bit of the whole stream can be attributed to its
-    sample by repeating each sample's start position `length` times. That turns
-    the entire chunk into a handful of whole-array operations with no loop over
-    samples or over bit positions.
-
-    Codes are left-aligned in 32 bits first, so extracting bit *k* of the stream
-    is one shift by a position counted from the top rather than a shift that
-    depends on the code's own length.
+    `indices` are word numbers and only ever increase, so the contributions
+    destined for one word form a consecutive run and `reduceat` collapses every
+    run in a single pass. The runs are summed rather than OR-ed because no two
+    samples own the same bit: within a word the contributions are disjoint, and a
+    sum of disjoint bit patterns is their union.
     """
-    total = int(lengths.sum())
-    stream = np.empty(total + carry.size, dtype=np.uint8)
-    stream[:carry.size] = carry
+    if indices.size == 0:
+        return
+    changes = np.flatnonzero(indices[1:] != indices[:-1])
+    boundaries = np.empty(changes.size + 1, dtype=np.intp)
+    boundaries[0] = 0
+    np.add(changes, 1, out=boundaries[1:])
+    words[indices[boundaries]] |= np.add.reduceat(contributions, boundaries)
 
-    if total:
-        starts = np.cumsum(lengths, dtype=np.int32) - lengths
-        # Bit position within its own code, rewritten in place into the shift
-        # that extracts it, to keep one fewer array of this size alive.
-        shifts = np.arange(total, dtype=np.int32)
-        shifts -= np.repeat(starts, lengths)
-        np.subtract(31, shifts, out=shifts)
-        aligned = values << (np.uint32(32) - lengths.astype(np.uint32))
-        stream[carry.size:] = (np.repeat(aligned, lengths) >> shifts.view(np.uint32)) & 1
 
-    whole = (stream.size // 8) * 8
-    return np.packbits(stream[:whole]), stream[whole:]
+def _pack_chunk(values: np.ndarray, lengths: np.ndarray,
+                base_bit: int, stream: np.ndarray) -> Tuple[int, bytes]:
+    """Pack one chunk's codes into `stream`, and hand back the word it starts in.
+
+    `values` holds each sample's bits right-aligned, `lengths` how many of them
+    count, and `base_bit` the position the chunk occupies in the stream as a
+    whole. Every word after the first belongs to this chunk alone, so it is
+    written straight into the shared stream and the chunk's own buffer can go;
+    the first word is the one the previous chunk may have written part of, so it
+    is returned to be OR-ed in once the pool has finished rather than raced over.
+
+    Positions are kept relative to the word the chunk starts in, so they stay
+    inside 32 bits however far into the image the chunk sits.
+    """
+    starts = np.cumsum(lengths, dtype=np.int32)
+    total = int(starts[-1]) if starts.size else 0
+    starts -= lengths
+
+    offset = (base_bit >> 6) * _WORD_BYTES
+    if total == 0:
+        return offset, b""
+
+    starts += base_bit & 63
+    word = starts >> 6
+    within = starts & 63
+    # Which codes run past the end of the word they start in, and so leave a
+    # remainder for the next one. Decided in signed arithmetic, before the shift
+    # counts become unsigned: numpy resolves a mix of the two through float.
+    straddles = np.flatnonzero(within + lengths > _WORD_BITS)
+    within = within.astype(np.uint64)
+
+    # Each code is first moved to the top of a 64-bit word, which turns placing
+    # it into a single right shift by its position - and its remainder, where
+    # there is one, into the matching left shift. Both counts are then in range
+    # by construction, so no branch and no clamping.
+    aligned = values.astype(np.uint64) << (np.uint64(_WORD_BITS) - lengths.astype(np.uint64))
+    words = np.zeros((int(starts[-1]) + int(lengths[-1]) - 1) // _WORD_BITS + 1, dtype=np.uint64)
+    _or_into_words(words, word, aligned >> within)
+
+    if straddles.size:
+        # The tail of a code that crossed the word boundary, at the top of the
+        # next word. The indices stay sorted, so the same reduction applies.
+        _or_into_words(words, word[straddles] + 1,
+                       aligned[straddles] << (np.uint64(_WORD_BITS) - within[straddles]))
+
+    # A JPEG bit stream is most-significant-bit first, which is what a big-endian
+    # view of the words it was assembled in already is.
+    blob = words.astype(">u8").view(np.uint8)
+    stream[offset + _WORD_BYTES:offset + blob.size] = blob[_WORD_BYTES:]
+    return offset, blob[:_WORD_BYTES].tobytes()
 
 
 def _stuff(payload: np.ndarray) -> bytes:
@@ -349,48 +418,91 @@ def encode(image: np.ndarray, bits: Optional[int] = None) -> bytes:
             )
 
     rows_per_chunk = max(1, _CHUNK_SAMPLES // (width * components))
+    bounds = [(first, min(first + rows_per_chunk, height))
+              for first in range(0, height, rows_per_chunk)]
 
-    # First pass: how often each magnitude category occurs, which is what the
-    # Huffman table is built from. The differences are recomputed in the second
-    # pass rather than kept, because keeping them would cost four bytes a sample.
-    frequencies = np.zeros(_CATEGORIES, dtype=np.int64)
-    for first in range(0, height, rows_per_chunk):
-        previous = data[first - 1] if first else None
-        errors = _prediction_errors(data[first:first + rows_per_chunk], previous, precision)
-        frequencies += np.bincount(_categories(errors).ravel(), minlength=_CATEGORIES)
+    with ThreadPoolExecutor(max_workers=_threads_for(len(bounds))) as pool:
+        # First pass: how often each magnitude category occurs, per chunk. The
+        # totals build the Huffman table; the per-chunk split then says how many
+        # bits each chunk will take, which is what lets the second pass encode
+        # them independently. The differences themselves are recomputed there
+        # rather than kept, because keeping them would cost four bytes a sample.
+        histograms = list(pool.map(
+            lambda span: _chunk_histogram(data, span, precision), bounds))
 
-    lengths_by_category = _code_lengths(frequencies)
-    codes, counts, values = _canonical_codes(lengths_by_category)
-    code_bits = lengths_by_category.astype(np.uint32)
+        lengths_by_category = _code_lengths(np.sum(histograms, axis=0))
+        codes, counts, values = _canonical_codes(lengths_by_category)
+        code_bits = lengths_by_category.astype(np.uint32)
 
-    chunks: List[bytes] = []
-    carry = np.zeros(0, dtype=np.uint8)
-    for first in range(0, height, rows_per_chunk):
-        previous = data[first - 1] if first else None
-        errors = _prediction_errors(data[first:first + rows_per_chunk], previous, precision)
-        category = _categories(errors).ravel().astype(np.int64)
-        errors = errors.ravel()
+        # Bits a sample of each category occupies: its code, plus the magnitude
+        # bits that follow it - none for category 16, which stands alone.
+        bits_by_category = code_bits.astype(np.int64) + np.arange(_CATEGORIES, dtype=np.int64)
+        bits_by_category[_WIDE_CATEGORY] = code_bits[_WIDE_CATEGORY]
+        chunk_bits = [int(histogram @ bits_by_category) for histogram in histograms]
+        offsets = np.cumsum([0] + chunk_bits)
+        total_bits = int(offsets[-1])
 
-        # Category 16 stands alone for -32768 and carries no magnitude bits.
-        extra_bits = np.where(category == _WIDE_CATEGORY, 0, category).astype(np.uint32)
-        # A negative error is stored as one less than itself, so that its low
-        # bits differ from the positive error of the same magnitude.
-        magnitude = np.where(errors >= 0, errors, errors - 1).astype(np.uint32)
-        magnitude &= (np.uint32(1) << extra_bits) - np.uint32(1)
-
-        packed, carry = _pack_bits(
-            (codes[category] << extra_bits) | magnitude,
-            (code_bits[category] + extra_bits).astype(np.int32),
-            carry,
-        )
-        chunks.append(_stuff(packed))
-
-    if carry.size:
-        # JPEG pads the last byte with set bits, which is why the all-ones code
-        # had to be kept out of the table.
-        tail = np.ones(8, dtype=np.uint8)
-        tail[:carry.size] = carry
-        chunks.append(_stuff(np.packbits(tail)))
+        scan = np.zeros((total_bits + 63) // 64 * _WORD_BYTES, dtype=np.uint8)
+        heads = list(pool.map(
+            lambda item: _pack_scan_chunk(
+                data, item[0], precision, codes, code_bits, item[1], scan),
+            zip(bounds, offsets[:-1].tolist())))
 
     header = _headers(height, width, components, precision, counts, values)
-    return header + b"".join(chunks) + _EOI
+    return header + _stuff(_close_scan(scan, heads, total_bits)) + _EOI
+
+
+def _threads_for(chunks: int) -> int:
+    """How many threads to spread `chunks` over."""
+    return max(1, min(_MAX_THREADS, os.cpu_count() or 1, chunks))
+
+
+def _chunk_histogram(data: np.ndarray, span: Tuple[int, int], precision: int) -> np.ndarray:
+    """How often each magnitude category occurs in one chunk of rows."""
+    first, stop = span
+    errors = _prediction_errors(data[first:stop], data[first - 1] if first else None, precision)
+    return np.bincount(_categories(errors).ravel(), minlength=_CATEGORIES)
+
+
+def _pack_scan_chunk(data: np.ndarray, span: Tuple[int, int], precision: int,
+                     codes: np.ndarray, code_bits: np.ndarray,
+                     base_bit: int, stream: np.ndarray) -> Tuple[int, bytes]:
+    """Entropy-code one chunk of rows at its place in the stream."""
+    first, stop = span
+    errors = _prediction_errors(data[first:stop], data[first - 1] if first else None, precision)
+    category = _categories(errors).ravel()
+    errors = errors.ravel()
+
+    # Category 16 stands alone for -32768 and carries no magnitude bits.
+    extra_bits = np.where(category == _WIDE_CATEGORY, 0, category).astype(np.uint32)
+    # A negative error is stored as one less than itself, so that its low bits
+    # differ from the positive error of the same magnitude.
+    magnitude = np.where(errors >= 0, errors, errors - 1).astype(np.uint32)
+    magnitude &= (np.uint32(1) << extra_bits) - np.uint32(1)
+
+    return _pack_chunk(
+        (codes[category] << extra_bits) | magnitude,
+        (code_bits[category] + extra_bits).astype(np.int32),
+        base_bit,
+        stream,
+    )
+
+
+def _close_scan(stream: np.ndarray, heads: Sequence[Tuple[int, bytes]],
+                total_bits: int) -> np.ndarray:
+    """Fold in the chunks' first words and pad the stream to a whole byte.
+
+    A chunk starts wherever the previous one ended, which need not be a word - or
+    even a byte - boundary, so the word that boundary falls in holds bits from
+    both. Every other word belongs to one chunk alone and was written where it
+    goes; these are the ones that had to wait until nothing was still packing.
+    """
+    for offset, head in heads:
+        if head:
+            stream[offset:offset + _WORD_BYTES] |= np.frombuffer(head, dtype=np.uint8)
+
+    # JPEG pads the last byte with set bits, which is why the all-ones code had
+    # to be kept out of the table; the whole words past it are simply dropped.
+    used = (total_bits + 7) // 8
+    stream[used - 1] |= (1 << (used * 8 - total_bits)) - 1
+    return stream[:used]

@@ -1,7 +1,7 @@
 """Reading and writing DNG.
 
 DNG is the one container OpenCV can neither write nor read, and LibRaw can only
-read, so utils.dng assembles it by hand. Seven promises are tested here:
+read, so utils.dng assembles it by hand. Nine promises are tested here:
 
 1. `.dng` is routed to that writer by write_image, and what comes back out is
    bit-for-bit what went in - at 8 bits, at 16, in colour and in mono, and
@@ -22,6 +22,13 @@ read, so utils.dng assembles it by hand. Seven promises are tested here:
    (`TestCompression`).
 7. The fast-load preview is a real, findable preview - a reduced-resolution
    JPEG SubIFD that LibRaw hands back as a thumbnail (`TestFastLoad`).
+8. A source file's EXIF is carried in as tags of the DNG's own - camera, shot
+   and position - with the offsets that cannot move left behind, and without
+   disturbing the pixels or LibRaw (`TestSourceExif`).
+9. A write that fails part way leaves no file, since the file is streamed rather
+   than assembled in memory first (`TestPartialWrites`), and a camera DNG is
+   developed on the GPU wherever the stack loader would have been, falling back
+   to LibRaw rather than to a failed frame (`TestCameraDevelop`).
 
 The layout is parsed here with utils.dng's own reader, which on its own would
 only prove the module agrees with itself; `TestInterop` and the LibRaw checks in
@@ -738,3 +745,217 @@ class TestWithoutRawpy:
 
         monkeypatch.setattr(dng, "_RAWPY_AVAILABLE", False)
         assert dng.read(str(out)) is None
+
+
+class TestSourceExif:
+    """A source file's EXIF, carried into the DNG as tags of its own.
+
+    DNG cannot be tagged after the fact the way a JPEG can - a TIFF's offsets all
+    move when anything is inserted - so the block is taken apart and re-laid out
+    while the file is being written. That is what these check: the tags arrive,
+    they arrive as tags and not as a copied blob, and the pixels are untouched by
+    any of it.
+    """
+
+    @staticmethod
+    def _source(path):
+        """A small JPEG with a camera-like EXIF block, and that block.
+
+        Pillow writes big-endian ("MM") blocks, which is what makes this a test
+        of the byte-order conversion as well: nothing written here is.
+        """
+        from PIL import Image
+        from PIL.TiffImagePlugin import IFDRational
+
+        exif = Image.Exif()
+        exif[dng._MAKE] = "Nikon"
+        exif[dng._MODEL] = "Z 8"
+        exif[dng._ARTIST] = "A Photographer"
+        camera = exif.get_ifd(0x8769)
+        camera[0x829A] = IFDRational(1, 200)      # ExposureTime
+        camera[0x8827] = 400                      # ISOSpeedRatings
+        camera[0x9003] = "2026:07:20 11:22:33"    # DateTimeOriginal
+        camera[0x927C] = b"\x00\x01binary maker note"
+        gps = exif.get_ifd(0x8825)
+        gps[1] = "N"
+        Image.new("RGB", (16, 16), (9, 9, 9)).save(str(path), exif=exif.tobytes())
+
+        blob = exif.tobytes()
+        blob = blob[len(b"Exif\x00\x00"):] if blob.startswith(b"Exif\x00\x00") else blob
+        assert blob.startswith(b"MM"), "expected Pillow to write a big-endian block"
+        return blob
+
+    @staticmethod
+    def _sub_ifd(path, pointer):
+        """The sub-IFD `pointer` names, read back with utils.dng's own parser."""
+        with open(path, "rb") as handle:
+            data = handle.read()
+        tags = _tags(path)
+        assert pointer in tags, f"no pointer tag {pointer} in IFD 0"
+        entries = dng._blob_entries(data, "<", int(tags[pointer][0]))
+        return {tag: payload for tag, _type, _count, payload in entries}
+
+    def test_the_camera_reaches_the_dng(self, tmp_path):
+        source = self._source(tmp_path / "src.jpg")
+        out = str(tmp_path / "with_exif.dng")
+        assert dng.write(out, _result16(), exif=source)
+
+        tags = _tags(out)
+        # Make and Model name the camera the frames came from, which is what
+        # those tags mean in DNG too; the writer stays identified separately.
+        assert tags[dng._MAKE] == "Nikon"
+        assert tags[dng._MODEL] == "Z 8"
+        assert tags[dng._ARTIST] == "A Photographer"
+        assert tags[dng._UNIQUE_CAMERA_MODEL] == dng.CAMERA_MODEL
+        assert tags[dng._SOFTWARE] == dng.CAMERA_MODEL
+
+    def test_the_shot_reaches_the_exif_ifd(self, tmp_path):
+        source = self._source(tmp_path / "src.jpg")
+        out = str(tmp_path / "with_exif.dng")
+        assert dng.write(out, _result16(), exif=source)
+
+        camera = self._sub_ifd(out, dng._EXIF_IFD)
+        assert camera[0x9003].split(b"\x00")[0] == b"2026:07:20 11:22:33"
+        # The source block is big-endian; everything written here is not, so a
+        # value that survives the move proves the conversion happened.
+        assert struct.unpack("<H", camera[0x8827])[0] == 400
+        assert struct.unpack("<2I", camera[0x829A]) == (1, 200)
+
+        assert 1 in self._sub_ifd(out, dng._GPS_IFD)
+
+    def test_offsets_that_cannot_move_are_left_behind(self, tmp_path):
+        source = self._source(tmp_path / "src.jpg")
+        out = str(tmp_path / "with_exif.dng")
+        assert dng.write(out, _result16(), exif=source)
+
+        # A MakerNote holds offsets into the file it came from, so a copy at a
+        # new position decodes as noise; dropping it beats writing it broken.
+        camera = self._sub_ifd(out, dng._EXIF_IFD)
+        assert dng._MAKER_NOTE not in camera
+        assert dng._INTEROP_IFD not in camera
+        with open(out, "rb") as handle:
+            assert b"binary maker note" not in handle.read()
+
+    def test_the_pixels_are_the_same_either_way(self, tmp_path):
+        source = self._source(tmp_path / "src.jpg")
+        image = _result16()
+        plain = str(tmp_path / "plain.dng")
+        tagged = str(tmp_path / "tagged.dng")
+        assert dng.write(plain, image)
+        assert dng.write(tagged, image, exif=source)
+
+        assert np.array_equal(dng.read_linear(tagged), image)
+        assert np.array_equal(dng.read_linear(plain), image)
+        assert os.path.getsize(tagged) > os.path.getsize(plain)
+
+    def test_write_image_passes_the_source_through(self, tmp_path):
+        source_jpg = tmp_path / "src.jpg"
+        self._source(source_jpg)
+        out = str(tmp_path / "processed.dng")
+
+        # The stack export hands write_image the file each frame came from; DNG
+        # is the one container that has to receive it before the encode.
+        assert write_image(out, _result16(), source_path=str(source_jpg))
+        assert _tags(out)[dng._MAKE] == "Nikon"
+
+    def test_a_block_that_is_not_exif_is_ignored(self, tmp_path):
+        out = str(tmp_path / "junk.dng")
+        image = _result8()
+        for blob in (b"", b"not a tiff", b"II*\x00\xff\xff\xff\xff", b"MM\x00*" + b"\x00" * 4):
+            assert dng.write(out, image, exif=blob)
+            assert np.array_equal(dng.read_linear(out), image)
+            assert _tags(out)[dng._MAKE] == dng.CAMERA_MODEL
+
+    @needs_rawpy
+    def test_libraw_still_opens_a_tagged_file(self, tmp_path):
+        import rawpy
+
+        source = self._source(tmp_path / "src.jpg")
+        image = _detailed(128, 128)
+        rendered = []
+        for name, blob in (("plain", None), ("tagged", source)):
+            path = str(tmp_path / f"{name}.dng")
+            assert dng.write(path, image, exif=blob)
+            with open(path, "rb") as handle:
+                with rawpy.imread(handle) as raw:
+                    rendered.append(raw.postprocess(
+                        use_camera_wb=True, output_bps=8, no_auto_bright=True))
+        # The extra IFDs must not disturb what a raw converter reads.
+        assert np.array_equal(rendered[0], rendered[1])
+
+
+class TestPartialWrites:
+    def test_a_failed_write_leaves_no_file(self, tmp_path, monkeypatch):
+        out = str(tmp_path / "broken.dng")
+
+        # The file is streamed rather than assembled first, so a failure part
+        # way through would otherwise leave a header with no pixels behind it -
+        # a file that parses far enough to be opened and then cannot be read.
+        def explode(*args, **kwargs):
+            raise MemoryError("no room for the strip")
+
+        monkeypatch.setattr(dng, "_file_order", explode)
+        assert dng.write(out, _result16()) is False
+        assert not os.path.exists(out)
+
+
+class TestCameraDevelop:
+    """Which develop a camera DNG gets, and what happens when the GPU declines.
+
+    A DNG OpenFocus wrote is read from its strips and never reaches this; a
+    camera one is developed, and that develop is the expensive half of loading a
+    RAW stack. `utils.dng.read` used to go straight to LibRaw while the stack
+    loader used the GPU, so the same file developed differently depending on
+    which path opened it. Both now ask core.gpu_decode.
+
+    Stubs stand in for rawpy, because what is under test is the routing rather
+    than either develop.
+    """
+
+    class _FakeRaw:
+        """Just enough of a rawpy object to record whether LibRaw was asked."""
+
+        def __init__(self):
+            self.calls = []
+
+        def postprocess(self, **options):
+            self.calls.append(options)
+            return np.dstack([np.full((4, 4), 10, np.uint16),
+                              np.full((4, 4), 20, np.uint16),
+                              np.full((4, 4), 30, np.uint16)])
+
+    @pytest.fixture
+    def gpu(self, monkeypatch):
+        from core import gpu_decode
+        monkeypatch.setattr(gpu_decode, "is_available", lambda: True)
+        return gpu_decode
+
+    def test_the_gpu_result_is_used_when_there_is_one(self, gpu, monkeypatch):
+        developed = np.zeros((4, 4, 3), np.uint16)
+        monkeypatch.setattr(gpu, "postprocess_raw", lambda raw, bps: developed)
+        raw = self._FakeRaw()
+
+        assert dng._develop(raw, 16) is developed
+        assert not raw.calls, "LibRaw was asked for a frame the GPU had already produced"
+
+    def test_libraw_finishes_what_the_gpu_will_not(self, gpu, monkeypatch):
+        # postprocess_raw returns None for an unusual sensor, a busy GPU or one
+        # that is out of memory - all of which have to end in a frame, not a
+        # failed load.
+        monkeypatch.setattr(gpu, "postprocess_raw", lambda raw, bps: None)
+        raw = self._FakeRaw()
+
+        developed = dng._develop(raw, 16)
+        assert raw.calls == [{"use_camera_wb": True, "output_bps": 16}]
+        # RGB from LibRaw, BGR to the pipeline.
+        assert tuple(developed[0, 0]) == (30, 20, 10)
+
+    def test_a_gpu_failure_is_not_a_failed_frame(self, gpu, monkeypatch):
+        def explode(raw, bps):
+            raise RuntimeError("CUDA error")
+
+        monkeypatch.setattr(gpu, "postprocess_raw", explode)
+        raw = self._FakeRaw()
+
+        assert dng._develop(raw, 8) is not None
+        assert raw.calls, "the frame should have fallen through to LibRaw"

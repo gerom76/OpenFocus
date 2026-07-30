@@ -36,8 +36,14 @@ OPENFOCUS_PREFIX = "OpenFocus"
 CAMERA_NS = "https://github.com/Xinzhe99/OpenFocus/ns/camera/1.0/"
 CAMERA_PREFIX = "Camera"
 
-# Containers that can carry the metadata. Everything else is written as-is.
+# Containers this module can splice metadata into. Everything else is written
+# as-is - except DNG, which carries EXIF as well but gets it from utils.dng at
+# encode time rather than from here; see `carries_exif`.
 TAGGABLE_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".jxl"}
+
+# Every container a save can put the source's EXIF into, however it gets there.
+# Used to say once, before a stack export, that the chosen format will drop it.
+EXIF_EXTENSIONS = TAGGABLE_EXTENSIONS | {".dng"}
 
 _JPEG_SOI = b"\xff\xd8"
 _JPEG_APP0 = b"\xff\xe0"
@@ -338,24 +344,24 @@ def build_xmp(metadata: RenderMetadata,
     return packet.encode("utf-8")
 
 
-def embed(file_path: str, metadata: Optional[RenderMetadata]) -> bool:
-    """Add the source EXIF and the OpenFocus XMP packet to a written file.
+def carries_exif(extension: str) -> bool:
+    """Whether a save in this container keeps the source's EXIF block."""
+    ext = (extension or "").lower()
+    if not ext.startswith("."):
+        ext = "." + ext
+    return ext in EXIF_EXTENSIONS
+
+
+def _splice(file_path: str, exif: Optional[bytes], xmp: Optional[bytes]) -> bool:
+    """Rewrite an encoded file with the metadata blocks it was written without.
 
     Called after the encoder has already produced the file, so a failure here
     costs the metadata and not the image. Returns True only when the file was
-    rewritten with the metadata in it.
+    rewritten.
     """
-    if metadata is None:
-        return False
-
     ext = os.path.splitext(file_path)[1].lower()
-    if ext not in TAGGABLE_EXTENSIONS:
+    if ext not in TAGGABLE_EXTENSIONS or not (exif or xmp):
         return False
-
-    # The source file is opened once: the same block is embedded verbatim and
-    # cloned into the readable Camera section of the packet.
-    exif = read_source_exif(metadata.source_path)
-    xmp = build_xmp(metadata, read_camera_tags(exif))
 
     try:
         with open(file_path, "rb") as handle:
@@ -381,6 +387,35 @@ def embed(file_path: str, metadata: Optional[RenderMetadata]) -> bool:
         return False
 
 
+def embed(file_path: str, metadata: Optional[RenderMetadata]) -> bool:
+    """Add the source EXIF and the OpenFocus XMP packet to a written file."""
+    if metadata is None:
+        return False
+
+    # The source file is opened once: the same block is embedded verbatim and
+    # cloned into the readable Camera section of the packet.
+    exif = read_source_exif(metadata.source_path)
+    return _splice(file_path, exif, build_xmp(metadata, read_camera_tags(exif)))
+
+
+def copy_exif(file_path: str, source_path: Optional[str]) -> bool:
+    """Add a source file's EXIF block to a written file, and nothing else.
+
+    What a stack export wants, as against what `embed` does for a fused result.
+    A processed input frame is still the frame that came out of the camera - one
+    aligned, cropped or relit copy of it - so it keeps that camera's block, and
+    each frame keeps its *own*: the exposure of frame 40 belongs to frame 40, not
+    to the first of the stack. There is no render to describe on top of it, so no
+    XMP packet is written and nothing claims the frame was fused.
+
+    DNG is absent from the containers handled here on purpose. Its EXIF goes in
+    while the file is being written, because a TIFF cannot have an IFD spliced
+    into it afterwards without every offset behind the insertion moving.
+    """
+    exif = read_source_exif(source_path)
+    return _splice(file_path, exif, None) if exif else False
+
+
 # ----------------------------------------------------------------------
 # JPEG
 # ----------------------------------------------------------------------
@@ -391,7 +426,8 @@ def _jpeg_app1(payload: bytes) -> Optional[bytes]:
     return _JPEG_APP1 + (len(payload) + 2).to_bytes(2, "big") + payload
 
 
-def _jpeg_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Optional[bytes]:
+def _jpeg_with_metadata(data: bytes, exif: Optional[bytes],
+                        xmp: Optional[bytes]) -> Optional[bytes]:
     """Splice EXIF and XMP APP1 segments into an encoded JPEG.
 
     APP1 has to follow the JFIF APP0 that OpenCV writes, so the insertion point
@@ -421,9 +457,10 @@ def _jpeg_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Optio
         else:
             segments.append(exif_segment)
 
-    xmp_segment = _jpeg_app1(_XMP_PREFIX + xmp)
-    if xmp_segment is not None:
-        segments.append(xmp_segment)
+    if xmp:
+        xmp_segment = _jpeg_app1(_XMP_PREFIX + xmp)
+        if xmp_segment is not None:
+            segments.append(xmp_segment)
 
     if not segments:
         return None
@@ -442,7 +479,8 @@ def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
             + zlib.crc32(chunk_type + payload).to_bytes(4, "big"))
 
 
-def _png_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Optional[bytes]:
+def _png_with_metadata(data: bytes, exif: Optional[bytes],
+                       xmp: Optional[bytes]) -> Optional[bytes]:
     """Insert eXIf and XMP chunks into an encoded PNG, right after IHDR.
 
     IHDR is always the first chunk, and both additions are legal anywhere
@@ -465,7 +503,11 @@ def _png_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Option
     # iTXt payload: keyword, compression flag and method, empty language and
     # translated keyword, then the UTF-8 text. XMP is stored uncompressed so
     # that readers can find the packet by scanning the file.
-    chunks.append(_png_chunk(b"iTXt", _PNG_XMP_KEYWORD + b"\x00" * 5 + xmp))
+    if xmp:
+        chunks.append(_png_chunk(b"iTXt", _PNG_XMP_KEYWORD + b"\x00" * 5 + xmp))
+
+    if not chunks:
+        return None
 
     return data[:insert_at] + b"".join(chunks) + data[insert_at:]
 
@@ -518,7 +560,8 @@ def _jxl_exif(path: str) -> Optional[bytes]:
         return None
 
 
-def _jxl_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Optional[bytes]:
+def _jxl_with_metadata(data: bytes, exif: Optional[bytes],
+                       xmp: Optional[bytes]) -> Optional[bytes]:
     """Insert Exif and XMP boxes into a JPEG XL container, ahead of the codestream.
 
     utils.jxl always writes the container form precisely so this can be done.
@@ -548,6 +591,10 @@ def _jxl_with_metadata(data: bytes, exif: Optional[bytes], xmp: bytes) -> Option
     boxes = []
     if exif:
         boxes.append(_jxl_box(_JXL_EXIF_BOX, (0).to_bytes(4, "big") + exif))
-    boxes.append(_jxl_box(_JXL_XMP_BOX, xmp))
+    if xmp:
+        boxes.append(_jxl_box(_JXL_XMP_BOX, xmp))
+
+    if not boxes:
+        return None
 
     return data[:insert_at] + b"".join(boxes) + data[insert_at:]
