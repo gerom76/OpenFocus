@@ -192,7 +192,32 @@ candidate that survives a guard, and can write the winner into
 python -m tests.fusion_autotune              # search, report, change nothing
 python -m tests.fusion_autotune --apply      # and write the winner to source
 python -m tests.fusion_autotune --quick      # a short run, for checking the rig
+python -m tests.fusion_autotune --images none    # skip the renders (a run is ~12 MB)
 ```
+
+Every run writes its own folder under `logs/` (gitignored), so no run overwrites
+another:
+
+```text
+logs/autotune-20260729-201043/
+  session.log       every line the run printed, with elapsed time
+  summary.json      every candidate's settings, scores and verdict
+  images/
+    00-incumbent.webp
+    08-COHERENCE=0.25.webp
+    08-COHERENCE=0.25.diff-x21.webp     ← differenced against the incumbent
+```
+
+The renders are kept because the numbers do not settle the question on their
+own: two candidates a thousandth apart in fitness can look quite different, and
+which one is right is a judgement about the picture. Each difference image is
+amplified so its largest change reaches full scale — a fixed factor renders most
+pairs almost black — and the factor it used is in the filename, so an amplified
+difference is never mistaken for the real one.
+
+A `--quick` run stays inside its session folder and writes neither the ledger nor
+the source: it drops the contrast bracket and checks one guard scenario instead
+of three, so it accepts settings a full run refuses.
 
 The obvious failure of any such loop is converging on the reference rather than
 on quality, and it is not hypothetical — on the first real run, `COHERENCE=0.25`

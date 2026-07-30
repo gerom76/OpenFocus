@@ -11,6 +11,12 @@ winner back into fusion_methods/pyramid.py.
     python -m tests.fusion_autotune --apply         # and write the winner to source
     python -m tests.fusion_autotune --quick         # a short run, for checking the rig
 
+Every run writes a folder under logs/ holding its log, a summary of every
+candidate it scored, and what each of those candidates rendered - see Session.
+A quick run stays inside that folder: it drops the contrast bracket and checks
+one guard scenario rather than three, so it accepts settings a full run refuses,
+and neither the ledger nor the source may be written from one.
+
 ## Why Helicon, and what stops this from merely imitating it
 
 Helicon's method C is a Laplacian pyramid - the same algorithm - so where it
@@ -70,8 +76,26 @@ from tests import fusion_metrics as fm                     # noqa: E402
 from tests import fusion_scenarios as sc                   # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SOURCE = os.path.join(os.path.dirname(HERE), "fusion_methods", "pyramid.py")
+ROOT = os.path.dirname(HERE)
+SOURCE = os.path.join(ROOT, "fusion_methods", "pyramid.py")
 LEDGER = os.path.join(HERE, "fusion_autotune_ledger.json")
+LOGS = os.path.join(ROOT, "logs")
+
+# What a session writes for each candidate. Lossy WebP rather than PNG because
+# a session is 16 to 30 candidates at 2.2 megapixels and these are for looking
+# at, not for measuring - the numbers that decide anything are in summary.json.
+# At quality 88 a candidate is a few hundred KB against three megabytes.
+IMAGE_QUALITY = 88
+
+# Difference images are amplified, because what separates two candidates is
+# usually a couple of levels over a small part of the frame and is invisible
+# at 1:1. The factor is chosen per image so that the largest difference present
+# reaches full scale - a fixed one renders most pairs almost black, and the
+# pairs it does suit are the ones that needed no help. It is capped so that two
+# identical candidates do not come back as an amplified picture of nothing, and
+# it goes in the filename so nobody reads an amplified difference as the real
+# one.
+DIFF_MAX_AMPLIFY = 64
 
 CAPTURE = "electronics_ant"
 BLOCK = 64
@@ -103,6 +127,120 @@ MIN_SHARE_AGAINST_HEAVIEST = 0.85
 # the two are the same setting wearing different numbers, and churning source
 # for that would make every future diff harder to read.
 MIN_IMPROVEMENT = 0.002
+
+
+# ---------------------------------------------------------------------------
+# The session: one folder per run, holding its log and what it rendered
+# ---------------------------------------------------------------------------
+
+class Session:
+    """
+    One tuning run's own directory under logs/.
+
+        logs/autotune-20260729-201530/
+          session.log      every line the run printed, timestamped
+          summary.json     every candidate's settings and scores
+          images/          what each candidate rendered, and how it differs
+
+    A run is a search for a setting somebody will have to agree with, and the
+    numbers alone do not settle that: two candidates a thousandth apart in
+    fitness can look quite different, and which one is right is a judgement
+    about the picture. So the pictures are kept, next to the log that says what
+    was decided about them, in a directory that is not overwritten by the next
+    run.
+
+    Images are optional (`images="none"`) and off the hot path either way - a
+    candidate is fused whether or not its result is written out.
+    """
+
+    def __init__(self, root=None, tag="autotune", images="all", stamp=None):
+        if images not in ("all", "accepted", "none"):
+            raise ValueError(f"images must be all, accepted or none, not {images!r}")
+        self.images = images
+        self.started = time.time()
+        stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+        self.path = os.path.join(root or LOGS, f"{tag}-{stamp}")
+        # A second run inside the same second would otherwise share a folder.
+        suffix = 1
+        while os.path.exists(self.path):
+            suffix += 1
+            self.path = os.path.join(root or LOGS, f"{tag}-{stamp}-{suffix}")
+        self.image_dir = os.path.join(self.path, "images")
+        os.makedirs(self.image_dir if images != "none" else self.path)
+
+        self.log_path = os.path.join(self.path, "session.log")
+        self.summary_path = os.path.join(self.path, "summary.json")
+        self._handle = open(self.log_path, "w", encoding="utf-8")
+        self._saved = []
+        self.log(f"session {os.path.basename(self.path)} started "
+                 f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # -- logging ----------------------------------------------------------
+    def log(self, *parts):
+        """Print, and keep. Everything the run says lands in both places."""
+        line = " ".join(str(part) for part in parts)
+        print(line)
+        self._handle.write(f"[{time.time() - self.started:7.1f}s] {line}\n")
+        self._handle.flush()
+
+    # -- images -----------------------------------------------------------
+    @staticmethod
+    def _safe(name):
+        return re.sub(r"[^A-Za-z0-9_.=+-]", "_", name)
+
+    def save_image(self, name, image, against=None, accepted=True):
+        """
+        Write one candidate's render, and its difference from the incumbent.
+
+        `against` is the image to difference with - the incumbent, normally, so
+        the pair answers "what did this setting actually change" rather than
+        leaving it to be found by flipping between two near-identical frames.
+        """
+        if image is None or self.images == "none" or \
+                (self.images == "accepted" and not accepted):
+            return None
+        import cv2
+
+        stem = f"{len(self._saved):02d}-{self._safe(name)}"
+        params = [cv2.IMWRITE_WEBP_QUALITY, IMAGE_QUALITY]
+        path = os.path.join(self.image_dir, f"{stem}.webp")
+        cv2.imwrite(path, image, params)
+        written = [os.path.basename(path)]
+
+        if against is not None and against.shape == image.shape:
+            diff = cv2.absdiff(image, against)
+            peak = int(diff.max())
+            factor = 1 if peak == 0 else min(DIFF_MAX_AMPLIFY,
+                                             max(1, round(255.0 / peak)))
+            scaled = (diff.astype(np.int32) * factor).clip(0, 255).astype(np.uint8)
+            diff_path = os.path.join(self.image_dir, f"{stem}.diff-x{factor}.webp")
+            cv2.imwrite(diff_path, scaled, params)
+            written.append(os.path.basename(diff_path))
+
+        self._saved.append({"name": name, "files": written})
+        return path
+
+    # -- closing ----------------------------------------------------------
+    def finish(self, champion=None, history=None, applied=False, extra=None):
+        """Write summary.json and close the log. Safe to call more than once."""
+        summary = {
+            "session": os.path.basename(self.path),
+            "seconds": round(time.time() - self.started, 1),
+            "capture": CAPTURE,
+            "applied_to_source": applied,
+            "shipped_settings": default_settings(),
+            "champion": champion,
+            "history": history or [],
+            "images": self._saved,
+        }
+        summary.update(extra or {})
+        with open(self.summary_path, "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=1, sort_keys=True, default=str)
+        if not self._handle.closed:
+            self.log(f"wrote {os.path.relpath(self.summary_path, ROOT)} "
+                     f"and {len(self._saved)} image sets")
+            self._handle.close()
+        return self.path
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +355,7 @@ class Fixture:
             self.guard_scenarios[name] = (stack, reference)
 
 
-def measure(fixture, settings):
+def measure(fixture, settings, keep_image=False):
     """
     Score one candidate. Returns a dict; `fitness` is the number being searched.
 
@@ -225,6 +363,11 @@ def measure(fixture, settings):
                  better, and it is the only thing maximised.
     admissible   whether the constraints hold. An inadmissible candidate is
                  never chosen however high its fitness.
+
+    `keep_image` attaches the fused result under "image" so a session can write
+    it out. Left off by default because holding one 2.2 megapixel frame per
+    candidate for the length of a search is megabytes for nothing when nobody
+    is going to look at them.
     """
     started = time.time()
     fused = fuse(fixture.stack, settings)
@@ -255,7 +398,7 @@ def measure(fixture, settings):
         if shares[HEAVIEST] <= softest:
             reasons.append(f"softer than {HEAVIEST} ({shares[HEAVIEST]:.3f})")
 
-    return {
+    scored = {
         "settings": dict(settings),
         "fitness": float(np.mean(list(agreements.values()))),
         "agreement": {k: float(v) for k, v in agreements.items()},
@@ -266,6 +409,14 @@ def measure(fixture, settings):
         "admissible": not reasons,
         "seconds": round(time.time() - started, 2),
     }
+    if keep_image:
+        scored["image"] = fused
+    return scored
+
+
+def _without_image(scored):
+    """A candidate record fit for JSON: everything but the frame itself."""
+    return {key: value for key, value in scored.items() if key != "image"}
 
 
 def guard_holds(candidate, incumbent, tolerance=GUARD_TOLERANCE_DB):
@@ -301,7 +452,7 @@ def accepts(candidate, incumbent):
 # The search
 # ---------------------------------------------------------------------------
 
-def search(fixture, rounds=2, start=None, log=print):
+def search(fixture, rounds=2, start=None, log=print, session=None):
     """
     Coordinate descent over the tunables: one constant at a time, repeated.
 
@@ -310,12 +461,21 @@ def search(fixture, rounds=2, start=None, log=print):
     constant, at this value, moved the score by this much against everything
     else held still", which is a sentence that can be checked; the interactions
     a joint search would find could not be attributed to anything.
+
+    A `session` collects the log and every candidate's render as it goes; pass
+    one when the run is meant to be looked at afterwards.
     """
-    incumbent = measure(fixture, start or default_settings())
+    if session is not None and log is print:
+        log = session.log
+    keep = session is not None and session.images != "none"
+
+    incumbent = measure(fixture, start or default_settings(), keep_image=keep)
     incumbent["origin"] = "incumbent"
     history = [incumbent]
     log(f"incumbent fitness {incumbent['fitness']:.4f}"
         f"{'' if incumbent['admissible'] else '  INADMISSIBLE: ' + '; '.join(incumbent['reasons'])}")
+    if session is not None:
+        session.save_image("incumbent", incumbent.get("image"))
 
     for round_index in range(rounds):
         improved = False
@@ -331,7 +491,7 @@ def search(fixture, rounds=2, start=None, log=print):
                 tried.add(value)
                 settings = dict(incumbent["settings"])
                 settings[tunable.constant] = value
-                candidate = measure(fixture, settings)
+                candidate = measure(fixture, settings, keep_image=keep)
                 candidate["origin"] = f"round {round_index}: {tunable.constant}={value}"
                 history.append(candidate)
 
@@ -339,13 +499,20 @@ def search(fixture, rounds=2, start=None, log=print):
                 log(f"  {tunable.constant}={value!r:>8}  "
                     f"fitness {candidate['fitness']:.4f}  "
                     f"{'ACCEPT' if ok else 'keep  '}  {why}")
+                if session is not None:
+                    # Differenced against the incumbent it was competing with,
+                    # which is what "what did this change" means at that point.
+                    session.save_image(f"{tunable.constant}={value}",
+                                       candidate.get("image"),
+                                       against=incumbent.get("image"),
+                                       accepted=ok)
                 if ok:
                     incumbent, improved = candidate, True
         if not improved:
             log(f"round {round_index}: nothing improved, stopping")
             break
 
-    return incumbent, history
+    return incumbent, [_without_image(c) for c in history]
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +616,10 @@ def main(argv=None):
                         help="a short run on fewer frames and one guard scenario")
     parser.add_argument("--apply", action="store_true",
                         help="write the winner into fusion_methods/pyramid.py")
+    parser.add_argument("--images", choices=("all", "accepted", "none"), default="all",
+                        help="which candidates' renders to keep in the session folder")
+    parser.add_argument("--logs", default=None,
+                        help=f"where session folders go (default {os.path.relpath(LOGS, ROOT)}/)")
     args = parser.parse_args(argv)
 
     if not captures.is_available(CAPTURE):
@@ -460,31 +631,58 @@ def main(argv=None):
               "and not a choice of constants. Re-run without --quick to apply.")
         return 2
 
-    fixture = Fixture(quick=args.quick)
-    print(f"{len(fixture.stack)} frames, {len(fixture.renders)} renders, "
-          f"{len(fixture.guard_scenarios)} guard scenarios")
+    session = Session(root=args.logs, images=args.images,
+                      tag="autotune-quick" if args.quick else "autotune")
+    try:
+        fixture = Fixture(quick=args.quick)
+        session.log(f"{len(fixture.stack)} frames, {len(fixture.renders)} renders, "
+                    f"{len(fixture.guard_scenarios)} guard scenarios, "
+                    f"images={args.images}")
 
-    champion, history = search(fixture, rounds=args.rounds)
-    changed = {k: v for k, v in champion["settings"].items()
-               if v != default_settings()[k]}
+        champion, history = search(fixture, rounds=args.rounds, session=session)
+        champion = _without_image(champion)
+        changed = {k: v for k, v in champion["settings"].items()
+                   if v != default_settings()[k]}
 
-    print(f"\nbest fitness {champion['fitness']:.4f} after {len(history)} candidates")
-    if not changed:
-        print("the shipped constants are still the best of those tried")
-    else:
-        for constant, value in sorted(changed.items()):
-            print(f"  {constant}: {default_settings()[constant]!r} -> {value!r}")
+        session.log(f"best fitness {champion['fitness']:.4f} after "
+                    f"{len(history)} candidates")
+        if not changed:
+            session.log("the shipped constants are still the best of those tried")
+        else:
+            for constant, value in sorted(changed.items()):
+                session.log(f"  {constant}: {default_settings()[constant]!r} "
+                            f"-> {value!r}")
 
-    applied = False
-    if args.apply and changed:
-        applied = apply_to_source(champion["settings"])
-        print("re-run the test suites before committing: the guard here covers "
-              f"{len(fixture.guard_scenarios)} scenarios, the suites cover the rest")
-    elif args.apply:
-        print("nothing to write")
+        applied = False
+        if args.apply and changed:
+            applied = apply_to_source(champion["settings"], log=session.log)
+            session.log("re-run the test suites before committing: the guard here "
+                        f"covers {len(fixture.guard_scenarios)} scenarios, the "
+                        f"suites cover the rest")
+        elif args.apply:
+            session.log("nothing to write")
 
-    save_ledger(champion, history, applied=applied)
-    print(f"ledger updated: {os.path.relpath(LEDGER)}")
+        if args.quick:
+            # A quick run drops the bracket and checks one guard scenario
+            # instead of three, so it accepts things a full run refuses - this
+            # one took COHERENCE=0.25, which the full run rejects for costing
+            # 2.5 dB on fine_texture, a scenario quick mode never looks at.
+            # Letting that reach the shared ledger would put a champion on
+            # record that the real objective does not agree with, so a quick
+            # run stays inside its own session folder.
+            session.log("quick run: ledger left alone, results are in this "
+                        "session only")
+        else:
+            save_ledger(champion, history, applied=applied)
+            session.log(f"ledger updated: {os.path.relpath(LEDGER, ROOT)}")
+        session.finish(champion, history, applied=applied,
+                       extra={"rounds": args.rounds, "quick": args.quick})
+    except BaseException as exc:
+        # A run that died half way is exactly the one whose log is worth having.
+        session.log(f"session failed: {type(exc).__name__}: {exc}")
+        session.finish()
+        raise
+    print(f"session: {os.path.relpath(session.path, ROOT)}")
     return 0
 
 

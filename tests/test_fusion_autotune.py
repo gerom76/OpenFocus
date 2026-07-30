@@ -31,9 +31,11 @@ Run with:  python -m pytest tests/test_fusion_autotune.py -v
 
 import json
 import os
+import re
 import shutil
 import sys
 
+import cv2
 import numpy as np
 import pytest
 
@@ -319,8 +321,157 @@ def test_a_rewrite_that_does_not_take_is_reverted(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# The session folder
+# ---------------------------------------------------------------------------
+
+def test_a_session_makes_its_own_folder(tmp_path):
+    """Each run gets a directory of its own, so no run overwrites another."""
+    first = auto.Session(root=str(tmp_path), stamp="fixed")
+    second = auto.Session(root=str(tmp_path), stamp="fixed")
+
+    assert first.path != second.path, "two runs shared a folder"
+    assert os.path.isdir(first.path) and os.path.isdir(second.path)
+    for session in (first, second):
+        assert os.path.isfile(session.log_path)
+        session.finish()
+
+
+def test_the_log_reaches_the_file_as_well_as_the_screen(tmp_path, capsys):
+    session = auto.Session(root=str(tmp_path), stamp="log")
+    session.log("candidate SELECTIVITY=16.0 rejected")
+    session.finish()
+
+    assert "candidate SELECTIVITY=16.0 rejected" in capsys.readouterr().out
+    with open(session.log_path, encoding="utf-8") as handle:
+        written = handle.read()
+    assert "candidate SELECTIVITY=16.0 rejected" in written
+    assert "session " in written, "the log does not say which session it is"
+
+
+def test_a_session_keeps_the_render_and_a_difference(tmp_path):
+    """
+    The images are the point of the folder: two candidates a thousandth apart
+    in fitness can look quite different, and which is right is a judgement about
+    the picture rather than about the number.
+    """
+    session = auto.Session(root=str(tmp_path), stamp="img")
+    rng = np.random.default_rng(3)
+    base = (rng.random((64, 96, 3)) * 255).astype(np.uint8)
+    other = base.copy()
+    other[10:20, 10:20] = 0
+
+    session.save_image("incumbent", base)
+    session.save_image("SELECTIVITY=16.0", other, against=base)
+    session.finish()
+
+    written = sorted(os.listdir(session.image_dir))
+    assert written[0] == "00-incumbent.webp"
+    assert written[2] == "01-SELECTIVITY=16.0.webp"
+    # The amplification is chosen per image and named, so the file says how far
+    # what it shows is from the difference that was actually there.
+    assert re.fullmatch(r"01-SELECTIVITY=16\.0\.diff-x\d+\.webp", written[1]), written
+    diff = cv2.imread(os.path.join(session.image_dir, written[1]))
+    assert diff is not None and diff.max() > 0
+
+
+def test_a_faint_difference_is_amplified_and_an_identical_one_is_not(tmp_path):
+    """
+    The factor exists so a two-level change is visible; a fixed one would render
+    most candidate pairs almost black. Two identical candidates must not come
+    back as an amplified picture of rounding.
+    """
+    session = auto.Session(root=str(tmp_path), stamp="amp")
+    base = np.full((32, 32, 3), 120, np.uint8)
+
+    faint = base.copy()
+    faint[4:8, 4:8] = 122                       # two levels
+    session.save_image("faint", faint, against=base)
+    session.save_image("identical", base.copy(), against=base)
+    session.finish()
+
+    names = sorted(n for n in os.listdir(session.image_dir) if ".diff-" in n)
+    factors = {n.split(".diff-x")[1].split(".webp")[0] for n in names}
+    assert "1" in factors, "an identical pair was amplified"
+    amplified = [int(f) for f in factors if f != "1"]
+    assert amplified and max(amplified) > 8, \
+        f"a two-level difference was not brought up ({factors})"
+    assert max(amplified) <= auto.DIFF_MAX_AMPLIFY
+
+
+def test_a_session_can_be_told_to_keep_no_images(tmp_path):
+    session = auto.Session(root=str(tmp_path), stamp="noimg", images="none")
+    assert session.save_image("anything", np.zeros((8, 8, 3), np.uint8)) is None
+    session.finish()
+    assert not os.path.isdir(session.image_dir)
+    assert os.path.isfile(session.summary_path)
+
+
+def test_a_session_keeps_only_the_accepted_candidates_when_asked(tmp_path):
+    session = auto.Session(root=str(tmp_path), stamp="acc", images="accepted")
+    frame = np.zeros((8, 8, 3), np.uint8)
+    assert session.save_image("kept", frame, accepted=True)
+    assert session.save_image("dropped", frame, accepted=False) is None
+    session.finish()
+    assert [n for n in os.listdir(session.image_dir)] == ["00-kept.webp"]
+
+
+def test_a_name_that_is_not_a_filename_is_made_into_one(tmp_path):
+    session = auto.Session(root=str(tmp_path), stamp="safe")
+    session.save_image("a/b:c*?", np.zeros((8, 8, 3), np.uint8))
+    session.finish()
+    written = os.listdir(session.image_dir)
+    assert written == ["00-a_b_c__.webp"], written
+
+
+def test_the_summary_is_json_and_carries_no_pixels(tmp_path, incumbent):
+    """
+    summary.json has to stay readable, which means the fused frames attached to
+    a candidate for the image writer must not end up in it.
+    """
+    session = auto.Session(root=str(tmp_path), stamp="sum", images="none")
+    withimage = dict(incumbent, image=np.zeros((4, 4, 3), np.uint8))
+    session.finish(champion=auto._without_image(withimage),
+                   history=[auto._without_image(withimage)])
+
+    with open(session.summary_path, encoding="utf-8") as handle:
+        summary = json.load(handle)
+    assert "image" not in summary["champion"]
+    assert "image" not in summary["history"][0]
+    assert summary["champion"]["settings"] == incumbent["settings"]
+    assert summary["shipped_settings"] == auto.default_settings()
+
+
+def test_a_failed_run_still_leaves_its_log(tmp_path):
+    """The run that died half way is the one whose log is worth having."""
+    session = auto.Session(root=str(tmp_path), stamp="boom")
+    session.log("about to fail")
+    session.finish()
+
+    assert os.path.isfile(session.summary_path)
+    with open(session.log_path, encoding="utf-8") as handle:
+        assert "about to fail" in handle.read()
+
+
+# ---------------------------------------------------------------------------
 # The loop, and the ledger it leaves behind
 # ---------------------------------------------------------------------------
+
+def test_a_search_writes_its_candidates_into_the_session(fixture, tmp_path,
+                                                         monkeypatch):
+    """The search and the session have to actually be wired together."""
+    only = [t for t in auto.TUNABLES if t.constant == "SELECTIVITY"]
+    monkeypatch.setattr(auto, "TUNABLES", only)
+    session = auto.Session(root=str(tmp_path), stamp="wired")
+
+    champion, history = auto.search(fixture, rounds=1, session=session)
+    session.finish(auto._without_image(champion), history)
+
+    # One render per candidate, plus a difference for all but the incumbent.
+    names = os.listdir(session.image_dir)
+    assert len([n for n in names if ".diff-" not in n]) == len(history)
+    assert any(re.search(r"\.diff-x\d+\.", n) for n in names)
+    with open(session.log_path, encoding="utf-8") as handle:
+        assert "incumbent fitness" in handle.read()
 
 def test_a_search_round_returns_an_admissible_champion(fixture, monkeypatch):
     """

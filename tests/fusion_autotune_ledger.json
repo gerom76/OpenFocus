@@ -26,7 +26,7 @@
   },
   "origin": "incumbent",
   "reasons": [],
-  "seconds": 2.73,
+  "seconds": 2.74,
   "settings": {
    "BASE_SELECTIVITY": 3.0,
    "COHERENCE": 0.0,
@@ -80,7 +80,70 @@
     },
     "origin": "incumbent",
     "reasons": [],
-    "seconds": 2.73,
+    "seconds": 3.11,
+    "settings": {
+     "BASE_SELECTIVITY": 3.0,
+     "COHERENCE": 0.0,
+     "DEFAULT_LEVELS": 5,
+     "ENERGY_WINDOW": 5,
+     "NOISE_PERCENTILE": 10.0,
+     "SELECTIVITY": 8.0
+    },
+    "share": {
+     "Affinity": 0.4428061842918396,
+     "HF-A-1-2": 0.8279356360435486,
+     "HF-A-30-1": 1.2271040678024292,
+     "HF-A-50-2": 1.611864447593689,
+     "HF-B-1-2": 0.7431502342224121,
+     "HF-B-30-1": 0.7749207019805908,
+     "HF-B-50-2": 0.8361467123031616,
+     "HF-C-1": 0.9157680869102478,
+     "HF-C-10": 1.1680251359939575,
+     "HF-C-4": 0.96941739320755,
+     "HF-C-6": 1.0185786485671997
+    }
+   },
+   "considered": 16,
+   "guard_scenarios": [
+    "fine_texture",
+    "depth_edge",
+    "long_stack"
+   ],
+   "guard_tolerance_db": 0.3,
+   "note": "Written by `python -m tests.fusion_autotune`. `champion.settings` is what fusion_methods/pyramid.py should hold if applied_to_source is true; tests/test_fusion_autotune.py checks that it does.",
+   "stack_step": 12
+  },
+  {
+   "applied_to_source": false,
+   "capture": "electronics_ant",
+   "champion": {
+    "admissible": true,
+    "agreement": {
+     "Affinity": 0.6487893213096293,
+     "HF-A-1-2": 0.6148427066706297,
+     "HF-A-30-1": 0.5989029709515528,
+     "HF-A-50-2": 0.5901211994862849,
+     "HF-B-1-2": 0.6050404575329613,
+     "HF-B-30-1": 0.6014432990361213,
+     "HF-B-50-2": 0.5866834868025883,
+     "HF-C-1": 0.5933787535663011,
+     "HF-C-10": 0.6128070608631354,
+     "HF-C-4": 0.5963216776773379,
+     "HF-C-6": 0.5995186217428052
+    },
+    "envelope": [
+     0,
+     0
+    ],
+    "fitness": 0.604349959603577,
+    "guard_psnr": {
+     "depth_edge": 37.855848924070074,
+     "fine_texture": 46.045893171479406,
+     "long_stack": 46.117072437603284
+    },
+    "origin": "incumbent",
+    "reasons": [],
+    "seconds": 2.74,
     "settings": {
      "BASE_SELECTIVITY": 3.0,
      "COHERENCE": 0.0,
