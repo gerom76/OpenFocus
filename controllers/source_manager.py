@@ -193,12 +193,14 @@ class SourceManager:
             return
 
         scale_factor = dialog.get_scale_factor()
+        long_edge = dialog.get_target_long_edge()
 
         window.current_folder_path = folder_path
 
         try:
             success, message, full_res_images, filenames = window.image_loader.load_from_folder(
-                folder_path, scale_factor=scale_factor, progress_callback=self._begin_load_progress()
+                folder_path, scale_factor=scale_factor, progress_callback=self._begin_load_progress(),
+                target_long_edge=long_edge
             )
 
             if not success:
@@ -235,12 +237,14 @@ class SourceManager:
             return
 
         scale_factor = dialog.get_scale_factor()
+        long_edge = dialog.get_target_long_edge()
 
         window.current_folder_path = os.path.dirname(video_path)
 
         try:
             success, message, full_res_images, filenames = window.image_loader.load_from_video(
-                video_path, scale_factor=scale_factor, progress_callback=self._begin_load_progress()
+                video_path, scale_factor=scale_factor, progress_callback=self._begin_load_progress(),
+                target_long_edge=long_edge
             )
 
             if not success:
@@ -334,7 +338,9 @@ class SourceManager:
                     scale = dlg.get_scale_factor()
 
                     # Open the batch dialog and preload the folder
-                    self.window.show_batch_processing_dialog(preload_folder_paths=[paths[0]], scale_factor=scale)
+                    self.window.show_batch_processing_dialog(
+                        preload_folder_paths=[paths[0]], scale_factor=scale,
+                        target_long_edge=dlg.get_target_long_edge())
                     event.acceptProposedAction()
             else:
                 event.ignore()
@@ -349,7 +355,9 @@ class SourceManager:
                 return
             scale = dlg.get_scale_factor()
 
-            self.window.show_batch_processing_dialog(preload_folder_paths=paths, scale_factor=scale)
+            self.window.show_batch_processing_dialog(
+                preload_folder_paths=paths, scale_factor=scale,
+                target_long_edge=dlg.get_target_long_edge())
             event.acceptProposedAction()
             return
 
@@ -396,7 +404,8 @@ class SourceManager:
             scale = dlg.get_scale_factor()
 
             success, message, full_res_images, filenames = loader.load_from_filepaths(
-                valid_paths, scale_factor=scale, progress_callback=self._begin_load_progress(loader)
+                valid_paths, scale_factor=scale, progress_callback=self._begin_load_progress(loader),
+                target_long_edge=dlg.get_target_long_edge()
             )
             self._end_load_progress()
             if not success:
@@ -720,7 +729,8 @@ class SourceManager:
                 if dlg.exec():
                     self.window.show_batch_processing_dialog(
                         preload_folder_paths=[folder_path],
-                        scale_factor=dlg.get_scale_factor()
+                        scale_factor=dlg.get_scale_factor(),
+                        target_long_edge=dlg.get_target_long_edge()
                     )
 
     def load_multiple_folders_from_icon(self, folder_paths: list[str]) -> None:
@@ -730,7 +740,8 @@ class SourceManager:
         if dlg.exec():
             self.window.show_batch_processing_dialog(
                 preload_folder_paths=folder_paths,
-                scale_factor=dlg.get_scale_factor()
+                scale_factor=dlg.get_scale_factor(),
+                target_long_edge=dlg.get_target_long_edge()
             )
 
     def load_video_stack_from_icon(self, video_path: str) -> None:
@@ -750,7 +761,8 @@ class SourceManager:
         loader = self.window.image_loader if hasattr(self.window, "image_loader") else ImageStackLoader()
         try:
             success, message, full_res_images, filenames = loader.load_from_filepaths(
-                file_paths, scale_factor=scale, progress_callback=self._begin_load_progress(loader)
+                file_paths, scale_factor=scale, progress_callback=self._begin_load_progress(loader),
+                target_long_edge=dlg.get_target_long_edge()
             )
         finally:
             self._end_load_progress()

@@ -24,6 +24,8 @@ from typing import List, Optional
 
 import numpy as np
 
+from core import downsample
+
 # Below this many JPEGs the CUDA context / nvJPEG spin-up costs more than it
 # saves, so callers should not bother asking.
 MIN_IMAGES = 4
@@ -104,6 +106,7 @@ def device_name() -> str:
 def decode_jpegs(
     datas: List[Optional[np.ndarray]],
     scale_factor: float = 1.0,
+    target_long_edge: Optional[int] = None,
 ) -> List[Optional[np.ndarray]]:
     """Decode JPEG byte buffers on the GPU, in input order.
 
@@ -137,7 +140,7 @@ def decode_jpegs(
                     decoded.append(None)
         for (index, _), img in zip(chunk, decoded):
             if img is not None:
-                out[index] = _to_bgr_numpy(img, scale_factor)
+                out[index] = _to_bgr_numpy(img, scale_factor, target_long_edge)
     return out
 
 
@@ -394,16 +397,16 @@ def _demosaic_mhc(cfa, cell):
     return torch.stack((red, green, blue)).clamp_(0.0, 1.0)
 
 
-def _to_bgr_numpy(img, scale_factor: float) -> np.ndarray:
+def _to_bgr_numpy(img, scale_factor: float, target_long_edge: Optional[int] = None) -> np.ndarray:
     """(3, H, W) RGB uint8 CUDA tensor -> (H, W, 3) BGR uint8 numpy array."""
     import torch
     import torch.nn.functional as F
 
-    if scale_factor != 1.0 and 0 < scale_factor < 1.0:
+    size = downsample.target_size(img.shape[2], img.shape[1], scale_factor, target_long_edge)
+    if size is not None:
         # Area interpolation is the tensor analogue of cv2.INTER_AREA, which
         # the CPU path uses for the same downscale.
-        height = int(img.shape[1] * scale_factor)
-        width = int(img.shape[2] * scale_factor)
+        width, height = size
         img = F.interpolate(img.unsqueeze(0).float(), size=(height, width), mode='area')
         img = img.squeeze(0).round_().clamp_(0, 255).to(torch.uint8)
     return img.flip(0).permute(1, 2, 0).contiguous().cpu().numpy()

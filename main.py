@@ -962,12 +962,14 @@ class OpenFocus(QMainWindow):
         dialog = ContactInfoDialog(self)
         dialog.exec()
     
-    def show_batch_processing_dialog(self, preload_folder_paths: list[str] = None, scale_factor: float = 1.0):
+    def show_batch_processing_dialog(self, preload_folder_paths: list[str] = None, scale_factor: float = 1.0,
+                                     target_long_edge: int | None = None):
         """Show the batch-processing settings dialog
 
         Args:
             preload_folder_paths: optional, list of folder paths to preload (for drag-and-drop scenarios)
             scale_factor: scale factor, used to scale images during preloading
+            target_long_edge: long edge in pixels to downsample to instead of a scale factor
         """
         from dialogs import BatchProcessingDialog
 
@@ -975,9 +977,9 @@ class OpenFocus(QMainWindow):
 
         if preload_folder_paths:
             if len(preload_folder_paths) == 1:
-                dialog.preload_single_folder(preload_folder_paths[0], scale_factor)
+                dialog.preload_single_folder(preload_folder_paths[0], scale_factor, target_long_edge)
             else:
-                dialog.preload_multiple_folders(preload_folder_paths, scale_factor)
+                dialog.preload_multiple_folders(preload_folder_paths, scale_factor, target_long_edge)
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
             folder_paths = dialog.folder_paths

@@ -3,6 +3,7 @@ from typing import Any
 
 from PyQt6.QtGui import QFont
 
+from core import downsample
 from dialogs import DownsampleDialog
 from utils import show_error_box, show_success_box, show_warning_box, get_default_font
 from locales import trans
@@ -51,37 +52,46 @@ class TransformManager:
             show_warning_box(window, trans.t("msg_no_images_title"), trans.t("msg_no_images_resize"))
             return
 
+        base_images = getattr(window, "base_images", None) or window.raw_images
         current_scale = getattr(window, "current_scale_factor", 1.0)
-        dialog = DownsampleDialog(window, initial_scale=current_scale)
+        dialog = DownsampleDialog(
+            window,
+            initial_scale=current_scale,
+            # The pixel field starts at the size the frames actually have, so a
+            # long edge is picked against something concrete.
+            initial_long_edge=max(base_images[0].shape[1], base_images[0].shape[0]),
+        )
         if not dialog.exec():
             return
 
         new_scale = dialog.get_scale_factor()
-        if abs(new_scale - current_scale) < 0.001:
+        long_edge = dialog.get_target_long_edge()
+        if long_edge is None and abs(new_scale - current_scale) < 0.001:
             return
 
         try:
-            if new_scale == 1.0:
-                window.raw_images = [img.copy() for img in window.base_images]
-            else:
-                new_width = int(window.base_images[0].shape[1] * new_scale)
-                new_height = int(window.base_images[0].shape[0] * new_scale)
-                resized = []
-                for img in window.raw_images:
-                    resized_img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                    resized.append(resized_img)
-                window.raw_images = resized
+            # Every resize starts from the untouched frames, so repeated trips
+            # through this dialog never stack one resample on top of another.
+            resized = []
+            for base in base_images:
+                size = downsample.target_size(base.shape[1], base.shape[0], new_scale, long_edge)
+                resized.append(base.copy() if size is None
+                               else cv2.resize(base, size, interpolation=cv2.INTER_AREA))
+            window.raw_images = resized
 
-            window.current_scale_factor = new_scale
+            # The stored scale stays relative to the base frames, so a long-edge
+            # target is recorded as whatever ratio it worked out to.
+            window.current_scale_factor = resized[0].shape[1] / base_images[0].shape[1]
 
             self._invalidate_processing_results(clear_output_view=True, preserve_outputs=True)
             self.reload_image_stack()
 
-            show_success_box(
-                window,
-                trans.t("msg_success"),
-                trans.t("msg_resize_success_text").format(percent=int(new_scale * 100)),
-            )
+            if long_edge is None:
+                text = trans.t("msg_resize_success_text").format(percent=int(new_scale * 100))
+            else:
+                text = trans.t("msg_resize_success_px_text").format(
+                    width=resized[0].shape[1], height=resized[0].shape[0])
+            show_success_box(window, trans.t("msg_success"), text)
         except Exception as exc:  # pylint: disable=broad-except
             show_error_box(
                 window,

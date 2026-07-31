@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
 )
+from core import downsample
 from ui.styles import ADD_LABEL_DIALOG_STYLE, PRIMARY_BLUE
 from locales import trans
 from utils import dng, resource_path
@@ -189,11 +190,14 @@ class ExportFormatDialog(QDialog):
 class DownsampleDialog(QDialog):
     """Downsampling settings dialog"""
 
-    def __init__(self, parent=None, initial_scale=1.0):
+    def __init__(self, parent=None, initial_scale=1.0, initial_long_edge=None):
         super().__init__(parent)
         self.setWindowTitle(trans.t('ds_title'))
-        self.resize(400, 150)
+        self.resize(420, 230)
         self.scale_percent = int(initial_scale * 100)
+        # Callers that already hold a frame pass its long edge, so switching to
+        # pixel mode starts at the current size instead of an arbitrary number.
+        self.long_edge_default = int(initial_long_edge) if initial_long_edge else downsample.DEFAULT_LONG_EDGE
 
         # Apply the dark theme
         self.setStyleSheet(f"""
@@ -204,6 +208,13 @@ class DownsampleDialog(QDialog):
             }}
             QLabel {{
                 color: #ffffff;
+            }}
+            QLabel:disabled {{
+                color: #777777;
+            }}
+            QRadioButton {{
+                color: #ffffff;
+                spacing: 6px;
             }}
             QSlider::groove:horizontal {{
                 border: 1px solid #333;
@@ -253,6 +264,17 @@ class DownsampleDialog(QDialog):
         # Description text
         info_label = QLabel(trans.t('ds_label'))
         layout.addWidget(info_label)
+
+        # Mode selection: shrink by a percentage, or to a fixed long edge
+        mode_layout = QHBoxLayout()
+        self.percent_radio = QRadioButton(trans.t('ds_mode_percent'))
+        self.long_edge_radio = QRadioButton(trans.t('ds_mode_long_edge'))
+        self.percent_radio.setChecked(True)
+        self.percent_radio.toggled.connect(self._update_mode)
+        mode_layout.addWidget(self.percent_radio)
+        mode_layout.addWidget(self.long_edge_radio)
+        mode_layout.addStretch()
+        layout.addLayout(mode_layout)
 
         # Widget layout
         controls_layout = QHBoxLayout()
@@ -321,6 +343,23 @@ class DownsampleDialog(QDialog):
         controls_layout.addWidget(self.spinbox)
         layout.addLayout(controls_layout)
 
+        # Long-edge row
+        long_edge_layout = QHBoxLayout()
+        self.long_edge_label = QLabel(trans.t('ds_long_edge_label'))
+        self.long_edge_spinbox = QSpinBox()
+        self.long_edge_spinbox.setRange(downsample.MIN_LONG_EDGE, downsample.MAX_LONG_EDGE)
+        self.long_edge_spinbox.setValue(
+            min(max(self.long_edge_default, downsample.MIN_LONG_EDGE), downsample.MAX_LONG_EDGE))
+        self.long_edge_spinbox.setSingleStep(100)
+        self.long_edge_spinbox.setSuffix(" px")
+        self.long_edge_spinbox.setFixedWidth(110)
+        long_edge_layout.addWidget(self.long_edge_label)
+        long_edge_layout.addWidget(self.long_edge_spinbox)
+        long_edge_layout.addStretch()
+        layout.addLayout(long_edge_layout)
+
+        self._update_mode()
+
         # Hint text
         hint_label = QLabel(trans.t('ds_hint'))
         hint_label.setStyleSheet("color: #aaa; font-size: 11px; font-style: italic;")
@@ -343,9 +382,29 @@ class DownsampleDialog(QDialog):
 
         layout.addLayout(button_layout)
 
+    def _update_mode(self):
+        """Leave only the widgets of the selected mode usable."""
+        by_percent = self.percent_radio.isChecked()
+        for widget in (self.decrease_btn, self.slider, self.increase_btn, self.spinbox):
+            widget.setEnabled(by_percent)
+        self.long_edge_label.setEnabled(not by_percent)
+        self.long_edge_spinbox.setEnabled(not by_percent)
+
     def get_scale_factor(self):
-        """Return the scale factor (0.0 - 1.0)"""
+        """Return the scale factor (0.0 - 1.0), or 1.0 when sizing by long edge"""
+        if self.long_edge_radio.isChecked():
+            return 1.0
         return self.slider.value() / 100.0
+
+    def get_target_long_edge(self):
+        """Return the requested long edge in pixels, or None in percentage mode.
+
+        The two getters are meant to be read together and handed on as a pair -
+        core.downsample.target_size() resolves whichever one is set.
+        """
+        if not self.long_edge_radio.isChecked():
+            return None
+        return self.long_edge_spinbox.value()
 
 
 class TileSettingsDialog(QDialog):

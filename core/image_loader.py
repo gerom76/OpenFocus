@@ -31,7 +31,7 @@ from PyQt6.QtGui import QPixmap, QImage
 
 from utils import bitdepth, dng, jxl
 from utils.image_utils import ensure_bgr, read_image_any_depth
-from core import gpu_decode, memory
+from core import downsample, gpu_decode, memory
 
 # Progress lines are throttled to this interval so a large stack does not
 # flood the Qt console redirect, which is far slower than the decode itself.
@@ -204,7 +204,8 @@ class ImageStackLoader:
         return read_image_any_depth(full_path)
 
     @classmethod
-    def _probe_frame_bytes(cls, full_path: str, scale_factor: float = 1.0) -> Optional[int]:
+    def _probe_frame_bytes(cls, full_path: str, scale_factor: float = 1.0,
+                           target_long_edge: Optional[int] = None) -> Optional[int]:
         """Decoded size of one frame in bytes, read from headers only.
 
         Lets the loader size its thread pool and warn about the stack it is
@@ -244,9 +245,9 @@ class ImageStackLoader:
         except Exception:
             return None
 
-        if scale_factor != 1.0 and 0 < scale_factor < 1.0:
-            width = int(width * scale_factor)
-            height = int(height * scale_factor)
+        resized = downsample.target_size(width, height, scale_factor, target_long_edge)
+        if resized is not None:
+            width, height = resized
         # Frames are stored as 3-channel BGR at the depth the mode resolves to.
         return width * height * 3 * np.dtype(bitdepth.resolve_load_dtype(native)).itemsize
 
@@ -263,13 +264,14 @@ class ImageStackLoader:
         print(line, flush=True)
         if available is not None and projected > available * self.MEMORY_WARN_SHARE:
             print("[Memory] That is more than this machine can comfortably hold. "
-                  "Load fewer frames, or pick a smaller scale in the resize dialog "
-                  "so frames are downsampled as they are decoded.", flush=True)
+                  "Load fewer frames, or pick a smaller scale (or long edge) in the "
+                  "resize dialog so frames are downsampled as they are decoded.", flush=True)
 
     def _load_files_parallel(
         self,
         entries: List[Tuple[str, str]],
         scale_factor: float = 1.0,
+        target_long_edge: Optional[int] = None,
         max_workers: Optional[int] = None,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> List[Optional[np.ndarray]]:
@@ -293,7 +295,8 @@ class ImageStackLoader:
         total = len(entries)
         results: List[Optional[np.ndarray]] = [None] * total
 
-        frame_bytes = self._probe_frame_bytes(entries[0][1], scale_factor) if entries else None
+        frame_bytes = (self._probe_frame_bytes(entries[0][1], scale_factor, target_long_edge)
+                       if entries else None)
         self._report_stack_memory(frame_bytes, total)
 
         # RAW and JPEG XL are the formats whose decode holds several full frames
@@ -337,10 +340,11 @@ class ImageStackLoader:
                 return index, filename, None, "not_found"
             try:
                 img = self.read_image_bgr(full_path)
-                if img is not None and scale_factor != 1.0 and 0 < scale_factor < 1.0:
-                    width = int(img.shape[1] * scale_factor)
-                    height = int(img.shape[0] * scale_factor)
-                    img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+                if img is not None:
+                    size = downsample.target_size(
+                        img.shape[1], img.shape[0], scale_factor, target_long_edge)
+                    if size is not None:
+                        img = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
                 return index, filename, img, None
             except Exception as e:
                 return index, filename, None, str(e)
@@ -418,7 +422,8 @@ class ImageStackLoader:
                     if self._cancel_requested:
                         break
                     chunk = order[chunk_start:chunk_start + self.GPU_CHUNK]
-                    decoded = gpu_decode.decode_jpegs([buffers.get(i) for i in chunk], scale_factor)
+                    decoded = gpu_decode.decode_jpegs(
+                        [buffers.get(i) for i in chunk], scale_factor, target_long_edge)
                     for index, img in zip(chunk, decoded):
                         if img is None:
                             fallback.append(index)
@@ -471,6 +476,7 @@ class ImageStackLoader:
         folder_path: str,
         scale_factor: float = 1.0,
         progress_callback: Optional[ProgressCallback] = None,
+        target_long_edge: Optional[int] = None,
     ) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not os.path.isdir(folder_path):
             return False, "Selected path is not a valid directory", [], []
@@ -487,7 +493,8 @@ class ImageStackLoader:
 
         image_files.sort(key=lambda x: x[0])
 
-        decoded = self._load_files_parallel(image_files, scale_factor, progress_callback=progress_callback)
+        decoded = self._load_files_parallel(image_files, scale_factor, target_long_edge,
+                                            progress_callback=progress_callback)
         if self.cancelled:
             return False, "Loading cancelled", [], []
 
@@ -522,6 +529,7 @@ class ImageStackLoader:
         video_path: str,
         scale_factor: float = 1.0,
         progress_callback: Optional[ProgressCallback] = None,
+        target_long_edge: Optional[int] = None,
     ) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not os.path.isfile(video_path):
             return False, "Video file does not exist", [], []
@@ -557,10 +565,10 @@ class ImageStackLoader:
                 if not ret:
                     break
 
-                if scale_factor != 1.0 and 0 < scale_factor < 1.0:
-                    width = int(frame.shape[1] * scale_factor)
-                    height = int(frame.shape[0] * scale_factor)
-                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+                size = downsample.target_size(
+                    frame.shape[1], frame.shape[0], scale_factor, target_long_edge)
+                if size is not None:
+                    frame = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
 
                 # Video frames always decode as 8-bit; honour a forced 16-bit
                 # mode so a video stack matches the rest of the pipeline.
@@ -613,12 +621,14 @@ class ImageStackLoader:
         filepaths: list[str],
         scale_factor: float = 1.0,
         progress_callback: Optional[ProgressCallback] = None,
+        target_long_edge: Optional[int] = None,
     ) -> Tuple[bool, str, List[np.ndarray], List[str]]:
         if not filepaths:
             return False, "No file paths provided", [], []
 
         entries = [(os.path.basename(p), p) for p in filepaths]
-        decoded = self._load_files_parallel(entries, scale_factor, progress_callback=progress_callback)
+        decoded = self._load_files_parallel(entries, scale_factor, target_long_edge,
+                                            progress_callback=progress_callback)
         if self.cancelled:
             return False, "Loading cancelled", [], []
 

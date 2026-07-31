@@ -113,8 +113,12 @@ The top menu bar provides access to all functions:
 
 1. Go to **File → Open Folder** or press `Ctrl+O`
 2. Select a folder containing your image sequence
-3. A downsample dialog will appear - choose your preferred scale factor
+3. A downsample dialog will appear - choose either a scale factor (%) or a target size for the longer edge (px)
 4. Click OK to load the images
+
+The longer-edge target is applied to each image separately, so a mixed-size
+stack ends up with one common long edge. Images already at or below the target
+are left untouched - downsampling never enlarges an image.
 
 The software will automatically:
 - Detect and sort image files by filename

@@ -197,6 +197,7 @@ class TranslationManager(QObject):
                 'msg_no_images_flip': 'No images to flip.',
                 'msg_no_images_resize': 'No images to resize.',
                 'msg_resize_success_text': 'Images resized to {percent}%. Existing outputs preserved.',
+                'msg_resize_success_px_text': 'Images resized to {width}x{height} px. Existing outputs preserved.',
                 'msg_resize_error_title': 'Resize Error',
                 'msg_resize_error_text': 'An error occurred while resizing images.',
                 'msg_reload_error_title': 'Reload Error',
@@ -600,7 +601,11 @@ class TranslationManager(QObject):
                 # Downsample Dialog
                 'ds_title': 'Downsample Settings',
                 'ds_label': 'Set image loading scale (Downsampling):',
-                'ds_hint': 'Use lower values for large images to save memory and speed up processing.',
+                'ds_mode_percent': 'By scale (%)',
+                'ds_mode_long_edge': 'By longer edge (px)',
+                'ds_long_edge_label': 'Longer edge:',
+                'ds_hint': 'Use lower values for large images to save memory and speed up processing. '
+                           'A longer-edge target is applied per image and never enlarges one.',
 
             },
             'zh': {
@@ -781,6 +786,7 @@ class TranslationManager(QObject):
                 'msg_no_images_flip': '没有可翻转的图像。',
                 'msg_no_images_resize': '没有可缩放的图像。',
                 'msg_resize_success_text': '图像已缩放至 {percent}%。已保留现有输出。',
+                'msg_resize_success_px_text': '图像已缩放至 {width}x{height} 像素。已保留现有输出。',
                 'msg_resize_error_title': '缩放错误',
                 'msg_resize_error_text': '缩放图像时发生错误。',
                 'msg_reload_error_title': '重新加载错误',
@@ -1012,7 +1018,10 @@ class TranslationManager(QObject):
                 # Downsample Dialog
                 'ds_title': '下采样设置',
                 'ds_label': '设置图像加载缩放比例 (下采样):',
-                'ds_hint': '对大图像使用较低的值以节省内存并加快处理速度。',
+                'ds_mode_percent': '按比例 (%)',
+                'ds_mode_long_edge': '按长边 (像素)',
+                'ds_long_edge_label': '长边:',
+                'ds_hint': '对大图像使用较低的值以节省内存并加快处理速度。长边目标按每张图像应用，且不会放大图像。',
 
                 # Thread settings dialog
                 'dialog_thread_title': '线程数设置',

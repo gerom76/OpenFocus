@@ -847,12 +847,14 @@ class BatchProcessingDialog(QDialog):
             "contrast_strength": getattr(self.parent_window, "contrast_strength", 50),
         }
 
-    def preload_single_folder(self, folder_path: str, scale_factor: float = 1.0) -> None:
+    def preload_single_folder(self, folder_path: str, scale_factor: float = 1.0,
+                              target_long_edge: int | None = None) -> None:
         """
         Preload a single folder (for drag-and-drop scenarios)
         Automatically switch to single-folder mode, load the folder, and set default split parameters
         """
         import cv2
+        from core import downsample
         from core.image_loader import ImageStackLoader
 
         # 1. Switch to single-folder mode
@@ -878,16 +880,14 @@ class BatchProcessingDialog(QDialog):
             return
 
         # Apply scaling
-        if scale_factor != 1.0 and 0 < scale_factor < 1.0:
-            scaled_images = []
-            for path, img, ts in images_with_times:
-                w = int(img.shape[1] * scale_factor)
-                h = int(img.shape[0] * scale_factor)
-                scaled_img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
-                scaled_images.append((path, scaled_img, ts))
-            self.single_folder_images_with_times = scaled_images
-        else:
-            self.single_folder_images_with_times = images_with_times
+        scaled_images = []
+        for path, img, ts in images_with_times:
+            size = downsample.target_size(img.shape[1], img.shape[0], scale_factor, target_long_edge)
+            if size is None:
+                scaled_images.append((path, img, ts))
+            else:
+                scaled_images.append((path, cv2.resize(img, size, interpolation=cv2.INTER_AREA), ts))
+        self.single_folder_images_with_times = scaled_images
 
         self.single_folder_folder_path = folder_path
 
@@ -899,12 +899,14 @@ class BatchProcessingDialog(QDialog):
         # 4. Update the preview
         self.update_single_folder_preview()
 
-    def preload_multiple_folders(self, folder_paths: list[str], scale_factor: float = 1.0) -> None:
+    def preload_multiple_folders(self, folder_paths: list[str], scale_factor: float = 1.0,
+                                 target_long_edge: int | None = None) -> None:
         """Preload multiple folders (for drag-and-drop scenarios)
 
         Args:
             folder_paths: list of folder paths
             scale_factor: scale factor (applied uniformly to all folders)
+            target_long_edge: long edge in pixels to downsample to instead of a scale factor
         """
         import cv2
         from core.image_loader import ImageStackLoader
@@ -920,7 +922,7 @@ class BatchProcessingDialog(QDialog):
             self.folder_paths.append(folder_path)
 
             success, message, full_res_images, filenames = loader.load_from_folder(
-                folder_path, scale_factor=scale_factor
+                folder_path, scale_factor=scale_factor, target_long_edge=target_long_edge
             )
 
             if success and full_res_images:
