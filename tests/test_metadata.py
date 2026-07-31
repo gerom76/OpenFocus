@@ -9,8 +9,11 @@ Three promises are tested here:
    repeats the source's camera tags as readable text (`TestCameraSection`).
 3. A TIFF-based source - a raw file - hands its block over as the camera wrote
    it, down to the field types and the unreduced rationals (`TestTiffSources`).
+4. Orientation is the one tag that does not travel: every container states 1,
+   because the result is already upright and the containers are not read alike
+   (`TestOrientation`).
 
-The first two are spliced into an already-encoded file, so the fourth promise -
+The first two are spliced into an already-encoded file, so the last promise -
 that the pixels are left exactly as the encoder wrote them, including 16-bit
 PNG - is what `TestPixelsUntouched` checks.
 
@@ -304,9 +307,10 @@ class TestPixelsUntouched:
         assert write_image(tagged, image, metadata=_metadata(source))
 
         # Same pixels out, and the tagged file is only larger by the segments
-        # that were inserted - nothing was re-encoded. Read unchanged, because
-        # the inherited Orientation tag would otherwise rotate one of the two,
-        # which is exactly what the loader avoids by decoding unchanged as well.
+        # that were inserted - nothing was re-encoded. Read unchanged, which is
+        # what the loader does as well: an Orientation tag must not be able to
+        # turn one of the two on the way in. See `TestOrientation` for the
+        # value that reaches the file in the first place.
         assert np.array_equal(cv2.imread(tagged, cv2.IMREAD_UNCHANGED),
                               cv2.imread(untagged, cv2.IMREAD_UNCHANGED))
         assert os.path.getsize(tagged) > os.path.getsize(untagged)
@@ -614,3 +618,147 @@ class TestTiffSources:
         assert tags.get(0x010F) == "NIKON CORPORATION"
         with open(out, "rb") as handle:
             assert _maker_note(80_000) not in handle.read()
+
+
+# ----------------------------------------------------------------------
+# Orientation
+# ----------------------------------------------------------------------
+def _ifd0_orientation(blob):
+    """Orientation as IFD 0 of a bare TIFF stream states it, or None."""
+    endian = "<" if blob[:2] == b"II" else ">"
+    (offset,) = struct.unpack(endian + "I", blob[4:8])
+    entry = _read_ifd(blob, endian, offset).get(0x0112)
+    return None if entry is None else struct.unpack(endian + "H", entry[2][:2])[0]
+
+
+def _saved_orientation(path):
+    """Orientation of a saved file, read out of its container by hand.
+
+    Deliberately not through `read_source_exif`: that is the funnel the fix
+    lives in, so asking it would answer 1 whatever the file says. These parse
+    the four containers where the tag actually sits - the APP1 segment of a
+    JPEG, the `eXIf` chunk of a PNG, the Exif box of a JPEG XL, and IFD 0 of a
+    DNG, which is a TIFF and needs no unwrapping.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext == ".dng":
+        return _ifd0_orientation(data)
+
+    if ext in (".jpg", ".jpeg"):
+        position = 2
+        while position + 4 <= len(data) and data[position] == 0xFF:
+            marker = data[position + 1]
+            (length,) = struct.unpack(">H", data[position + 2:position + 4])
+            if marker == 0xE1 and data[position + 4:position + 10] == b"Exif\x00\x00":
+                return _ifd0_orientation(data[position + 10:position + 2 + length])
+            if marker == 0xDA:  # the scan; no headers past it
+                break
+            position += 2 + length
+        return None
+
+    if ext == ".png":
+        position = 8
+        while position + 8 <= len(data):
+            (length,) = struct.unpack(">I", data[position:position + 4])
+            kind = data[position + 4:position + 8]
+            if kind == b"eXIf":
+                return _ifd0_orientation(data[position + 8:position + 8 + length])
+            if kind == b"IDAT":
+                break
+            position += 12 + length
+        return None
+
+    assert ext == ".jxl"
+    position = 0
+    while position + 8 <= len(data):
+        (length,) = struct.unpack(">I", data[position:position + 4])
+        if data[position + 4:position + 8] == b"Exif":
+            payload = data[position + 8:position + 8 + length - 8]
+            # The box opens with the offset of the TIFF header inside it.
+            (start,) = struct.unpack(">I", payload[:4])
+            return _ifd0_orientation(payload[4 + start:])
+        if length == 0:
+            break
+        position += length
+    return None
+
+
+class TestOrientation:
+    """One answer, whatever the format: the saved result is upright.
+
+    The tag is applied by a different set of readers in every container - a
+    PNG's `eXIf` chunk is honoured by some viewers and ignored by others, and a
+    JPEG XL's Exif box by the other half of them - so a rotation inherited from
+    the source did not merely turn the result, it turned it in some viewers and
+    not in others, and the same render saved three ways disagreed with itself.
+    """
+
+    @pytest.mark.parametrize("ext", [".jpg", ".png", ".jxl", ".dng"])
+    def test_a_rotated_source_does_not_turn_the_result(self, tmp_path, ext):
+        if ext == ".jxl":
+            pytest.importorskip("imagecodecs", reason="JPEG XL encoder is not installed")
+        # The source says 6: rotate a quarter turn clockwise to display. It was
+        # applied when the frames were decoded, so the pixels here are upright.
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        out = str(tmp_path / f"result{ext}")
+
+        assert write_image(out, _result8(), metadata=_metadata(source))
+        assert _saved_orientation(out) == 1
+
+    def test_every_format_agrees(self, tmp_path):
+        # The point of the whole thing: no two containers may differ, since a
+        # user comparing them side by side sees one render, not four.
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        formats = [".jpg", ".png", ".dng"]
+        if meta.carries_exif(".jxl"):
+            try:
+                import imagecodecs  # noqa: F401
+                formats.append(".jxl")
+            except ImportError:
+                pass
+
+        saved = {}
+        for ext in formats:
+            out = str(tmp_path / f"result{ext}")
+            assert write_image(out, _result8(), metadata=_metadata(source))
+            saved[ext] = _saved_orientation(out)
+
+        assert set(saved.values()) == {1}, saved
+
+    def test_a_source_that_never_said_says_it_now(self, tmp_path):
+        # The raw fixture writes no Orientation at all. Absent already means 1,
+        # but stating it keeps a block read back from one save indistinguishable
+        # from one read back from another.
+        blob = meta.read_source_exif(_tiff_source(tmp_path / "src.tif"))
+
+        assert _ifd0_orientation(blob) == 1
+
+    def test_the_camera_section_says_the_same(self, tmp_path):
+        # The readable copy is cloned from the block, so it inherits the fix
+        # rather than needing one of its own.
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+
+        assert dict(meta.read_camera_tags(meta.read_source_exif(source)))["Orientation"] == "1"
+
+    def test_a_processed_frame_is_normalised_too(self, tmp_path):
+        # `copy_exif` carries a frame's own block across without a render record.
+        # It reads through the same funnel, so it cannot disagree.
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        out = str(tmp_path / "processed.png")
+
+        assert write_image(out, _result8(), source_path=source)
+        assert _saved_orientation(out) == 1
+
+    def test_a_block_with_nothing_to_patch_is_returned_as_it_was(self):
+        # `_upright` runs on every block read, including ones it has no business
+        # touching, so the shapes it must pass through unchanged are pinned here.
+        assert meta._upright(None) is None
+        assert meta._upright(b"") == b""
+        assert meta._upright(b"II*\x00") == b"II*\x00"          # header and no more
+        assert meta._upright(b"not a tiff") == b"not a tiff"
+        # A truncated IFD: the count promises entries the block does not hold.
+        truncated = struct.pack("<2sHIH", b"II", 42, 8, 3) + b"\x00" * 8
+        assert meta._upright(truncated) == truncated

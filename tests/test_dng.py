@@ -4,16 +4,18 @@ DNG is the one container OpenCV can neither write nor read, and LibRaw can only
 read, so utils.dng assembles it by hand. Nine promises are tested here:
 
 1. `.dng` is routed to that writer by write_image, and what comes back out is
-   bit-for-bit what went in - at 8 bits, at 16, in colour and in mono, and
-   across the multi-strip boundary (`TestRoundTrip`).
-2. The bytes really are a DNG: a little-endian TIFF whose tags say LinearRaw,
-   carry a DNGVersion, and describe the pixels' encoding through a
-   LinearizationTable rather than leaving a converter to guess - and the curve
-   that table declares is the one the develop actually applied, not a different
-   standard's (`TestContainer`).
+   what went in - at 8 bits, at 16, in colour and in mono, and across the
+   multi-strip boundary. Within a couple of parts in 65535, because the samples
+   are stored as scene-linear light and the curve that puts them there cannot be
+   inverted exactly at the bottom of the range (`TestRoundTrip`).
+2. The bytes really are a DNG: a little-endian TIFF whose tags say LinearRaw and
+   carry a DNGVersion, whose samples have been linearised rather than left
+   encoded with a LinearizationTable to explain them - a tag Luminar Neo does
+   not read - and whose curve is the one the develop actually applied, not a
+   different standard's (`TestContainer`).
 3. An independent reader agrees. LibRaw opens the file, finds the right
    dimensions, and renders a neutral ramp back as the ramp that went in - which
-   only holds if the colour matrix, the neutral and the linearization table are
+   only holds if the colour matrix, the neutral and the transfer function are
    all right (`TestInterop`).
 4. `.dng` is a supported input, read verbatim when OpenFocus wrote it and left to
    LibRaw when a camera did (`TestLoading`).
@@ -113,6 +115,60 @@ def _rationals(payload, signed=False):
     return values[0::2] / values[1::2]
 
 
+# What a round trip through the container may cost one sample. The file stores
+# scene-linear light while the pipeline's frames are display-referred, so a save
+# applies the BT.709 curve and a load undoes it - and near black that curve is
+# many-to-one, so no inverse can be exact there. Two parts in 65535 is what it
+# measures, which is a hundredth of one level at 8 bits.
+_ROUND_TRIP_TOLERANCE = 2
+
+
+def _as_stored(image):
+    """`image` at the depth and scale the container gives it back at.
+
+    An 8-bit frame comes back 16-bit, because it is *linear* samples that get
+    stored and 8 bits of those band the shadows into uselessness - so the writer
+    promotes on the way out and the reader has 16 bits to hand back. Full scale
+    stays full scale, hence 257 rather than a shift.
+    """
+    return image.astype(np.uint16) * 257 if image.dtype == np.uint8 else image
+
+
+def _stored_samples(path):
+    """The samples an uncompressed DNG actually holds, in file order.
+
+    `dng.read_linear` is no use for this: it puts the samples back through the
+    transfer function on the way out, which is exactly what a test of what was
+    *written* has to see past. So the strips are read directly, and the order is
+    the file's own - RGB, against the pipeline's BGR.
+    """
+    tags = _tags(path)
+    height = int(tags[dng._IMAGE_LENGTH][0])
+    width = int(tags[dng._IMAGE_WIDTH][0])
+    samples = int(tags[dng._SAMPLES_PER_PIXEL][0])
+    bits = int(tags[dng._BITS_PER_SAMPLE][0])
+
+    payload = bytearray()
+    with open(path, "rb") as handle:
+        for offset, count in zip(tags[dng._STRIP_OFFSETS], tags[dng._STRIP_BYTE_COUNTS]):
+            handle.seek(int(offset))
+            payload += handle.read(int(count))
+
+    dtype = np.dtype("<u2") if bits == 16 else np.dtype("u1")
+    return np.frombuffer(bytes(payload), dtype=dtype).reshape(height, width, samples)
+
+
+def _round_tripped(read_back, image):
+    """Whether a frame came back out of the container as the one that went in."""
+    expected = _as_stored(image)
+    if read_back is None or read_back.dtype != expected.dtype:
+        return False
+    if read_back.shape != expected.shape:
+        return False
+    difference = np.abs(read_back.astype(np.int32) - expected.astype(np.int32))
+    return int(difference.max()) <= _ROUND_TRIP_TOLERANCE
+
+
 class TestRoundTrip:
     def test_write_image_routes_dng_to_the_writer(self, tmp_path):
         out = str(tmp_path / "result.dng")
@@ -123,17 +179,16 @@ class TestRoundTrip:
         assert dng.read_linear(out) is not None
 
     @pytest.mark.parametrize("image", [_result8(), _result16()], ids=["8bit", "16bit"])
-    def test_the_pixels_survive_exactly(self, tmp_path, image):
+    def test_the_pixels_survive_the_round_trip(self, tmp_path, image):
         out = str(tmp_path / "result.dng")
         assert write_image(out, image)
 
         read_back = dng.read_linear(out)
-        assert read_back is not None
-        assert read_back.dtype == image.dtype
-        assert read_back.shape == image.shape
-        # Uncompressed and undeveloped, so this is an identity - not an
-        # approximation the way a JPEG round trip would be.
-        assert np.array_equal(read_back, image)
+        # Uncompressed and undeveloped: nothing is resampled, no colour is
+        # twisted and no tone curve is applied, so the only thing between the
+        # frame going in and coming out is the transfer function - see
+        # `_ROUND_TRIP_TOLERANCE` for the two parts in 65535 that costs.
+        assert _round_tripped(read_back, image)
 
     def test_sixteen_bits_are_not_narrowed_on_the_way_out(self, tmp_path):
         assert bitdepth.supports_16bit(".dng")
@@ -148,10 +203,7 @@ class TestRoundTrip:
         grey = _result8()[:, :, 0]
         assert write_image(out, grey)
 
-        read_back = dng.read_linear(out)
-        assert read_back is not None
-        assert read_back.shape == grey.shape
-        assert np.array_equal(read_back, grey)
+        assert _round_tripped(dng.read_linear(out), grey)
 
     def test_an_alpha_channel_is_dropped(self, tmp_path):
         out = str(tmp_path / "alpha.dng")
@@ -162,8 +214,7 @@ class TestRoundTrip:
         read_back = dng.read_linear(out)
         # DNG raw data has no place for alpha, so the colour survives and the
         # channel does not.
-        assert read_back.shape == bgr.shape
-        assert np.array_equal(read_back, bgr)
+        assert _round_tripped(read_back, bgr)
 
     def test_an_image_spanning_many_strips_round_trips(self, tmp_path, monkeypatch):
         # Rather than allocate the tens of megabytes a real multi-strip image
@@ -175,14 +226,14 @@ class TestRoundTrip:
 
         tags = _tags(out)
         assert len(tags[dng._STRIP_OFFSETS]) > 1, "expected more than one strip"
-        assert np.array_equal(dng.read_linear(out), image)
+        assert _round_tripped(dng.read_linear(out), image)
 
     def test_a_written_dng_reloads_through_the_shared_read_path(self, tmp_path):
         out = str(tmp_path / "frame.dng")
         image = _result16()
         assert write_image(out, image)
         # read_image_any_depth is what the folder-input fusion methods use.
-        assert np.array_equal(read_image_any_depth(out), image)
+        assert _round_tripped(read_image_any_depth(out), image)
 
 
 class TestContainer:
@@ -244,6 +295,37 @@ class TestContainer:
         # camera's - the pixels left camera space during the develop.
         assert tags[dng._PROFILE_NAME] == dng._PROFILE_NAME_TEXT
 
+    def test_no_camera_profile_may_be_substituted_for_the_embedded_one(self, tmp_path):
+        """The file names its profile, and refuses every other.
+
+        Naming the profile is only half of it: a converter that recognises a
+        camera will reach for that camera's profile regardless, and a camera
+        profile's matrix expects that sensor's RGB. These samples are sRGB, so
+        the result is not a slight cast - a stack shot on a Nikon rendered
+        magenta in Luminar Neo, which had matched the source camera and gone
+        looking for its own profile for it.
+
+        Matching calibration signatures are the spec's answer: a profile whose
+        signature differs from the file's must not be applied, and Adobe signs
+        its camera profiles with its own.
+        """
+        out = str(tmp_path / "result.dng")
+        assert write_image(out, _result8())
+        tags = _tags(out)
+
+        assert tags[dng._AS_SHOT_PROFILE_NAME] == dng._PROFILE_NAME_TEXT
+        assert tags[dng._CAMERA_CALIBRATION_SIGNATURE] == dng._CALIBRATION_SIGNATURE
+        assert tags[dng._PROFILE_CALIBRATION_SIGNATURE] == dng._CALIBRATION_SIGNATURE
+
+        # The two stages between the samples and ColorMatrix1, both stated as
+        # the identity rather than left to default, so that a converter has
+        # nowhere left to insert a correction of its own.
+        assert np.allclose(
+            _rationals(tags[dng._CAMERA_CALIBRATION_1], signed=True).reshape(3, 3),
+            np.eye(3),
+        )
+        assert np.allclose(_rationals(tags[dng._ANALOG_BALANCE]), [1.0, 1.0, 1.0])
+
     def test_the_forward_matrix_sends_the_neutral_to_d50(self, tmp_path):
         out = str(tmp_path / "result.dng")
         assert write_image(out, _result8())
@@ -269,54 +351,99 @@ class TestContainer:
         assert _rationals(tags[dng._BASELINE_EXPOSURE], signed=True) == 0.0
 
     @pytest.mark.parametrize("image,bits", [(_result8(), 8), (_result16(), 16)])
-    def test_the_linearization_table_is_the_bt709_transfer_function(self, tmp_path, image, bits):
+    def test_the_stored_samples_are_scene_linear(self, tmp_path, image, bits):
+        """The curve is applied to the pixels, not declared alongside them.
+
+        A raw converter assumes the samples it reads are scene-linear light, and
+        the pipeline's frames are display-referred, so one of the two has to
+        give. Declaring the encoding through `LinearizationTable` is the tidier
+        answer and is what this module used to do - but Luminar Neo does not read
+        the tag, took the encoded samples for linear and applied its own gamma on
+        top, and rendered a fused stack washed out next to the JPEG XL written
+        from the same pixels. A converter cannot ignore an encoding that is not
+        there.
+
+        Checked against the EOTF itself rather than against the writer's own
+        table, and BT.709 rather than sRGB, because the develop encodes with
+        dcraw's default gamma - the other curve is what once made a saved frame
+        darker than the raw it came from.
+        """
         out = str(tmp_path / "result.dng")
         assert write_image(out, image)
         tags = _tags(out)
 
-        table = np.asarray(tags[dng._LINEARIZATION_TABLE], dtype=np.int64)
-        assert len(table) == 1 << bits
+        assert dng._LINEARIZATION_TABLE not in tags
+        # Always 16, whatever went in: linear light spends its codes on the
+        # highlights, and 8 bits of it band the shadows into uselessness.
+        assert tags[dng._BITS_PER_SAMPLE] == [16] * 3
 
-        # This tag is what stops a raw converter from treating already-encoded
-        # values as scene-linear, so it is checked against the EOTF itself rather
-        # than against the writer. BT.709 and not sRGB, because the develop
-        # encodes with dcraw's default gamma - a table describing the other curve
-        # is what made a saved frame darker than the raw it came from.
-        encoded = np.linspace(0.0, 1.0, 1 << bits)
+        encoded = image[:, :, ::-1].astype(np.float64) / ((1 << bits) - 1)
         expected = np.where(
             encoded < 0.081, encoded / 4.5, ((encoded + 0.099) / 1.099) ** 2.222
         )
         # The writer uses the knee dcraw solves for rather than the figures the
         # standard quotes, which is a difference of a few parts in 65535.
-        assert np.abs(table - np.rint(expected * dng._LINEAR_MAX)).max() <= 8
+        stored = _stored_samples(out).astype(np.float64)
+        assert np.abs(stored - np.rint(expected * dng._LINEAR_MAX)).max() <= 8
 
-        # WhiteLevel has to agree with what the table maps onto, not with the
-        # stored sample range, or the top of the image would clip or fall short.
+        # WhiteLevel has to be what full scale linearises to, or the top of the
+        # image would clip or fall short.
         assert tags[dng._WHITE_LEVEL] == [dng._LINEAR_MAX] * 3
-        assert table[-1] == dng._LINEAR_MAX
+        assert stored.max() <= dng._LINEAR_MAX
 
-    def test_the_table_inverts_the_curve_the_develop_applies(self, tmp_path):
-        """The table has to describe *this* pipeline, not a standard in general.
+    def test_the_lossy_mode_still_declares_its_encoding(self, tmp_path):
+        """The one mode that cannot store linear samples, and so has to describe them.
+
+        DNG restricts lossy JPEG to 8-bit, and 8 bits of *linear* light collapses
+        the whole shadow half of the range into two or three codes. So the lossy
+        mode keeps display-referred samples and the table that explains them -
+        which costs it nothing, because a reader able to open a lossy DNG at all
+        supports the tag: Adobe's own lossy files are built the same way.
+        """
+        out = str(tmp_path / "proxy.dng")
+        assert write_image(out, _result8())
+        assert dng._LINEARIZATION_TABLE not in _tags(out)
+
+        dng.set_compression(dng.COMPRESSION_LOSSY)
+        assert write_image(out, _result8())
+        tags = _tags(out)
+
+        assert tags[dng._BITS_PER_SAMPLE] == [8] * 3
+        table = np.asarray(tags[dng._LINEARIZATION_TABLE], dtype=np.int64)
+        assert len(table) == 256
+        assert table[-1] == dng._LINEAR_MAX
+        assert tags[dng._WHITE_LEVEL] == [dng._LINEAR_MAX] * 3
+
+    def test_the_curve_is_the_one_the_develop_applies(self, tmp_path):
+        """The curve has to describe *this* pipeline, not a standard in general.
 
         The bug it guards against was a disagreement between two modules: the
-        develop encoded with dcraw's gamma while the writer declared sRGB, so a
-        converter linearised the samples through a curve they had never been put
-        through and rendered a saved frame some 13 levels in 255 darker than the
-        raw it was made from. Nothing inside either module was wrong on its own,
-        which is why the check has to span both.
+        develop encoded with dcraw's gamma while the writer assumed sRGB, so the
+        samples were linearised through a curve they had never been put through
+        and a saved frame rendered some 13 levels in 255 darker than the raw it
+        was made from. Nothing inside either module was wrong on its own, which
+        is why the check has to span both.
         """
-        out = str(tmp_path / "result.dng")
-        assert write_image(out, _result8())
-        table = np.asarray(_tags(out)[dng._LINEARIZATION_TABLE], dtype=np.float64)
-
-        # core.gpu_decode's output curve, on the scene-linear values the table
-        # claims each stored sample stands for. Encoding those has to give the
+        # core.gpu_decode's output curve, on the scene-linear values the writer
+        # turns each display-referred sample into. Encoding those has to give the
         # sample back, or the two modules disagree about what the pixels are.
-        linear = table / dng._LINEAR_MAX
+        linear = dng._linearization_table(8).astype(np.float64) / dng._LINEAR_MAX
         encoded = np.where(linear < 0.018,
                            linear * 4.5,
                            1.099 * np.maximum(linear, 0.018) ** (1.0 / 2.222) - 0.099)
         assert np.abs(encoded * 255.0 - np.arange(256)).max() <= 0.5
+
+    def test_the_reader_undoes_exactly_what_the_writer_applied(self, tmp_path):
+        """The inverse is taken analytically, so it is worth pinning to the forward table.
+
+        Near black the forward curve is many-to-one - it spreads one linear code
+        over some 4.5 encoded ones - so the round trip cannot be exact there and
+        the question is only how far off it lands.
+        """
+        forward = dng._linearization_table(16).astype(np.int64)
+        recovered = dng._display_table().astype(np.int64)[forward]
+        drift = np.abs(recovered - np.arange(dng._LINEAR_MAX + 1))
+        assert drift.max() <= _ROUND_TRIP_TOLERANCE
 
     def test_a_mono_dng_carries_no_colorimetry(self, tmp_path):
         out = str(tmp_path / "grey.dng")
@@ -393,7 +520,7 @@ class TestLoading:
 
         # Not developed: no white balance and no tone curve are applied to a
         # frame that already carries them, so a saved result reloads unchanged.
-        assert np.array_equal(ImageStackLoader.read_image_bgr(out), image)
+        assert _round_tripped(ImageStackLoader.read_image_bgr(out), image)
 
     def test_a_saved_result_is_a_valid_source_for_the_next_stack(self, tmp_path):
         pytest.importorskip("PyQt6.QtGui", reason="the loader needs PyQt6")
@@ -472,10 +599,9 @@ class TestCompression:
         assert dng.write(packed, image, compression=dng.COMPRESSION_LOSSLESS)
 
         read_back = dng.read_linear(packed)
-        assert read_back is not None
-        assert read_back.dtype == image.dtype
-        # Not "close": the codec stores prediction errors, not approximations.
-        assert np.array_equal(read_back, image)
+        # The codec stores prediction errors, not approximations, so it adds
+        # nothing to the transfer function's own couple of parts in 65535.
+        assert _round_tripped(read_back, image)
         assert os.path.getsize(packed) < os.path.getsize(plain)
 
     @needs_lossless
@@ -484,9 +610,7 @@ class TestCompression:
         out = str(tmp_path / "grey.dng")
         assert dng.write(out, grey, compression=dng.COMPRESSION_LOSSLESS)
 
-        read_back = dng.read_linear(out)
-        assert read_back.shape == grey.shape
-        assert np.array_equal(read_back, grey)
+        assert _round_tripped(dng.read_linear(out), grey)
 
     def test_lossy_is_close_but_not_exact(self, tmp_path):
         image = _detailed()
@@ -652,7 +776,7 @@ class TestFastLoad:
 
         # The full-resolution image stays in IFD 0, so a file written by an
         # earlier version and one written now are read back the same way.
-        assert np.array_equal(dng.read_linear(out), image)
+        assert _round_tripped(dng.read_linear(out), image)
         assert _tags(out)[dng._NEW_SUBFILE_TYPE] == [0]
 
         sub, _ = self._preview_ifd(out)
@@ -823,8 +947,8 @@ class TestWithoutRawpy:
         # Writing needs nothing but numpy, and reading back a linear DNG never
         # goes near LibRaw - only developing a camera DNG does.
         assert write_image(out, image)
-        assert np.array_equal(dng.read_linear(out), image)
-        assert np.array_equal(dng.read(out), image)
+        assert _round_tripped(dng.read_linear(out), image)
+        assert _round_tripped(dng.read(out), image)
 
     def test_a_camera_dng_cannot_be_developed(self, tmp_path, monkeypatch):
         out = tmp_path / "camera.dng"
@@ -931,10 +1055,13 @@ class TestSourceExif:
         assert dng.write(out, _result16(), exif=source)
 
         tags = _tags(out)
-        # Make and Model name the camera the frames came from, which is what
-        # those tags mean in DNG too; the writer stays identified separately.
-        assert tags[dng._MAKE] == "Nikon"
-        assert tags[dng._MODEL] == "Z 8"
+        # Who shot it travels; what shot it does not sit in IFD 0. Make and
+        # Model are what a raw converter reads to pick a camera profile, and a
+        # camera's profile expects that sensor's RGB - applied to samples that
+        # are already sRGB it throws the frame towards magenta, which is what a
+        # stack from a Nikon did in Luminar Neo while these said "Nikon".
+        assert tags[dng._MAKE] == dng.CAMERA_MODEL
+        assert tags[dng._MODEL] == dng.CAMERA_MODEL
         assert tags[dng._ARTIST] == "A Photographer"
         assert tags[dng._UNIQUE_CAMERA_MODEL] == dng.CAMERA_MODEL
         assert tags[dng._SOFTWARE] == dng.CAMERA_MODEL
@@ -1050,8 +1177,8 @@ class TestSourceExif:
         assert dng.write(plain, image)
         assert dng.write(tagged, image, exif=source)
 
-        assert np.array_equal(dng.read_linear(tagged), image)
-        assert np.array_equal(dng.read_linear(plain), image)
+        assert _round_tripped(dng.read_linear(tagged), image)
+        assert _round_tripped(dng.read_linear(plain), image)
         assert os.path.getsize(tagged) > os.path.getsize(plain)
 
     def test_write_image_passes_the_source_through(self, tmp_path):
@@ -1062,14 +1189,20 @@ class TestSourceExif:
         # The stack export hands write_image the file each frame came from; DNG
         # is the one container that has to receive it before the encode.
         assert write_image(out, _result16(), source_path=str(source_jpg))
-        assert _tags(out)[dng._MAKE] == "Nikon"
+        tags = _tags(out)
+        # Artist rather than Make, because Make is one of the two tags a source
+        # block deliberately does not bring with it - see
+        # `test_the_camera_reaches_the_dng`. It carries the same proof: it is in
+        # the source and nowhere else, so it can only have come from the block.
+        assert tags[dng._ARTIST] == "A Photographer"
+        assert dng._EXIF_IFD in tags
 
     def test_a_block_that_is_not_exif_is_ignored(self, tmp_path):
         out = str(tmp_path / "junk.dng")
         image = _result8()
         for blob in (b"", b"not a tiff", b"II*\x00\xff\xff\xff\xff", b"MM\x00*" + b"\x00" * 4):
             assert dng.write(out, image, exif=blob)
-            assert np.array_equal(dng.read_linear(out), image)
+            assert _round_tripped(dng.read_linear(out), image)
             assert _tags(out)[dng._MAKE] == dng.CAMERA_MODEL
 
     @needs_rawpy

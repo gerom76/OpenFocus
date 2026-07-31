@@ -27,23 +27,44 @@ rather than merely parse:
   sRGB primaries, so no colour twist is applied on top of it.
 * `AsShotNeutral` = (1, 1, 1) declares it already neutral, so no white balance
   is applied either.
-* `LinearizationTable` carries the transfer function the samples are encoded
-  with. The pipeline's frames are display-referred, while a raw converter
-  assumes the values it reads are scene-linear; without the table it would apply
-  its own tone curve on top of the encoding and render the image far too bright.
-  The table is the tag meant for exactly this, and it keeps the stored samples
-  untouched - the alternative, linearising the pixels on the way out, would cost
-  precision and band badly on 8-bit input.
+* The samples themselves are **scene-linear**, which is what a raw converter
+  assumes the values it reads are. The pipeline's frames are display-referred,
+  so they are put through the BT.709 EOTF on the way out - that being the curve
+  the develop actually applies, since both `rawpy.postprocess` and
+  core.gpu_decode encode with dcraw's default gamma of (2.222, 4.5).
 
-  That curve is BT.709's, because it is the one the develop actually applies:
-  both `rawpy.postprocess` and core.gpu_decode encode with dcraw's default gamma
-  of (2.222, 4.5). Declaring sRGB instead - which this module did until the
-  table was corrected - describes a curve the pixels were never put through, so
-  a converter linearises them wrongly. The two differ by up to 3109 parts in
+  Declaring the encoding instead of undoing it is the other way to do this, and
+  is what this module used to do: `LinearizationTable` is the tag meant for
+  exactly that, it keeps the stored samples untouched, and it costs no precision
+  in the shadows. It is also, in practice, not read. Luminar Neo ignores the
+  tag, takes the encoded samples for linear light and applies its own gamma on
+  top, and the doubly-encoded result is flat and washed out - which is how a
+  fused stack came to open there looking nothing like the JPEG XL written beside
+  it from the same pixels. LibRaw honours the table, so every converter built on
+  it rendered the file correctly and the fault stayed invisible from here.
+
+  A converter cannot ignore an encoding that is not there, so the curve is
+  applied rather than described. What that costs is precision in the deep
+  shadows, where linear light has few codes to spare: samples are therefore
+  always written at 16 bits, an 8-bit frame being promoted on the way out, and
+  the file is larger for it. `read` puts the samples back through the inverse
+  curve, so a saved result still reloads as the frame that was saved - to within
+  a handful of parts in 65535 at the bottom of the range, where the forward
+  curve is many-to-one and no inverse can be exact.
+
+  The lossy mode is the exception and keeps the table, because DNG restricts it
+  to 8-bit samples and 8-bit *linear* data bands catastrophically - the whole
+  shadow half of the range would collapse into two or three codes. That is also
+  why the table is no obstacle there: a reader that can open a lossy DNG at all
+  supports it, since Adobe's own lossy files are built the same way.
+
+  Either way the curve is BT.709's. Declaring sRGB instead - which this module
+  did until the table was corrected, and which the same knee now serves - is a
+  curve the pixels were never put through. The two differ by up to 3109 parts in
   65535 of linear light, worst in the shadows, which is what made a DNG saved
   from a NEF render some 13 levels in 255 darker than the NEF it came from.
   Primaries and white point are shared between the two standards, so only the
-  table changes and `ColorMatrix1` is unaffected.
+  transfer function is at stake and `ColorMatrix1` is unaffected.
 
 Rendering
 ---------
@@ -74,7 +95,23 @@ DNG's answer is the embedded camera profile, so one is written:
   removes the white-balance guesswork that inversion leaves it.
 * `ProfileName` gives the result a profile a converter can name in its menu
   instead of showing a camera's, which is what a file that left camera space
-  during the develop should say for itself.
+  during the develop should say for itself, and `AsShotProfileName` names it
+  again as the one to select by default rather than merely offer.
+* `CameraCalibrationSignature` and `ProfileCalibrationSignature` are written
+  with the same string, which is how DNG says which profiles a file may be
+  developed with: a converter must not apply one whose signature differs. Adobe
+  signs its camera profiles, so this is what stops one of *those* being
+  substituted for the embedded profile. That substitution is not a subtle
+  error - a Nikon profile's matrix expects that sensor's RGB, and applied to
+  samples that are already sRGB it throws the frame hard towards magenta.
+* `CameraCalibration1` and `AnalogBalance` are the identity, closing the last
+  two places a converter that thinks it recognises the camera could insert a
+  correction of its own.
+
+The other half of that is what the file does *not* say. IFD 0's `Make` and
+`Model` are the writer's own and not the source camera's, because they are what
+a converter reads to decide which camera it is developing; see
+`_CAMERA_IFD0_TAGS`.
 
 What this cannot do is make the file render the way the *source raw* renders in
 the same converter. The DNG holds pixels a develop has already finished with;
@@ -146,6 +183,10 @@ JPEG, PNG and JPEG XL - where utils.metadata splices a block into the encoded
 file afterwards - a TIFF cannot be added to after the fact: every offset behind
 an insertion would have to move. The block is therefore taken apart and re-laid
 out as the file is written, which is also why `write` is the one that takes it.
+
+What crosses is the record of the shot - the exposure, the lens, the date, the
+MakerNote - and not the camera's `Make` and `Model`, which stay behind in IFD 0
+for the reason the "Rendering" section gives.
 
 That is a translation and not a copy. An EXIF block is itself a TIFF stream, so
 its tags are already in the right shape, but its offsets are measured from its
@@ -325,9 +366,14 @@ _UNIQUE_CAMERA_MODEL = 50708
 _LINEARIZATION_TABLE = 50712
 _WHITE_LEVEL = 50717
 _COLOR_MATRIX_1 = 50721
+_CAMERA_CALIBRATION_1 = 50723
+_ANALOG_BALANCE = 50727
 _AS_SHOT_NEUTRAL = 50728
 _BASELINE_EXPOSURE = 50730
 _CALIBRATION_ILLUMINANT_1 = 50778
+_CAMERA_CALIBRATION_SIGNATURE = 50931
+_PROFILE_CALIBRATION_SIGNATURE = 50932
+_AS_SHOT_PROFILE_NAME = 50934
 _PROFILE_NAME = 50936
 _PROFILE_TONE_CURVE = 50940
 _PROFILE_EMBED_POLICY = 50941
@@ -410,6 +456,30 @@ _PROFILE_NAME_TEXT = "OpenFocus Linear"
 # ProfileEmbedPolicy 0, "allow copying": the profile describes nothing
 # proprietary, so there is no reason to stop a converter carrying it elsewhere.
 _PROFILE_EMBED_ALLOW_COPYING = 0
+
+# Written into both CameraCalibrationSignature and ProfileCalibrationSignature,
+# which is the spec's own mechanism for saying which profiles a file may be
+# developed with: a converter must not apply a profile whose calibration
+# signature differs from the file's. Adobe signs its camera profiles "com.adobe",
+# so signing this file with something of its own is what stops one of them being
+# used - and an Adobe Nikon profile applied to these pixels is not a small error.
+# Its matrix expects the sensor RGB of a Nikon, while these samples are already
+# sRGB, so it twists a finished frame hard towards magenta.
+#
+# The name is reverse-DNS because that is the convention the spec asks for; the
+# domain need not resolve, it only has to be unlikely to collide.
+_CALIBRATION_SIGNATURE = "com.openfocus"
+
+# CameraCalibration1 and AnalogBalance as the identity. Both sit between the
+# camera's raw values and the colour matrix, and both default to the identity
+# when absent - but a converter that has decided which camera it is looking at
+# may reach for its own values instead of the default. Writing them says there
+# is nothing to correct for, because the develop is already behind these pixels.
+_IDENTITY_MATRIX = (
+    (1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+    (0.0, 0.0, 1.0),
+)
 
 # ProfileToneCurve as the two points of the identity, which is what stops a
 # converter applying its own baseline curve - see the "Rendering" section.
@@ -581,9 +651,11 @@ def _bt709_knee() -> Tuple[float, float]:
 def _linearization_table(bits: int) -> np.ndarray:
     """The pipeline's EOTF, tabulated for every value a sample of `bits` can hold.
 
-    Entry *i* is the scene-linear value that stored sample *i* stands for, scaled
-    to 0..`_LINEAR_MAX`. This is what lets the samples themselves be written
-    untouched: the encoding is described rather than undone.
+    Entry *i* is the scene-linear value that a display-referred sample *i* stands
+    for, scaled to 0..`_LINEAR_MAX`. It is used two ways: applied, to linearise
+    the frame a save writes, and written out as `LinearizationTable` by the lossy
+    mode, which cannot afford to store linear samples in the 8 bits DNG allows
+    it. Both directions want the same curve, so there is one table.
 
     The curve is BT.709's, which is what the develop puts the pixels through -
     see the module docstring for why declaring sRGB here rendered a saved frame
@@ -597,6 +669,56 @@ def _linearization_table(bits: int) -> np.ndarray:
         ((encoded + offset) / (1.0 + offset)) ** (1.0 / _BT709_POWER),
     )
     return np.rint(linear * _LINEAR_MAX).astype(np.uint16)
+
+
+def _display_table() -> np.ndarray:
+    """`_linearization_table`'s inverse: scene-linear back to display-referred.
+
+    Entry *i* is the 16-bit display-referred sample that scene-linear value *i*
+    encodes to. This is what `read` puts a stored frame through, so that a result
+    saved as DNG and loaded again is the frame that was saved rather than the
+    linear light it was stored as.
+
+    The inverse is taken analytically rather than by searching the forward table,
+    because the forward curve is many-to-one near black - it spreads one linear
+    code over some 4.5 encoded ones - so a search there has no single answer to
+    return. That same flattening is the round trip's error bound: a few parts in
+    65535 in the deepest shadows, and exact everywhere the curve is steep enough
+    to separate its inputs.
+    """
+    knee, offset = _bt709_knee()
+    linear = np.linspace(0.0, 1.0, _LINEAR_MAX + 1, dtype=np.float64)
+    encoded = np.where(
+        linear < knee / _BT709_SLOPE,
+        linear * _BT709_SLOPE,
+        (1.0 + offset) * linear ** _BT709_POWER - offset,
+    )
+    return np.rint(encoded * _LINEAR_MAX).clip(0, _LINEAR_MAX).astype(np.uint16)
+
+
+def _stores_scene_linear(mode: str) -> bool:
+    """Whether a mode writes linear samples, as opposed to encoded ones plus a table.
+
+    Every mode but the lossy one, which DNG restricts to 8 bits - too few for
+    linear light to survive. See the module docstring's transfer-function bullet.
+    """
+    return mode != COMPRESSION_LOSSY
+
+
+def _scene_linear(source: np.ndarray, bits: int) -> np.ndarray:
+    """A display-referred frame as the 16-bit scene-linear samples DNG stores.
+
+    A table lookup rather than the arithmetic, because the arithmetic would run
+    over every pixel in float while the table has one entry per *value* a sample
+    can take - 65536 of them at most, against tens of millions of pixels. It is
+    also the same table the lossy mode writes, so the two paths cannot drift.
+    """
+    return np.take(_linearization_table(bits), source)
+
+
+def _display_referred(pixels: np.ndarray) -> np.ndarray:
+    """Scene-linear samples back as the display-referred frame they were saved from."""
+    return np.take(_display_table(), pixels)
 
 
 class _Raw(NamedTuple):
@@ -755,10 +877,22 @@ _MAKER_NOTE_NIKON_TIFF_AT = 10
 _MAKER_NOTE_PREVIEW_IFD = 0x0011
 
 # Tags of the source's IFD 0 that describe the shot rather than the source file,
-# and so belong in the DNG's IFD 0 too. Make and Model name the camera the frames
-# came out of, which is what those tags mean in DNG as well; the writer's own
-# identity is in Software and UniqueCameraModel, and that is what `read` looks
-# for when it decides whether a file is its own.
+# and so belong in the DNG's IFD 0 too.
+#
+# Make and Model are deliberately not among them, and that is a correction: they
+# travelled once, and it is what made a saved stack render wrong.
+#
+# In a camera DNG those two name the camera whose mosaic the file holds, and a
+# converter reads them to decide which camera profile to develop it with. This
+# file holds no mosaic - the pixels left camera space during the develop - so
+# naming the source camera there does not describe the data, it misdirects the
+# reader. Luminar Neo given "NIKON Z 6_2" offers that camera's profile and
+# renders a finished sRGB frame through a Nikon sensor matrix, which throws the
+# whole image towards magenta.
+#
+# Which camera shot the frames is still recorded - in the EXIF IFD, and in the
+# MakerNote carried with it. What it no longer does is answer "what are these
+# pixels", because that is the question Make and Model are read as answering.
 #
 # The resolution tags travel because they are what a print pipeline reads a
 # nominal size out of, and a raw converter writes them into a DNG for the same
@@ -769,7 +903,7 @@ _MAKER_NOTE_PREVIEW_IFD = 0x0011
 # Orientation is deliberately absent: a fused result is already the right way up,
 # and copying a rotated source's value would turn it.
 _CAMERA_IFD0_TAGS = frozenset({
-    _IMAGE_DESCRIPTION, _MAKE, _MODEL, _ARTIST, _COPYRIGHT,
+    _IMAGE_DESCRIPTION, _ARTIST, _COPYRIGHT,
     _X_RESOLUTION, _Y_RESOLUTION, _RESOLUTION_UNIT, _DATE_TIME_ORIGINAL,
 })
 
@@ -1298,9 +1432,16 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
         (_DNG_VERSION, _BYTE, _DNG_VERSION_BYTES),
         (_DNG_BACKWARD_VERSION, _BYTE, backward),
         (_UNIQUE_CAMERA_MODEL, _ASCII, CAMERA_MODEL),
-        (_LINEARIZATION_TABLE, _SHORT, _linearization_table(bits)),
         (_WHITE_LEVEL, _LONG, [_LINEAR_MAX] * samples),
     ]
+
+    if not _stores_scene_linear(mode):
+        # The samples are still display-referred, so the curve has to be
+        # declared - and the mode that needs it is the one whose readers all
+        # support it. Everywhere else the pixels are linear already and there is
+        # no encoding left to describe; writing an identity table instead would
+        # only give a reader that ignores the tag the same wrong answer.
+        entries.append((_LINEARIZATION_TABLE, _SHORT, _linearization_table(bits)))
 
     # Neither tag is colorimetry, so both are written for a monochrome result
     # too: they say the tones are finished, which is as true of one channel as
@@ -1316,6 +1457,10 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
         entries.append((_FORWARD_MATRIX_1, _SRATIONAL, _rational_matrix(_SRGB_TO_XYZ_D50)))
         entries.append((_CALIBRATION_ILLUMINANT_1, _SHORT, [_ILLUMINANT_D65]))
         entries.append((_AS_SHOT_NEUTRAL, _RATIONAL, [1, 1, 1, 1, 1, 1]))
+        # Explicitly nothing between the samples and that matrix - see
+        # `_IDENTITY_MATRIX` for why the defaults are not relied on.
+        entries.append((_CAMERA_CALIBRATION_1, _SRATIONAL, _rational_matrix(_IDENTITY_MATRIX)))
+        entries.append((_ANALOG_BALANCE, _RATIONAL, [1, 1, 1, 1, 1, 1]))
         # The rest of the embedded profile. Without these a converter has no
         # profile to use and falls back to its own default rendering, which is
         # built to develop a camera's scene-referred data and puts a second
@@ -1323,6 +1468,13 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
         entries.append((_PROFILE_NAME, _ASCII, _PROFILE_NAME_TEXT))
         entries.append((_PROFILE_EMBED_POLICY, _LONG, [_PROFILE_EMBED_ALLOW_COPYING]))
         entries.append((_PROFILE_TONE_CURVE, _FLOAT, _IDENTITY_TONE_CURVE))
+        # Naming the embedded profile as the one the file was "shot" with is what
+        # makes a converter select it rather than whichever of its own it would
+        # otherwise default to, and the matching pair of calibration signatures
+        # is what stops it substituting a camera profile for it afterwards.
+        entries.append((_AS_SHOT_PROFILE_NAME, _ASCII, _PROFILE_NAME_TEXT))
+        entries.append((_CAMERA_CALIBRATION_SIGNATURE, _ASCII, _CALIBRATION_SIGNATURE))
+        entries.append((_PROFILE_CALIBRATION_SIGNATURE, _ASCII, _CALIBRATION_SIGNATURE))
     sub_ifds = exif_sub_ifds(exif)
     for pointer, _ in sub_ifds:
         entries.append((pointer, _LONG, [0]))  # patched once the layout is fixed
@@ -1388,6 +1540,18 @@ def _emit(handle, image: np.ndarray, software: str,
     source, samples, bits, mode, quality, want_preview = _prepare(
         image, compression, lossy_quality, fast_load)
 
+    # Rendered first, and so from the display-referred frame: the preview is a
+    # picture for a viewer to show and is tagged sRGB, not raw data. Made after
+    # the linearisation below it would be a picture of linear light, which is
+    # the same frame with its shadows crushed.
+    preview = _preview_jpeg(source, bits) if want_preview else None
+
+    if _stores_scene_linear(mode):
+        # Not in place: `_source_view` may have handed back a view of the
+        # caller's own array, and a save must not rewrite the frame it was given.
+        source = _scene_linear(source, bits)
+        bits = 16
+
     height, width = source.shape[:2]
     rows_per_strip = _rows_per_strip(mode, width, height, samples, bits)
     spans = _strip_spans(height, rows_per_strip)
@@ -1406,8 +1570,6 @@ def _emit(handle, image: np.ndarray, software: str,
             else:
                 payloads.append(_encode_strip_lossy(strip, quality))
         counts = [len(blob) for blob in payloads]
-
-    preview = _preview_jpeg(source, bits) if want_preview else None
 
     header, _ = _tag_table(source, samples, bits, mode, software, counts,
                            rows_per_strip, preview, exif)
@@ -1637,12 +1799,16 @@ def _strip_payloads(path: str, offsets: Sequence[int],
 def read_linear(path: str) -> Optional[np.ndarray]:
     """Read an OpenFocus linear DNG straight from its strips, as BGR.
 
-    No development happens: the samples come back at the depth they were stored
-    at, in the order they were stored in, so saving a frame and loading it again
-    is an identity - exactly so for the uncompressed and lossless modes, and to
-    within the DCT for the lossy one. Returns None for anything that is not this
-    module's own output, which is how `read` decides to hand the file to LibRaw
-    instead, and for a file whose own mode this build cannot decode.
+    No development happens - no white balance, no colour twist, no tone curve -
+    so saving a frame and loading it again is very nearly an identity. Only
+    the transfer function is undone, because the samples are stored as scene
+    linear light and the pipeline's frames are display-referred; see
+    `_display_table` for the few parts in 65535 that costs at the bottom of the
+    range, and the lossy mode's DCT for the one term that is larger.
+
+    Returns None for anything that is not this module's own output, which is how
+    `read` decides to hand the file to LibRaw instead, and for a file whose own
+    mode this build cannot decode.
     """
     tags = _read_ifd0(path)
     if tags is None:
@@ -1700,6 +1866,14 @@ def read_linear(path: str) -> Optional[np.ndarray]:
         if flat.size != expected:
             return None
         pixels = flat.astype(dtype, copy=False).reshape(height, width, samples)
+
+    if _LINEARIZATION_TABLE not in tags and bits[0] == 16:
+        # No table means the samples are scene-linear - the file says so by not
+        # describing an encoding - so the curve the save applied is undone here.
+        # A file that carries one stored its samples display-referred already and
+        # is handed back untouched, which is what keeps every DNG written before
+        # the writer stopped declaring the encoding reading as it always did.
+        pixels = _display_referred(pixels)
 
     if samples == 1:
         return np.ascontiguousarray(pixels[:, :, 0])

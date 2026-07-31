@@ -80,7 +80,12 @@ _TIFF_HEADERS = (b"II*\x00", b"MM\x00*")
 # though this module never constructs one.
 _TIFF_TYPE_SIZE = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1,
                    8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4}
+_TIFF_SHORT = 3
 _TIFF_LONG = 4
+
+# Orientation, and the one value a saved result may carry. See `_upright`.
+_ORIENTATION = 274
+_ORIENTATION_NORMAL = 1
 
 # Tags of a TIFF-based source's IFD 0 that describe the shot rather than the
 # file it was stored in. A whitelist rather than a blacklist, because IFD 0 of a
@@ -89,11 +94,14 @@ _TIFF_LONG = 4
 # DNG, a linearization table and a colour matrix that would be nonsense in the
 # EXIF block of a JPEG. What is left is the camera, the timestamps and the
 # people the file credits.
+#
+# Orientation is absent on purpose, and is the one tag written rather than
+# copied - `_upright` says why, and utils.dng leaves it out of its own copied
+# set for the same reason.
 _SOURCE_IFD0_TAGS = frozenset({
     270,    # ImageDescription
     271,    # Make
     272,    # Model
-    274,    # Orientation
     282,    # XResolution
     283,    # YResolution
     296,    # ResolutionUnit
@@ -249,6 +257,54 @@ def _as_tiff_stream(blob: Optional[bytes]) -> Optional[bytes]:
     if not blob.startswith(_TIFF_HEADERS):
         return None
 
+    return _upright(blob)
+
+
+def _upright(blob: Optional[bytes]) -> Optional[bytes]:
+    """Set IFD 0's Orientation to 1, in place, in a bare TIFF stream.
+
+    A fused result is already the right way up: whatever rotation the camera
+    recorded was applied when the frames were decoded, so the pixels that reach
+    a save are upright and the source's value describes a rotation that has
+    already happened. Inherited unchanged it is applied a second time, and the
+    result comes out turned - which is what the tag did before this existed.
+
+    Worse, it came out turned only in *some* viewers, because no two of them
+    read the tag from the same place: a PNG's `eXIf` chunk is honoured by
+    XnView and ignored by Windows Explorer, and a JPEG XL's Exif box is
+    honoured by Explorer and ignored by anything decoding through libjxl, which
+    reads the codestream's own orientation field instead. So the same render
+    saved three ways looked like three different images. Every format now says
+    what utils.dng has always written: 1.
+
+    Patched rather than rebuilt, because the block is copied byte for byte and
+    only this one value may change. Orientation is a single SHORT, which lives
+    inline in its 12-byte entry, so nothing moves and no offset shifts; a source
+    that wrote it any other way is malformed and is left alone. A block without
+    the tag is left alone too - absent already means 1.
+    """
+    if not blob or len(blob) < 8:
+        return blob
+
+    endian = "<" if blob[:2] == b"II" else ">"
+    try:
+        magic, first_ifd = struct.unpack(endian + "HI", blob[2:8])
+        if magic != 42 or first_ifd <= 0:
+            return blob
+        (count,) = struct.unpack_from(endian + "H", blob, first_ifd)
+        for index in range(count):
+            entry = first_ifd + 2 + 12 * index
+            tag, field_type, values = struct.unpack_from(endian + "HHI", blob, entry)
+            if tag != _ORIENTATION:
+                continue
+            if field_type != _TIFF_SHORT or values != 1:
+                return blob
+            patched = bytearray(blob)
+            struct.pack_into(endian + "H", patched, entry + 8, _ORIENTATION_NORMAL)
+            return bytes(patched)
+    except struct.error:
+        return blob
+
     return blob
 
 
@@ -370,7 +426,8 @@ def _tiff_exif(stream, keep_maker_note: bool = True) -> Optional[bytes]:
     IFD 0 is filtered to `_SOURCE_IFD0_TAGS`, and the EXIF and GPS IFDs are
     copied whole apart from the handful of tags that are offsets into the file
     being left behind. The thumbnail IFD is not copied: the saved result has its
-    own preview, or none.
+    own preview, or none. Orientation is written rather than copied, and only
+    once there is a block to write it into - see `_upright`.
 
     `keep_maker_note` exists for the one container that cannot always take the
     block whole - see `_jpeg_with_metadata`.
@@ -413,6 +470,12 @@ def _tiff_exif(stream, keep_maker_note: bool = True) -> Optional[bytes]:
 
     if not kept and not sub_ifds:
         return None
+
+    # Stated outright, so that a source that left the tag out and one that wrote
+    # a rotation both come out of a save saying the same thing. Appended after
+    # the check above, which asks whether the source had anything to say at all.
+    kept.append((_ORIENTATION, _TIFF_SHORT, 1,
+                 struct.pack(endian + "H", _ORIENTATION_NORMAL)))
 
     for pointer, _entries in sub_ifds:
         kept.append((pointer, _TIFF_LONG, 1, b"\x00" * 4))  # patched once placed
