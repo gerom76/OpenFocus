@@ -487,7 +487,7 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 - **BMP**: Uncompressed, maximum quality
 - **TIFF**: High quality, supports layers
 - **JXL** (JPEG XL): Lossless and much smaller than PNG, keeps 16-bit depth and carries the EXIF/XMP metadata. Requires `pip install imagecodecs`; without it the format is not offered
-- **DNG**: Uncompressed linear (demosaiced) DNG, keeps 16-bit depth. Written for raw-converter workflows: the file declares sRGB primaries, an already-neutral white balance and the BT.709 transfer curve the develop actually applies, so Lightroom or RawTherapee renders it as the result you saw rather than a darker one. Reloading one into OpenFocus returns the exact pixels, since it is read back without being developed a second time. Files are large — nothing is compressed — and no EXIF/XMP is written
+- **DNG**: Linear (demosaiced) DNG, always 16-bit. Written for raw-converter workflows: the samples are put through the BT.709 curve on the way out so the file really is scene-linear, and it carries sRGB primaries, an already-neutral white balance and its own camera profile. Lightroom, RawTherapee or Luminar then renders it as the result you saw rather than a brighter, flatter one. Reloading it into OpenFocus returns the frame that was saved. The source camera's EXIF — lens, exposure, MakerNote — is carried across, but the `Make` and `Model` stay OpenFocus's own, because those are what a converter reads to decide which camera profile to offer. Compression, the fast-load preview and the colour space are set under **Settings → DNG Output**. See [how_dng_export_works.html](how_dng_export_works.html) for what each option changes, with pictures
 - **GIF**: Animation format
 
 ---
