@@ -204,6 +204,7 @@ class SettingsManager:
             "dng_compression": dng.get_compression(),
             "dng_lossy_quality": dng.get_lossy_quality(),
             "dng_fast_load": dng.get_fast_load(),
+            "dng_color_space": dng.get_color_space(),
             "contrast_method": getattr(window, "contrast_method", "off"),
             "contrast_strength": getattr(window, "contrast_strength", 50),
             "fusion_method": self._selected_fusion_method(),
@@ -375,6 +376,15 @@ class SettingsManager:
             dng.set_lossy_quality(int(data["dng_lossy_quality"]))
         if isinstance(data.get("dng_fast_load"), bool):
             dng.set_fast_load(data["dng_fast_load"])
+        # Camera space is refused on a build without rawpy, for the same reason
+        # lossless is without imagecodecs: the setting would produce files that
+        # do not do what it says.
+        color_space = data.get("dng_color_space")
+        if color_space in dng.VALID_COLOR_SPACES:
+            try:
+                dng.set_color_space(color_space)
+            except RuntimeError:
+                dng.set_color_space(dng.DEFAULT_COLOR_SPACE)
 
         # Post-fusion contrast. Driving the widgets is enough: their signals set
         # the window attributes and refresh the preview through the same path a

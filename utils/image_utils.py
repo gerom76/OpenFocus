@@ -179,7 +179,10 @@ def write_image(
             return False
     elif dng.is_dng(ext):
         source = metadata.source_path if metadata is not None else source_path
-        if not dng.write(file_path, image, exif=read_source_exif(source)):
+        # The path as well as the block: the camera colour space needs the raw
+        # itself, whose colour matrix lives in LibRaw rather than in its EXIF.
+        if not dng.write(file_path, image, exif=read_source_exif(source),
+                         source_path=source):
             return False
     elif not cv2.imwrite(file_path, image, get_imwrite_params(ext)):
         return False

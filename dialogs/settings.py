@@ -835,12 +835,21 @@ class DngSettingsDialog(QDialog):
         self.cb_fast_load = QCheckBox(trans.t("dialog_dng_fast_load"))
         grid.addWidget(self.cb_fast_load, 2, 0, 1, 2)
 
+        # Off on a build that cannot read a source raw's colour matrix, rather
+        # than offered and then silently ignored at save time.
+        self.cb_camera_space = QCheckBox(trans.t("dialog_dng_camera_space"))
+        self.cb_camera_space.setEnabled(dng.camera_space_available())
+        if not dng.camera_space_available():
+            self.cb_camera_space.setToolTip(dng.camera_space_unavailable_reason())
+        self.cb_camera_space.toggled.connect(self._sync_quality)
+        grid.addWidget(self.cb_camera_space, 3, 0, 1, 2)
+
         # One line under each control saying what it costs, so the choice does
         # not have to be made from the mode name alone.
         self.hint = QLabel("")
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: #aaa; font-size: 11px; font-style: italic;")
-        grid.addWidget(self.hint, 3, 0, 1, 2)
+        grid.addWidget(self.hint, 4, 0, 1, 2)
 
         layout.addWidget(group)
 
@@ -881,7 +890,13 @@ class DngSettingsDialog(QDialog):
         lossy = mode == dng.COMPRESSION_LOSSY
         self.label_quality.setEnabled(lossy)
         self.spin_quality.setEnabled(lossy)
-        self.hint.setText(trans.t(f"dng_compression_hint_{mode}"))
+        # Camera space has nothing to say in the lossy mode, which keeps
+        # display-referred samples and so cannot carry it.
+        self.cb_camera_space.setEnabled(dng.camera_space_available() and not lossy)
+        if self.cb_camera_space.isChecked() and self.cb_camera_space.isEnabled():
+            self.hint.setText(trans.t("dng_camera_space_hint"))
+        else:
+            self.hint.setText(trans.t(f"dng_compression_hint_{mode}"))
 
     def load_defaults(self):
         index = self.combo_compression.findData(dng.get_compression())
@@ -889,6 +904,7 @@ class DngSettingsDialog(QDialog):
             self.combo_compression.setCurrentIndex(index)
         self.spin_quality.setValue(dng.get_lossy_quality())
         self.cb_fast_load.setChecked(dng.get_fast_load())
+        self.cb_camera_space.setChecked(dng.get_color_space() == dng.COLOR_CAMERA)
         self._sync_quality()
 
     def on_accept(self):
@@ -902,6 +918,11 @@ class DngSettingsDialog(QDialog):
             dng.set_compression(dng.DEFAULT_COMPRESSION)
         dng.set_lossy_quality(int(self.spin_quality.value()))
         dng.set_fast_load(self.cb_fast_load.isChecked())
+        want_camera = self.cb_camera_space.isChecked() and self.cb_camera_space.isEnabled()
+        try:
+            dng.set_color_space(dng.COLOR_CAMERA if want_camera else dng.COLOR_SRGB)
+        except (ValueError, RuntimeError):
+            dng.set_color_space(dng.DEFAULT_COLOR_SPACE)
         self.accept()
 
 

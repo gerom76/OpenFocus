@@ -111,16 +111,58 @@ DNG's answer is the embedded camera profile, so one is written:
 The other half of that is what the file does *not* say. IFD 0's `Make` and
 `Model` are the writer's own and not the source camera's, because they are what
 a converter reads to decide which camera it is developing; see
-`_CAMERA_IFD0_TAGS`.
+`_CAMERA_IFD0_TAGS`. The exception is the camera colour space below, where the
+samples really are that camera's and naming it is the point.
 
 What this cannot do is make the file render the way the *source raw* renders in
 the same converter. The DNG holds pixels a develop has already finished with;
 the NEF beside it holds a mosaic that Lightroom develops with Adobe's own engine
 and Adobe's own profile for that camera, which is not the engine that produced
 these pixels. Those two are different renderings of the same exposure and no tag
-reconciles them - that would take un-rendering the frame. What the profile buys
-is the achievable half: the DNG renders as the frame OpenFocus produced, rather
-than as that frame with a converter's rendering stacked on it.
+reconciles them. What the profile buys is the achievable half: the DNG renders
+as the frame OpenFocus produced, rather than as that frame with a converter's
+rendering stacked on it.
+
+Camera colour space
+-------------------
+Signatures stop a converter *substituting* a camera profile. They do not stop a
+user picking one from the menu, and picking one wrecks the frame - a Nikon
+profile's matrix expects that sensor's RGB and throws sRGB samples hard towards
+magenta. The file cannot prevent that while its samples are sRGB, because the
+profile is not wrong about what it does, only about what it has been given.
+
+`COLOR_CAMERA` answers that by giving it the right thing. The pixels are taken
+sRGB -> XYZ -> the source camera's own space, the file is labelled with that
+camera and its measured matrix, and `AsShotNeutral` is set to where D65 lands in
+those coordinates. The result is a synthetic raw of the body the stack was shot
+on: every camera profile applies correctly, because the data is finally what
+they were built for.
+
+The transform is exact and loses nothing. A camera's gamut contains sRGB's with
+room to spare - across saturated primaries, secondaries and neutrals nothing
+clips in either direction - and a converter that reads the neutral, undoes the
+balance and applies the matrix arrives back at the frame that was written, to
+within a handful of parts in 65535.
+
+What it costs is the default rendering. The file is now a camera raw, so a
+converter develops it with that camera's profile and tone curve, and it looks
+like the raw developed there rather than like the fused result beside it. That
+is the trade the mode exists to offer, and it is why sRGB remains the default:
+the two modes answer different questions, and only one of them can be answered
+at a time.
+
+It also behaves like a raw in ways that are not obvious. LibRaw lowers the white
+level to the brightest data it finds unless `adjust_maximum_thr` is turned off,
+which rescales any file whose pixels stop short of saturation - a real camera
+file included - so a camera-space DNG picks up the same treatment.
+
+The mode needs the source raw, whose matrix lives in LibRaw rather than in any
+EXIF block, which is why `write` takes a path as well as a block. Without one -
+a stack fused from JPEGs, a monochrome result, the lossy mode, a build without
+rawpy - the write falls back to sRGB and says so. And because such a file names
+the camera rather than this writer, `read_linear` no longer recognises it as our
+own output and `read` develops it through LibRaw, which is correct: it is a
+camera raw now, and its samples are not the frame that was saved.
 
 Compression
 -----------
@@ -291,6 +333,35 @@ VALID_COMPRESSIONS = (COMPRESSION_NONE, COMPRESSION_LOSSLESS, COMPRESSION_LOSSY)
 # file, and so the default never trades quality or a dependency for size.
 DEFAULT_COMPRESSION = COMPRESSION_NONE
 
+# Which colour space the samples are written in.
+#
+# `COLOR_SRGB` stores the result as it is - sRGB primaries, its own profile, and
+# a converter's default rendering reproduces the fused frame. What it cannot do
+# is accept a *camera* profile: "Nikon Z 6 2 Adobe Standard" and the like are
+# built to develop sensor RGB, and applied to sRGB they double-transform it into
+# a heavy red cast. The profile menu still offers them, and picking one is a
+# mistake the file cannot prevent.
+#
+# `COLOR_CAMERA` transforms the pixels back into the source camera's own space
+# and labels the file with that camera, making it a synthetic raw of the body
+# the stack was shot on. Camera profiles then apply correctly, because the data
+# is finally what they were built for. The trade is that the converter's default
+# rendering is now the camera's - Adobe Standard's tone curve and hue twists on
+# top of an already-finished frame - so the file looks like the raw developed in
+# that converter rather than like the fused result beside it.
+#
+# Needs the source raw, whose matrix is read through LibRaw; a stack fused from
+# JPEGs, or one whose source cannot be opened, falls back to `COLOR_SRGB`.
+COLOR_SRGB = "srgb"
+COLOR_CAMERA = "camera"
+
+VALID_COLOR_SPACES = (COLOR_SRGB, COLOR_CAMERA)
+
+# sRGB, because it is the mode that needs nothing of the source and reproduces
+# the frame the pipeline actually produced. Camera space answers a narrower
+# question - "let me develop this like the raw" - and is asked for explicitly.
+DEFAULT_COLOR_SPACE = COLOR_SRGB
+
 # Quality for the lossy mode, on OpenCV's 1-100 JPEG scale. 92 is high enough
 # that the DCT is not the thing limiting a proxy, and well short of the point
 # where the file grows for no visible return.
@@ -453,6 +524,20 @@ _SRGB_TO_XYZ_D50 = (
 # develop - so it names what it actually is.
 _PROFILE_NAME_TEXT = "OpenFocus Linear"
 
+# Linear sRGB -> XYZ (D65). The way back out of sRGB, needed only by the camera
+# colour space below; the D50 matrix above cannot stand in for it, being adapted
+# to a different white point.
+_SRGB_TO_XYZ_D65 = (
+    (0.4124564, 0.3575761, 0.1804375),
+    (0.2126729, 0.7151522, 0.0721750),
+    (0.0193339, 0.1191920, 0.9503041),
+)
+
+# D65, the white point the pixels are already balanced to. `AsShotNeutral` in a
+# camera-space file is this point taken into camera coordinates, which is what
+# tells a converter the result needs no further white balancing.
+_D65_WHITE = (0.95047, 1.0, 1.08883)
+
 # ProfileEmbedPolicy 0, "allow copying": the profile describes nothing
 # proprietary, so there is no reason to stop a converter carrying it elsewhere.
 _PROFILE_EMBED_ALLOW_COPYING = 0
@@ -549,6 +634,7 @@ def extensions() -> tuple:
 _compression = DEFAULT_COMPRESSION
 _lossy_quality = DEFAULT_LOSSY_QUALITY
 _fast_load = DEFAULT_FAST_LOAD
+_color_space = DEFAULT_COLOR_SPACE
 
 
 def lossless_available() -> bool:
@@ -620,6 +706,44 @@ def set_fast_load(enabled: bool) -> bool:
 def get_fast_load() -> bool:
     """Whether writes embed a fast-load preview."""
     return _fast_load
+
+
+def camera_space_available() -> bool:
+    """Whether a camera-space write can be attempted at all by this build."""
+    return _RAWPY_AVAILABLE
+
+
+def camera_space_unavailable_reason() -> str:
+    """One line explaining why camera space is off, for logs and dialogs."""
+    if _RAWPY_AVAILABLE:
+        return ""
+    return ("Writing camera-space DNG needs the 'rawpy' package to read the "
+            "source raw's colour matrix: pip install rawpy")
+
+
+def set_color_space(mode: str) -> str:
+    """Set the colour space for subsequent writes. Returns the mode applied.
+
+    Camera space is refused outright on a build without rawpy, rather than
+    quietly writing sRGB: a caller that asked for a file its camera profiles
+    would accept, and got one they wreck, would only find out by opening it.
+    Falling back per-write is different and does happen - see `_camera_color` -
+    because there the setting is right and only that one source cannot serve it.
+    """
+    global _color_space
+    if mode not in VALID_COLOR_SPACES:
+        raise ValueError(
+            f"Unknown DNG colour space: {mode!r}. Expected one of {VALID_COLOR_SPACES}."
+        )
+    if mode == COLOR_CAMERA and not _RAWPY_AVAILABLE:
+        raise RuntimeError(camera_space_unavailable_reason())
+    _color_space = mode
+    return _color_space
+
+
+def get_color_space() -> str:
+    """The colour space subsequent writes will use."""
+    return _color_space
 
 
 # ----------------------------------------------------------------------
@@ -694,6 +818,135 @@ def _display_table() -> np.ndarray:
         (1.0 + offset) * linear ** _BT709_POWER - offset,
     )
     return np.rint(encoded * _LINEAR_MAX).clip(0, _LINEAR_MAX).astype(np.uint16)
+
+
+class _Colorimetry(NamedTuple):
+    """Everything the tag table says about what the samples mean as colour.
+
+    Gathered into one value because the two colour spaces disagree about all of
+    it at once - matrix, neutral, which camera the file claims to be, which
+    profiles may be applied to it - and a writer that took them as six loose
+    arguments could be asked for half of one and half of the other.
+    """
+
+    matrix: Sequence[Sequence[float]]     # XYZ under the illuminant -> this space
+    forward: Optional[Sequence[Sequence[float]]]   # this space -> XYZ (D50)
+    neutral: Sequence[float]              # where the white point lands here
+    camera: str                           # UniqueCameraModel
+    make: Optional[str]                   # EXIF Make/Model, when claiming a body
+    model: Optional[str]
+    profile: Optional[str]                # ProfileName / AsShotProfileName
+    signature: Optional[str]              # who may develop it; None for anyone
+
+
+# What the pipeline's own output is: sRGB, balanced already, developable only by
+# the profile embedded beside it, and claiming no camera - see the module
+# docstring for what naming the source body here used to cost.
+_SRGB_COLORIMETRY = _Colorimetry(
+    matrix=_XYZ_D65_TO_SRGB,
+    forward=_SRGB_TO_XYZ_D50,
+    neutral=(1.0, 1.0, 1.0),
+    camera=CAMERA_MODEL,
+    make=None,
+    model=None,
+    profile=_PROFILE_NAME_TEXT,
+    signature=_CALIBRATION_SIGNATURE,
+)
+
+# Rows converted to camera space at a time. The matrix multiply wants floats,
+# and a 24 MP frame in float64 is 1.7 GB against the 144 MB it occupies as
+# samples, so it is done in bands and the frame itself is never promoted.
+_CAMERA_SPACE_BAND_ROWS = 256
+
+
+def _camera_colorimetry(source_path: Optional[str]) -> Optional[_Colorimetry]:
+    """What `source_path`'s camera looks like as colour, or None if it cannot say.
+
+    LibRaw holds a measured XYZ->camera matrix for every body it supports, and it
+    is the same matrix Adobe's converter writes as ColorMatrix2 - checked against
+    a DNG Converter file for the Z 6_2, where the two agree to every published
+    digit. Taking it from the source raw rather than from a table of our own is
+    what keeps this working for cameras this module has never heard of.
+
+    None whenever that cannot be had - no rawpy, not a raw file, a body LibRaw
+    has no matrix for - and the caller writes sRGB instead. The calibration
+    signature is dropped rather than set to "com.adobe": the file really is
+    developable by that camera's profiles, and signing it as Adobe's own
+    calibration would be a claim about who measured it, made to tidy a menu.
+    """
+    if not _RAWPY_AVAILABLE or not source_path or not os.path.isfile(source_path):
+        return None
+    try:
+        with open(source_path, "rb") as handle:
+            with rawpy.imread(handle) as raw:
+                matrix = np.asarray(raw.rgb_xyz_matrix, dtype=np.float64)[:3, :3]
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+    # LibRaw hands back zeros for a body it holds no calibration for, and an
+    # all-zero matrix would take every pixel to black.
+    if not np.isfinite(matrix).all() or not matrix.any():
+        return None
+    neutral = matrix @ np.asarray(_D65_WHITE, dtype=np.float64)
+    if not np.isfinite(neutral).all() or neutral.min() <= 0.0:
+        return None
+
+    # rawpy exposes no camera name, but every raw format this can open is a TIFF
+    # underneath, so the names come from the source's own IFD 0 - and they are
+    # carried verbatim, because a converter matches its profiles against the
+    # strings the camera wrote, not against a tidied version of them.
+    tags = _read_ifd0(source_path) or {}
+
+    def name(tag: int) -> Optional[str]:
+        value = tags.get(tag)
+        return value.strip() or None if isinstance(value, str) else None
+
+    make, model = name(_MAKE), name(_MODEL)
+
+    return _Colorimetry(
+        matrix=tuple(tuple(row) for row in matrix),
+        # No ForwardMatrix: it is camera->XYZ(D50), and would have to come from
+        # the same calibration as the matrix above. LibRaw carries none, and
+        # inverting the matrix would state as measured what is merely arithmetic.
+        forward=None,
+        neutral=tuple(neutral / neutral.max()),
+        camera=model or CAMERA_MODEL,
+        make=make,
+        model=model,
+        # No embedded profile either. The point of this mode is that the
+        # converter's own profile for that camera is the right one to use.
+        profile=None,
+        signature=None,
+    )
+
+
+def _to_camera_space(linear: np.ndarray, color: _Colorimetry) -> np.ndarray:
+    """Linear sRGB samples as the camera's own, filling `_LINEAR_MAX`.
+
+    The pixels go sRGB -> XYZ -> camera and are then divided by the largest
+    component of the unnormalised neutral, which is green on every Bayer sensor.
+    That puts a white pixel exactly on the neutral the tags declare - green at
+    full scale, the other two left where the sensor's weaker response puts them -
+    which is the shape of a real raw, and is what a converter's white balance
+    then undoes.
+
+    Nothing is clipped in practice: a camera's gamut contains sRGB's with room to
+    spare, so the transform of an sRGB frame stays inside 0..1. The clip is there
+    for the corner where it does not, rather than to be relied on.
+    """
+    to_camera = np.asarray(color.matrix, dtype=np.float64)
+    matrix = to_camera @ np.asarray(_SRGB_TO_XYZ_D65, dtype=np.float64)
+    matrix /= float((to_camera @ np.asarray(_D65_WHITE, dtype=np.float64)).max())
+
+    out = np.empty_like(linear)
+    for start in range(0, linear.shape[0], _CAMERA_SPACE_BAND_ROWS):
+        stop = start + _CAMERA_SPACE_BAND_ROWS
+        # BGR in and BGR out, so the channels are reversed for the multiply and
+        # reversed back after - cheaper than transposing the frame twice.
+        band = linear[start:stop, :, ::-1].astype(np.float64) @ matrix.T
+        np.clip(band, 0.0, _LINEAR_MAX, out=band)
+        out[start:stop] = np.rint(band)[:, :, ::-1]
+    return out
 
 
 def _stores_scene_linear(mode: str) -> bool:
@@ -781,6 +1034,15 @@ def _rational_matrix(matrix) -> list:
         for value in row:
             flat.append(int(round(value * _MATRIX_DENOMINATOR)))
             flat.append(_MATRIX_DENOMINATOR)
+    return flat
+
+
+def _rational_vector(values) -> list:
+    """Flatten a float triple into RATIONAL numerator/denominator pairs."""
+    flat = []
+    for value in values:
+        flat.append(int(round(value * _MATRIX_DENOMINATOR)))
+        flat.append(_MATRIX_DENOMINATOR)
     return flat
 
 
@@ -1397,7 +1659,8 @@ def _prepare(image: np.ndarray,
 def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
                software: str, counts: Sequence[int], rows_per_strip: int,
                preview: Optional[Tuple[bytes, int, int]],
-               exif: Optional[bytes]) -> Tuple[bytearray, List[int]]:
+               exif: Optional[bytes],
+               color: _Colorimetry = _SRGB_COLORIMETRY) -> Tuple[bytearray, List[int]]:
     """Everything ahead of the pixel data, and where each block after it starts.
 
     The header, IFD 0 and the SubIFDs are laid out together because their sizes
@@ -1418,8 +1681,12 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
         (_BITS_PER_SAMPLE, _SHORT, [bits] * samples),
         (_COMPRESSION, _SHORT, [_COMPRESSION_CODES[mode]]),
         (_PHOTOMETRIC, _SHORT, [_LINEAR_RAW]),
-        (_MAKE, _ASCII, CAMERA_MODEL),
-        (_MODEL, _ASCII, CAMERA_MODEL),
+        # The source camera's own names, but only in camera space, where the
+        # samples really are that camera's. Naming it over sRGB samples is what
+        # made a converter offer a sensor profile for data that is not sensor
+        # data - see the module docstring.
+        (_MAKE, _ASCII, color.make or CAMERA_MODEL),
+        (_MODEL, _ASCII, color.model or CAMERA_MODEL),
         (_STRIP_OFFSETS, _LONG, [0] * len(counts)),  # patched once the layout is fixed
         (_ORIENTATION, _SHORT, [1]),
         (_SAMPLES_PER_PIXEL, _SHORT, [samples]),
@@ -1431,7 +1698,7 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
         (_SAMPLE_FORMAT, _SHORT, [1] * samples),  # unsigned integer
         (_DNG_VERSION, _BYTE, _DNG_VERSION_BYTES),
         (_DNG_BACKWARD_VERSION, _BYTE, backward),
-        (_UNIQUE_CAMERA_MODEL, _ASCII, CAMERA_MODEL),
+        (_UNIQUE_CAMERA_MODEL, _ASCII, color.camera),
         (_WHITE_LEVEL, _LONG, [_LINEAR_MAX] * samples),
     ]
 
@@ -1453,10 +1720,11 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
     if samples == 3:
         # Colorimetry only means anything for a colour image. A monochrome DNG
         # carries no matrix and no neutral, which is what DNG 1.4 expects.
-        entries.append((_COLOR_MATRIX_1, _SRATIONAL, _rational_matrix(_XYZ_D65_TO_SRGB)))
-        entries.append((_FORWARD_MATRIX_1, _SRATIONAL, _rational_matrix(_SRGB_TO_XYZ_D50)))
+        entries.append((_COLOR_MATRIX_1, _SRATIONAL, _rational_matrix(color.matrix)))
+        if color.forward is not None:
+            entries.append((_FORWARD_MATRIX_1, _SRATIONAL, _rational_matrix(color.forward)))
         entries.append((_CALIBRATION_ILLUMINANT_1, _SHORT, [_ILLUMINANT_D65]))
-        entries.append((_AS_SHOT_NEUTRAL, _RATIONAL, [1, 1, 1, 1, 1, 1]))
+        entries.append((_AS_SHOT_NEUTRAL, _RATIONAL, _rational_vector(color.neutral)))
         # Explicitly nothing between the samples and that matrix - see
         # `_IDENTITY_MATRIX` for why the defaults are not relied on.
         entries.append((_CAMERA_CALIBRATION_1, _SRATIONAL, _rational_matrix(_IDENTITY_MATRIX)))
@@ -1465,16 +1733,25 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
         # profile to use and falls back to its own default rendering, which is
         # built to develop a camera's scene-referred data and puts a second
         # tone curve on a result that is already finished.
-        entries.append((_PROFILE_NAME, _ASCII, _PROFILE_NAME_TEXT))
-        entries.append((_PROFILE_EMBED_POLICY, _LONG, [_PROFILE_EMBED_ALLOW_COPYING]))
-        entries.append((_PROFILE_TONE_CURVE, _FLOAT, _IDENTITY_TONE_CURVE))
-        # Naming the embedded profile as the one the file was "shot" with is what
-        # makes a converter select it rather than whichever of its own it would
-        # otherwise default to, and the matching pair of calibration signatures
-        # is what stops it substituting a camera profile for it afterwards.
-        entries.append((_AS_SHOT_PROFILE_NAME, _ASCII, _PROFILE_NAME_TEXT))
-        entries.append((_CAMERA_CALIBRATION_SIGNATURE, _ASCII, _CALIBRATION_SIGNATURE))
-        entries.append((_PROFILE_CALIBRATION_SIGNATURE, _ASCII, _CALIBRATION_SIGNATURE))
+        #
+        # A camera-space file carries none of it, and that is the point of the
+        # mode rather than an omission: the samples are the camera's, so the
+        # converter's own profile for that camera is the correct one to apply and
+        # there is nothing better to embed beside it.
+        if color.profile is not None:
+            entries.append((_PROFILE_NAME, _ASCII, color.profile))
+            entries.append((_PROFILE_EMBED_POLICY, _LONG, [_PROFILE_EMBED_ALLOW_COPYING]))
+            entries.append((_PROFILE_TONE_CURVE, _FLOAT, _IDENTITY_TONE_CURVE))
+            # Naming the embedded profile as the one the file was "shot" with is
+            # what makes a converter select it rather than whichever of its own
+            # it would otherwise default to.
+            entries.append((_AS_SHOT_PROFILE_NAME, _ASCII, color.profile))
+        # The matching pair of signatures is what stops a converter substituting
+        # a camera profile afterwards. Absent in camera space, where a camera
+        # profile is exactly what should be substitutable.
+        if color.signature is not None:
+            entries.append((_CAMERA_CALIBRATION_SIGNATURE, _ASCII, color.signature))
+            entries.append((_PROFILE_CALIBRATION_SIGNATURE, _ASCII, color.signature))
     sub_ifds = exif_sub_ifds(exif)
     for pointer, _ in sub_ifds:
         entries.append((pointer, _LONG, [0]))  # patched once the layout is fixed
@@ -1522,9 +1799,53 @@ def _tag_table(source: np.ndarray, samples: int, bits: int, mode: str,
     return header, starts
 
 
+def _resolve_color(color_space: Optional[str], source_path: Optional[str],
+                   samples: int, mode: str) -> _Colorimetry:
+    """The colorimetry a write will use, falling back to sRGB where it must.
+
+    Camera space needs three things at once: the mode asked for, a colour result
+    to transform, and a source raw whose matrix can be read. Any of them missing
+    and the write is sRGB instead - a valid file describing what it holds, rather
+    than a refusal or, worse, camera tags over sRGB samples.
+
+    The fallback is announced. A file that quietly came out in a different colour
+    space than the one selected would look right in a converter and wrong only
+    where it mattered, which is the failure this whole mode exists to fix.
+    """
+    wanted = _color_space if color_space is None else color_space
+    if wanted not in VALID_COLOR_SPACES:
+        raise ValueError(
+            f"Unknown DNG colour space: {wanted!r}. Expected one of {VALID_COLOR_SPACES}."
+        )
+    if wanted != COLOR_CAMERA:
+        return _SRGB_COLORIMETRY
+
+    if samples != 3:
+        print("[DNG] Camera colour space needs a colour image; writing sRGB instead.",
+              flush=True)
+        return _SRGB_COLORIMETRY
+    if mode == COMPRESSION_LOSSY:
+        # The lossy mode keeps display-referred samples, and camera space is a
+        # transform of linear ones. Undoing the curve to convert and re-applying
+        # it to store would put the DCT on values it was never meant for.
+        print("[DNG] Camera colour space cannot be written lossily; writing sRGB instead.",
+              flush=True)
+        return _SRGB_COLORIMETRY
+
+    color = _camera_colorimetry(source_path)
+    if color is None:
+        name = os.path.basename(source_path) if source_path else "no source"
+        print(f"[DNG] No camera colour matrix available ({name}); writing sRGB instead.",
+              flush=True)
+        return _SRGB_COLORIMETRY
+    return color
+
+
 def _emit(handle, image: np.ndarray, software: str,
           compression: Optional[str], lossy_quality: Optional[int],
-          fast_load: Optional[bool], exif: Optional[bytes]) -> None:
+          fast_load: Optional[bool], exif: Optional[bytes],
+          color_space: Optional[str] = None,
+          source_path: Optional[str] = None) -> None:
     """Write a complete linear DNG to an open binary file object.
 
     Nothing larger than one strip is held on top of the frame itself: the tag
@@ -1546,11 +1867,18 @@ def _emit(handle, image: np.ndarray, software: str,
     # the same frame with its shadows crushed.
     preview = _preview_jpeg(source, bits) if want_preview else None
 
+    color = _resolve_color(color_space, source_path, samples, mode)
+
     if _stores_scene_linear(mode):
         # Not in place: `_source_view` may have handed back a view of the
         # caller's own array, and a save must not rewrite the frame it was given.
         source = _scene_linear(source, bits)
         bits = 16
+        if color is not _SRGB_COLORIMETRY:
+            # On the linear samples, never the display-referred ones: the matrix
+            # is a statement about light, and applying it to encoded values would
+            # mix channels that have each been bent by the curve first.
+            source = _to_camera_space(source, color)
 
     height, width = source.shape[:2]
     rows_per_strip = _rows_per_strip(mode, width, height, samples, bits)
@@ -1572,7 +1900,7 @@ def _emit(handle, image: np.ndarray, software: str,
         counts = [len(blob) for blob in payloads]
 
     header, _ = _tag_table(source, samples, bits, mode, software, counts,
-                           rows_per_strip, preview, exif)
+                           rows_per_strip, preview, exif, color)
     handle.write(header)
 
     if payloads is None:
@@ -1619,12 +1947,19 @@ def write(file_path: str,
           compression: Optional[str] = None,
           lossy_quality: Optional[int] = None,
           fast_load: Optional[bool] = None,
-          exif: Optional[bytes] = None) -> bool:
+          exif: Optional[bytes] = None,
+          color_space: Optional[str] = None,
+          source_path: Optional[str] = None) -> bool:
     """Encode and write a DNG file. Returns False instead of raising.
 
     Mirrors what cv2.imwrite gives the callers in utils.image_utils: a boolean,
     with the reason printed, so a failed DNG save is reported through the same
     "could not write" path as any other format.
+
+    `source_path` is the raw the stack came from, and is needed only by the
+    camera colour space, which reads its matrix from it - `exif` carries the
+    camera's tags but not its calibration, which lives in LibRaw rather than in
+    any file. Without it a camera-space write falls back to sRGB.
 
     The file is streamed rather than built in memory first, so a partly written
     one can be left behind by a failure mid-way; it is removed, because a
@@ -1632,7 +1967,8 @@ def write(file_path: str,
     """
     try:
         with open(file_path, "wb") as handle:
-            _emit(handle, image, software, compression, lossy_quality, fast_load, exif)
+            _emit(handle, image, software, compression, lossy_quality, fast_load,
+                  exif, color_space, source_path)
     except Exception as exc:  # pylint: disable=broad-except
         print(f"[DNG] Could not write {os.path.basename(file_path)}: {exc}", flush=True)
         try:

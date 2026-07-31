@@ -462,6 +462,13 @@ class TranslationManager(QObject):
                 'dialog_dng_compression_label': 'Compression:',
                 'dialog_dng_quality_label': 'Lossy quality:',
                 'dialog_dng_fast_load': 'Embed fast-load preview',
+                'dialog_dng_camera_space': "Write in the source camera's colour space",
+                'dng_camera_space_hint': "Stores the result as the camera's own raw "
+                                         'data, so camera profiles apply correctly '
+                                         'instead of shifting the colour. The file then '
+                                         'renders like the raw in your converter rather '
+                                         'than like the fused result. Needs the source '
+                                         'RAW; other sources fall back to sRGB.',
                 'dng_compression_none': 'Uncompressed',
                 'dng_compression_lossless': 'Lossless (JPEG)',
                 'dng_compression_lossy': 'Lossy (JPEG)',
@@ -1034,6 +1041,12 @@ class TranslationManager(QObject):
                 'dialog_dng_compression_label': '压缩方式:',
                 'dialog_dng_quality_label': '有损质量:',
                 'dialog_dng_fast_load': '嵌入快速加载预览',
+                'dialog_dng_camera_space': '以源相机的色彩空间写入',
+                'dng_camera_space_hint': '将结果存储为相机自身的 RAW 数据，'
+                                         '因此相机配置文件能够正确应用，而不会造成偏色。'
+                                         '此时文件在转换器中的呈现效果与 RAW 相同，'
+                                         '而非与合成结果相同。需要源 RAW 文件；'
+                                         '其他来源将回退为 sRGB。',
                 'dng_compression_none': '不压缩',
                 'dng_compression_lossless': '无损 (JPEG)',
                 'dng_compression_lossy': '有损 (JPEG)',

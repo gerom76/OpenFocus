@@ -960,6 +960,200 @@ class TestWithoutRawpy:
         assert dng.read(str(out)) is None
 
 
+class TestCameraSpace:
+    """The opt-in mode that writes the result as the source camera's own raw data.
+
+    The sRGB mode reproduces the fused frame but cannot accept a camera profile:
+    those develop sensor RGB, and over sRGB they double-transform it into a heavy
+    red cast. Camera space puts the pixels back where such a profile expects
+    them, at the cost of the converter then rendering the file like the raw
+    rather than like the fused result. It is off by default, and falls back to
+    sRGB rather than failing whenever the source cannot supply a matrix.
+    """
+
+    # A Nikon Z 6_2 as LibRaw and Adobe both describe it - the two agree to every
+    # published digit, which is why the matrix can be taken from the source raw.
+    NIKON = (
+        (0.9943, -0.3269, -0.0839),
+        (-0.5323, 1.3269, 0.2259),
+        (-0.1198, 0.2083, 0.7557),
+    )
+
+    def _colorimetry(self, matrix=None):
+        matrix = self.NIKON if matrix is None else matrix
+        neutral = np.asarray(matrix, dtype=float) @ np.asarray(dng._D65_WHITE, dtype=float)
+        return dng._Colorimetry(
+            matrix=matrix, forward=None, neutral=tuple(neutral / neutral.max()),
+            camera="NIKON Z 6_2", make="NIKON CORPORATION", model="NIKON Z 6_2",
+            profile=None, signature=None,
+        )
+
+    def test_the_default_is_srgb(self):
+        assert dng.get_color_space() == dng.COLOR_SRGB
+        assert dng.DEFAULT_COLOR_SPACE == dng.COLOR_SRGB
+
+    def test_an_unknown_colour_space_is_refused(self):
+        with pytest.raises(ValueError):
+            dng.set_color_space("prophoto")
+
+    def test_camera_space_needs_rawpy(self, monkeypatch):
+        monkeypatch.setattr(dng, "_RAWPY_AVAILABLE", False)
+        assert not dng.camera_space_available()
+        assert dng.camera_space_unavailable_reason()
+        # Refused rather than downgraded, for the same reason lossless is: a
+        # caller that asked for a file its camera profiles would accept, and got
+        # one they wreck, would only find out by opening it.
+        with pytest.raises(RuntimeError):
+            dng.set_color_space(dng.COLOR_CAMERA)
+
+    @pytest.mark.parametrize("reason,image,compression", [
+        ("no source raw", _result16(), dng.COMPRESSION_NONE),
+        ("monochrome", _result16()[:, :, 0], dng.COMPRESSION_NONE),
+        ("lossy", _result8(), dng.COMPRESSION_LOSSY),
+    ])
+    def test_it_falls_back_to_srgb_and_says_so(self, tmp_path, capsys, reason,
+                                               image, compression):
+        """Every route that cannot serve camera space writes a valid sRGB file.
+
+        Announced, not silent: a file that quietly came out in a different colour
+        space than the one selected would look right in a converter and be wrong
+        only where it mattered, which is the failure the mode exists to fix.
+        """
+        out = str(tmp_path / "fallback.dng")
+        assert dng.write(out, image, compression=compression,
+                         color_space=dng.COLOR_CAMERA, source_path=None)
+
+        assert "sRGB instead" in capsys.readouterr().out, reason
+        tags = _tags(out)
+        assert tags[dng._UNIQUE_CAMERA_MODEL] == dng.CAMERA_MODEL
+        assert tags[dng._MAKE] == dng.CAMERA_MODEL
+
+    def test_it_writes_the_cameras_own_tags(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(dng, "_camera_colorimetry", lambda path: self._colorimetry())
+        out = str(tmp_path / "camera.dng")
+        assert dng.write(out, _result16(), color_space=dng.COLOR_CAMERA,
+                         source_path=__file__)
+        tags = _tags(out)
+
+        # The file claims to be the camera, because in this mode its samples are
+        # that camera's. Over sRGB samples the same claim is what made a
+        # converter offer a sensor profile for data that is not sensor data.
+        assert tags[dng._MAKE] == "NIKON CORPORATION"
+        assert tags[dng._MODEL] == "NIKON Z 6_2"
+        assert tags[dng._UNIQUE_CAMERA_MODEL] == "NIKON Z 6_2"
+
+        matrix = np.asarray(_rationals(tags[dng._COLOR_MATRIX_1], signed=True))
+        assert np.allclose(matrix, np.asarray(self.NIKON).ravel(), atol=1e-4)
+
+        # Not (1, 1, 1) any more: the neutral is where D65 lands in camera
+        # coordinates, and is what tells a converter the frame is already
+        # balanced. Green is the strongest channel on every Bayer sensor.
+        neutral = np.asarray(_rationals(tags[dng._AS_SHOT_NEUTRAL]))
+        assert neutral[1] == pytest.approx(1.0)
+        assert neutral[0] < 1.0 and neutral[2] < 1.0
+
+        # No embedded profile and no signature, and both are the point of the
+        # mode: the converter's own profile for that camera is the right one, and
+        # the signature exists to stop exactly that substitution.
+        assert dng._PROFILE_NAME not in tags
+        assert dng._AS_SHOT_PROFILE_NAME not in tags
+        assert dng._CAMERA_CALIBRATION_SIGNATURE not in tags
+        assert dng._PROFILE_CALIBRATION_SIGNATURE not in tags
+        # ForwardMatrix would have to come from the same calibration as the
+        # matrix above; LibRaw carries none, and inverting is not measuring.
+        assert dng._FORWARD_MATRIX_1 not in tags
+
+    def test_a_camera_whose_space_is_srgb_leaves_the_pixels_alone(self, tmp_path, monkeypatch):
+        """The transform pinned at its one point with an answer known in advance.
+
+        Told the camera's space *is* sRGB, sRGB -> XYZ -> camera has to come back
+        out as what went in. Anything else means the matrix chain or the neutral
+        scaling is wrong, and that would otherwise only show as a colour cast
+        against a real camera nobody can check by hand.
+
+        Not to the last count, because `_XYZ_D65_TO_SRGB` is written to the four
+        decimals the standard publishes while its inverse here is exact, so the
+        two compose to an identity only that far. Twenty parts in 65535 is three
+        thousandths of one 8-bit level, and it bounds the constant's precision
+        rather than the transform's.
+        """
+        srgb_as_camera = self._colorimetry(dng._XYZ_D65_TO_SRGB)
+        monkeypatch.setattr(dng, "_camera_colorimetry", lambda path: srgb_as_camera)
+
+        image = _result16()
+        plain = str(tmp_path / "plain.dng")
+        camera = str(tmp_path / "camera.dng")
+        assert dng.write(plain, image)
+        assert dng.write(camera, image, color_space=dng.COLOR_CAMERA, source_path=__file__)
+
+        drift = np.abs(_stored_samples(plain).astype(np.int32)
+                       - _stored_samples(camera).astype(np.int32))
+        assert drift.max() <= 20
+        # And the neutral it declares is D65 in that space, which for sRGB is
+        # equal energy - again to the precision of the constant above.
+        assert np.allclose(np.asarray(_rationals(_tags(camera)[dng._AS_SHOT_NEUTRAL])),
+                           [1.0, 1.0, 1.0], atol=1e-3)
+
+    def test_the_pixels_are_the_camera_transform_of_the_frame(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(dng, "_camera_colorimetry", lambda path: self._colorimetry())
+        image = _result16()
+        out = str(tmp_path / "camera.dng")
+        assert dng.write(out, image, color_space=dng.COLOR_CAMERA, source_path=__file__)
+
+        # sRGB -> XYZ -> camera, on linear light, scaled so a white pixel lands
+        # on the declared neutral with green at full scale.
+        matrix = np.asarray(self.NIKON) @ np.asarray(dng._SRGB_TO_XYZ_D65)
+        matrix /= (np.asarray(self.NIKON) @ np.asarray(dng._D65_WHITE)).max()
+        linear = dng._linearization_table(16)[image[:, :, ::-1]].astype(float)
+        expected = np.rint(np.clip(linear @ matrix.T, 0, dng._LINEAR_MAX))
+
+        assert np.abs(_stored_samples(out).astype(float) - expected).max() <= 1
+
+    def test_a_camera_space_file_is_not_read_back_as_our_own(self, tmp_path, monkeypatch):
+        """It is a camera raw now, and has to be developed rather than trusted.
+
+        `read_linear` hands its own files back untouched, which for camera-space
+        samples would be sRGB values that are nothing of the sort. Nothing
+        enforces this separately - naming the camera is what stops the file
+        matching - so it is worth pinning that the two cannot be confused.
+        """
+        monkeypatch.setattr(dng, "_camera_colorimetry", lambda path: self._colorimetry())
+        out = str(tmp_path / "camera.dng")
+        assert dng.write(out, _result16(), color_space=dng.COLOR_CAMERA,
+                         source_path=__file__)
+        assert dng.read_linear(out) is None
+
+    @needs_rawpy
+    def test_libraw_develops_it_back_to_the_frame(self, tmp_path, monkeypatch):
+        """End to end through a reader that is not this module.
+
+        With sRGB standing in for the camera the whole chain has a known answer,
+        so this checks the tags as much as the transform: a converter reads
+        AsShotNeutral, undoes the balance, applies ColorMatrix1, and has to
+        arrive back at the frame that was written.
+        """
+        import rawpy
+
+        monkeypatch.setattr(dng, "_camera_colorimetry",
+                            lambda path: self._colorimetry(dng._XYZ_D65_TO_SRGB))
+        image = _grey_ramp()
+        out = str(tmp_path / "camera.dng")
+        assert dng.write(out, image[:, :, ::-1], color_space=dng.COLOR_CAMERA,
+                         source_path=__file__)
+
+        with open(out, "rb") as handle:
+            with rawpy.imread(handle) as raw:
+                # LibRaw lowers the white level to the brightest data it finds
+                # unless told not to, which rescales any raw that stops short of
+                # saturation - a real camera file included. Off, so the check is
+                # of the file rather than of that heuristic.
+                developed = raw.postprocess(output_bps=16, use_camera_wb=True,
+                                            no_auto_bright=True, adjust_maximum_thr=0.0)
+
+        expected = _as_stored(image)
+        assert np.abs(developed.astype(np.int32) - expected.astype(np.int32)).max() <= 64
+
+
 class TestSourceExif:
     """A source file's EXIF, carried into the DNG as tags of its own.
 
