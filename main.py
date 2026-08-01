@@ -1,5 +1,23 @@
 import sys
 import os
+
+# Refuse to start on a free-threaded interpreter before anything imports PyQt6.
+# D:\Python314 holds both python.exe and python3.14t.exe and they share one
+# site-packages, but PyQt6 and opencv-python ship only 'abi3' wheels - the
+# stable ABI of the GIL build. The free-threaded build accepts 'abi3t' instead,
+# so those extensions are the wrong ABI for it. Their .pyd files carry no ABI
+# tag in the filename, so the loader takes them anyway and dies with an access
+# violation (0xC0000005) on the import below, printing nothing at all. A guard
+# here is the only place that still gets to speak.
+if not getattr(sys, '_is_gil_enabled', lambda: True)():
+    sys.exit(
+        "OpenFocus cannot run on a free-threaded (no-GIL) interpreter.\n"
+        f"  Running: {sys.executable}\n"
+        "PyQt6 and opencv-python publish no free-threaded wheels, so importing\n"
+        "them here would crash without a traceback.\n"
+        "Use the standard build instead, e.g. 'py -V:3.14 main.py'."
+    )
+
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
