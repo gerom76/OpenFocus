@@ -396,12 +396,14 @@ def create_right_panel() -> RightPanelComponents:
     source_list_layout = QVBoxLayout(source_list_widget)
     source_list_layout.setContentsMargins(10, 10, 10, 10)
     source_images_label = QLabel(trans.t('label_source_images').format(0))
-    source_list_layout.addWidget(source_images_label)
 
-    # Check-state toolbar: All / None / every N-th
+    # Header row: count label on the left, check-state toolbar (All / None /
+    # every N-th) right-aligned so the buttons stay put as the label grows.
     source_toolbar = QHBoxLayout()
     source_toolbar.setContentsMargins(0, 0, 0, 2)
     source_toolbar.setSpacing(4)
+    source_toolbar.addWidget(source_images_label)
+    source_toolbar.addStretch()
     btn_select_all = QPushButton(trans.t('btn_select_all'))
     btn_select_all.setToolTip(trans.t('tip_select_all'))
     btn_select_invert = QPushButton(trans.t('btn_select_invert'))
@@ -422,7 +424,6 @@ def create_right_panel() -> RightPanelComponents:
     source_toolbar.addWidget(btn_select_none)
     source_toolbar.addWidget(btn_select_nth)
     source_toolbar.addWidget(spin_select_nth)
-    source_toolbar.addStretch()
     source_toolbar_widget = QWidget()
     source_toolbar_widget.setLayout(source_toolbar)
     source_toolbar_widget.setStyleSheet(SOURCE_TOOLBAR_STYLE)
