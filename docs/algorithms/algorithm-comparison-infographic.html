@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenFocus 1.30.0 — Fusion algorithms: canonical vs. implemented</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+
+  :root {
+    --surface:      #fcfcfb;
+    --plane:        #f9f9f7;
+    --ink:          #0b0b0b;
+    --ink-2:        #52514e;
+    --muted:        #898781;
+    --grid:         #e1e0d9;
+    --rule:         #c3c2b7;
+    --hair:         rgba(11,11,11,0.10);
+
+    --s1:           #2a78d6;  /* categorical 1 — hardened beyond canonical */
+    --s2:           #eb6834;  /* categorical 2 — open deltas */
+
+    --good:         #0ca30c;
+    --warning:      #fab219;
+    --serious:      #ec835a;
+    --critical:     #d03b3b;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--plane);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page {
+    width: 297mm; height: 210mm;
+    padding: 11mm 12mm 9mm;
+    background: var(--surface);
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+    display: flex; flex-direction: column;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ---------- typography ---------- */
+  h1 { font-size: 19.5pt; line-height: 1.06; margin: 0 0 1.8mm; letter-spacing: -0.02em; }
+  h2 { font-size: 10pt; margin: 0 0 1.2mm; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+  h3 { font-size: 10pt; margin: 0; }
+  p  { margin: 0 0 2mm; }
+
+  .lede { font-size: 8.3pt; line-height: 1.42; color: var(--ink-2); max-width: 205mm; }
+  .small { font-size: 7.4pt; line-height: 1.4; color: var(--muted); }
+  .fnote { font-size: 6.8pt; line-height: 1.45; color: var(--muted); }
+
+  .pagehead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1.5px solid var(--ink); padding-bottom: 1.6mm; margin-bottom: 3mm;
+  }
+  .pagehead .kicker { font-size: 8pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+
+  .folio {
+    position: absolute; bottom: 5mm; left: 12mm; right: 12mm;
+    display: flex; justify-content: space-between;
+    font-size: 6.8pt; color: var(--muted);
+    border-top: 1px solid var(--grid); padding-top: 1.5mm;
+  }
+
+  /* ---------- cover ---------- */
+  .cover-head { display: grid; grid-template-columns: 1fr 74mm; gap: 8mm; margin-bottom: 1.5mm; }
+  .stat-row { display: flex; gap: 4mm; }
+  .tile {
+    flex: 1; border: 1px solid var(--hair); border-radius: 3px;
+    padding: 2mm 3mm; background: var(--plane);
+  }
+  .tile .v { font-size: 17pt; font-weight: 650; line-height: 1; letter-spacing: -0.02em; }
+  .tile .k { font-size: 6.8pt; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin-top: 1.2mm; }
+
+  /* ---------- matrix ---------- */
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 7.1pt; line-height: 1.32; }
+  table.matrix th, table.matrix td { text-align: left; padding: 0.9mm 1.4mm; vertical-align: top; }
+  table.matrix thead th {
+    font-size: 6.6pt; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--rule);
+  }
+  table.matrix tbody tr { border-bottom: 1px solid var(--grid); }
+  table.matrix tbody tr:nth-child(even) { background: #f6f6f3; }
+  table.matrix td.name { font-weight: 650; font-size: 8pt; white-space: nowrap; }
+  table.matrix td.name span { display: block; font-weight: 400; font-size: 6.5pt; color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---------- chips ---------- */
+  .chip {
+    display: inline-block; font-size: 6.4pt; line-height: 1.5;
+    padding: 0.2mm 1.4mm; border-radius: 2px; border: 1px solid var(--hair);
+    background: #fff; color: var(--ink-2); white-space: nowrap;
+  }
+  .chip.on   { border-color: var(--good);     color: #0a6b0a; background: #f0f9f0; }
+  .chip.warn { border-color: var(--warning);  color: #7a5400; background: #fdf6e6; }
+  .chip.ser  { border-color: var(--serious);  color: #8f3f18; background: #fdf1eb; }
+  .chip.crit { border-color: var(--critical); color: #8f1f1f; background: #fbeded; }
+  .chip.off  { border-color: var(--rule);     color: var(--muted); }
+
+  /* ---------- bar chart ---------- */
+  .chart { margin-top: 1.5mm; }
+  .legend { display: flex; gap: 6mm; font-size: 6.9pt; color: var(--ink-2); margin-bottom: 1mm; }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 1.5mm; vertical-align: -0.5px; }
+  .bars { display: grid; grid-template-columns: 28mm 1fr; row-gap: 0.8mm; align-items: center; }
+  .bars .lab { font-size: 7.2pt; color: var(--ink-2); text-align: right; padding-right: 3mm; }
+  .track { display: flex; align-items: center; height: 3.4mm; }
+  .seg { height: 3.4mm; border-radius: 0 2px 2px 0; position: relative; }
+  .seg:first-child { border-radius: 2px 0 0 2px; }
+  .seg + .seg { margin-left: 2px; }
+  .seg span {
+    position: absolute; right: 1.2mm; top: 50%; transform: translateY(-50%);
+    font-size: 6.2pt; color: #fff; font-variant-numeric: tabular-nums;
+  }
+  .track em { font-style: normal; font-size: 6.6pt; color: var(--muted); margin-left: 2.5mm; }
+  .axis { position: relative; height: 3mm; border-top: 1px solid var(--grid); margin-top: 0.5mm; }
+  .axis span { position: absolute; top: 0.8mm; font-size: 6.4pt; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ---------- method cards ---------- */
+  .cards { display: flex; flex-direction: column; gap: 4mm; flex: 1; }
+  .card {
+    border: 1px solid var(--hair); border-radius: 3px; overflow: hidden;
+    display: flex; flex-direction: column; flex: 1;
+  }
+  .card > header {
+    display: flex; align-items: baseline; gap: 3mm;
+    padding: 1.6mm 2.6mm; background: var(--plane); border-bottom: 1px solid var(--hair);
+  }
+  .card > header .idx {
+    font-size: 8pt; font-weight: 650; color: #fff; background: var(--ink);
+    border-radius: 2px; padding: 0.3mm 1.5mm; font-variant-numeric: tabular-nums;
+  }
+  .card > header .ref { font-size: 6.8pt; color: var(--muted); flex: 1; }
+  .card > header .badges { display: flex; gap: 1.5mm; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1.25fr 1.15fr; flex: 1; }
+  .cols > div { padding: 2mm 2.6mm 2mm; }
+  .cols > div + div { border-left: 1px solid var(--grid); }
+  .cols h4 {
+    font-size: 6.6pt; text-transform: uppercase; letter-spacing: 0.07em;
+    margin: 0 0 1.3mm; color: var(--muted); font-weight: 600;
+    display: flex; align-items: center; gap: 1.5mm;
+  }
+  .cols h4 i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; }
+  ul { margin: 0; padding-left: 3mm; }
+  li { font-size: 6.9pt; line-height: 1.38; margin-bottom: 0.9mm; color: var(--ink-2); }
+  li b, li strong { color: var(--ink); font-weight: 620; }
+  li code, code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 6.6pt; background: #f2f1ed; padding: 0 0.8mm; border-radius: 2px; }
+  li .tag { font-size: 6.2pt; color: var(--muted); }
+
+  /* ---------- quadrant ---------- */
+  .quad-wrap { display: grid; grid-template-columns: 1.15fr 1fr; gap: 8mm; flex: 1; }
+  svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  table.road { width: 100%; border-collapse: collapse; font-size: 7.2pt; }
+  table.road th, table.road td { text-align: left; padding: 1.3mm 1.5mm; vertical-align: top; }
+  table.road thead th { font-size: 6.5pt; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--rule); }
+  table.road tbody tr { border-bottom: 1px solid var(--grid); }
+  table.road td.id { font-variant-numeric: tabular-nums; color: var(--muted); width: 6mm; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════ PAGE 1 — COVER + MATRIX ══════════════════════════ -->
+<section class="page">
+  <div class="cover-head">
+    <div>
+      <div class="pagehead" style="border:0; padding:0; margin:0;">
+        <span class="kicker">OpenFocus 1.30.0 · fusion algorithm audit</span>
+      </div>
+      <h1>Eight fusion algorithms,<br>canonical rule vs. what actually ships</h1>
+      <p class="lede">
+        Every method OpenFocus offers, set against the paper or family it descends from. The
+        middle column of each card is the <b>delta</b>: where the implementation deliberately
+        departs from the published rule, and why. The right column is what is still open. Claims
+        come from the source and from the measured audit in
+        <code>docs/ALGORITHM_IMPROVEMENTS.md</code>; measurements were made on synthetic fixtures
+        (<code>tests/fusion_scenarios.py</code>) plus two reported real stacks, on one machine.
+      </p>
+    </div>
+    <div>
+      <div class="stat-row" style="flex-direction:column; gap:2mm;">
+        <div class="tile"><div class="v num">8</div><div class="k">fusion methods (7 + 1 refiner)</div></div>
+        <div class="tile"><div class="v num">6</div><div class="k">with a GPU twin, verified against CPU</div></div>
+        <div class="tile"><div class="v num">0</div><div class="k">shipped exactly as published</div></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>At a glance <span style="text-transform:none; letter-spacing:0; font-weight:400; color:var(--muted)">— all eight preserve 8- and 16-bit input depth end to end</span></h2>
+  <table class="matrix">
+    <thead>
+      <tr>
+        <th style="width:28mm">Method</th>
+        <th style="width:23mm">Domain</th>
+        <th style="width:31mm">Decision rule as shipped</th>
+        <th style="width:16mm">Order-<br>independent</th>
+        <th style="width:16mm">GPU</th>
+        <th style="width:37mm">Exposed controls (default)</th>
+        <th>Biggest deliberate departure from canonical</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="name">DCT<span>Haghighat 2011</span></td>
+        <td>Block DCT</td>
+        <td>Plateau focal-plane field, weight-composited</td>
+        <td><span class="chip warn">near&#8209;ties only</span></td>
+        <td><span class="chip on">CUDA/MPS</span></td>
+        <td>kernel 31 · block 8 · plateau 0.80 · blend on</td>
+        <td>Scores <b>band-limited, noise-normalised</b> energy, and never picks one winner</td>
+      </tr>
+      <tr>
+        <td class="name">Pyramid<span>Burt &amp; Adelson 1983</span></td>
+        <td>Laplacian pyramid</td>
+        <td>Peak-relative weighting, envelope-clamped</td>
+        <td><span class="chip on">yes</span></td>
+        <td><span class="chip on">CUDA/MPS</span></td>
+        <td>kernel 5 · selectivity 8 · base 3 · coherence off · levels 5</td>
+        <td><b>Weights instead of choose-max</b>; <code>selectivity=inf</code> restores the paper</td>
+      </tr>
+      <tr>
+        <td class="name">Guided Filter<span>Li, Kang &amp; Hu 2013</span></td>
+        <td>Two-scale + guided</td>
+        <td>Saliency argmax → refined weights</td>
+        <td><span class="chip on">yes</span></td>
+        <td><span class="chip on">CUDA/MPS</span></td>
+        <td>kernel 31 (r₁ derived at 3:1)</td>
+        <td><b>r₁ derived from the kernel</b> rather than pinned at the paper's 45</td>
+      </tr>
+      <tr>
+        <td class="name">DTCWT<span>Lewis 2007</span></td>
+        <td>Complex wavelet</td>
+        <td>Pairwise choose-max + majority vote</td>
+        <td><span class="chip crit">no</span></td>
+        <td><span class="chip on">CUDA/MPS</span></td>
+        <td>levels N</td>
+        <td><b>One decision mask for all three channels</b>; activity-weighted lowpass</td>
+      </tr>
+      <tr>
+        <td class="name">GFG-FGF<span>Fu 2024</span></td>
+        <td>Scharr + fast guided</td>
+        <td>Per-pixel argmax → smoothed weights</td>
+        <td><span class="chip warn">float order</span></td>
+        <td><span class="chip on">CUDA/MPS</span></td>
+        <td>kernel 7</td>
+        <td><b>Luminance guide + all-channel activity</b>; the 15% frame quota deleted</td>
+      </tr>
+      <tr>
+        <td class="name">Depth Map<span>DMap family</span></td>
+        <td>Pixel-domain Laplacian</td>
+        <td>Hard argmax <i>or</i> contrast-weighted average</td>
+        <td><span class="chip on">yes</span></td>
+        <td><span class="chip off">CPU only</span></td>
+        <td>mode max/avg · kernel 9 · halo radius 0</td>
+        <td><b>Dedicated halo-suppression radius</b>; scale-free baseline in average mode</td>
+      </tr>
+      <tr>
+        <td class="name">StackMFF-V4<span>neural, weights bundled</span></td>
+        <td>CNN index regression</td>
+        <td>Predicted index map, verbatim gather</td>
+        <td><span class="chip on">yes</span></td>
+        <td><span class="chip on">native torch</span></td>
+        <td>— (tile size / batch)</td>
+        <td><b>Depth-preserving gather</b>, explicit 112 px floor, adaptive batch cap</td>
+      </tr>
+      <tr>
+        <td class="name">IFCNN<span>refinement stage</span></td>
+        <td>CNN feature merge</td>
+        <td>Residual applied to another method's output</td>
+        <td><span class="chip on">yes</span></td>
+        <td><span class="chip on">native torch</span></td>
+        <td>on/off · weights not bundled</td>
+        <td><b>Only the merge residual is applied</b>, so the lossy round trip cancels</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="chart">
+    <h2 style="margin-bottom:1.5mm">Documented deltas per method</h2>
+    <div class="legend">
+      <span><i style="background:var(--s1)"></i>Deliberate departures from canonical, measured and kept</span>
+      <span><i style="background:var(--s2)"></i>Open — a known gap against the canonical rule or against the rest of the codebase</span>
+    </div>
+    <div class="bars">
+      <div class="lab">DCT</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:60mm"><span>6</span></div>
+        <div class="seg" style="background:var(--s2); width:20mm"><span>2</span></div>
+        <em>most rewritten method in the set</em>
+      </div>
+
+      <div class="lab">Pyramid</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:50mm"><span>5</span></div>
+        <div class="seg" style="background:var(--s2); width:10mm"><span>1</span></div>
+        <em>every dial answers a measured failure</em>
+      </div>
+
+      <div class="lab">DTCWT</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:40mm"><span>4</span></div>
+        <div class="seg" style="background:var(--s2); width:30mm"><span>3</span></div>
+        <em>the largest open debt</em>
+      </div>
+
+      <div class="lab">GFG-FGF</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:30mm"><span>3</span></div>
+        <div class="seg" style="background:var(--s2); width:30mm"><span>3</span></div>
+        <em>quality fixed, plumbing not</em>
+      </div>
+
+      <div class="lab">Guided Filter</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:30mm"><span>3</span></div>
+        <div class="seg" style="background:var(--s2); width:20mm"><span>2</span></div>
+      </div>
+
+      <div class="lab">Depth Map</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:30mm"><span>3</span></div>
+        <div class="seg" style="background:var(--s2); width:20mm"><span>2</span></div>
+      </div>
+
+      <div class="lab">StackMFF-V4</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:30mm"><span>3</span></div>
+        <div class="seg" style="background:var(--s2); width:20mm"><span>2</span></div>
+      </div>
+
+      <div class="lab">IFCNN</div>
+      <div class="track">
+        <div class="seg" style="background:var(--s1); width:20mm"><span>2</span></div>
+        <div class="seg" style="background:var(--s2); width:20mm"><span>2</span></div>
+      </div>
+
+      <div class="lab"></div>
+      <div class="axis">
+        <span style="left:0">0</span><span style="left:20mm">2</span><span style="left:40mm">4</span>
+        <span style="left:60mm">6</span><span style="left:80mm">8</span><span style="left:100mm">10</span>
+        <span style="left:112mm; color:var(--muted)">deltas — each one is enumerated on the method's card</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="folio">
+    <span>OpenFocus — fusion algorithms, canonical vs. implemented · generated from source at 1.30.0</span>
+    <span>1 / 6</span>
+  </div>
+</section>
+
+<!-- ══════════════════════════ PAGE 2 — DCT + PYRAMID ══════════════════════════ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Method cards · 1–2 of 8</span><h3 style="font-size:13pt; margin-top:1mm">Transform-domain: block DCT and the Laplacian pyramid</h3></div>
+    <span class="small">Both were rewritten against real stacks after the published rule failed on them</span>
+  </div>
+
+  <div class="cards">
+    <article class="card" style="flex:1.08">
+      <header>
+        <span class="idx">01</span>
+        <h3>DCT — block cosine-transform fusion</h3>
+        <span class="ref">Haghighat, Aghagolzadeh &amp; Seyedarabi, <i>Multi-focus image fusion for visual sensor networks in DCT domain</i>, Comput. Electr. Eng. 37(5), 2011 · <code>fusion_methods/dct.py</code>, GPU twin <code>dct_torch.py</code></span>
+        <span class="badges"><span class="chip">fastest classical, until 1.17.1</span><span class="chip warn">order-dependent on near-ties</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The published rule</h4>
+          <ul>
+            <li>Cut the frame into <b>8×8 blocks</b>, DCT each one.</li>
+            <li>Score a block by the <b>energy of all its AC coefficients</b> — equivalently, its plain pixel variance.</li>
+            <li>Per block, <b>argmax over frames</b> gives a winner index map.</li>
+            <li><b>Consistency verification:</b> majority/median filter over the index map.</li>
+            <li>Copy each winning block's pixels through <b>verbatim</b>.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · Band-limit the measure.</b> Subtract a box blur one block wide, then take the block mean of the squared detail. Contrast ≠ sharpness: a defocused highlight lays a smooth ramp that out-scores genuine fine texture, so the <i>blurred</i> frame won whole regions. <span class="tag">wrong-frame background 35.7% → 2.0%</span></li>
+            <li><b>2 · Pool over 3×3 blocks</b> (<code>_POOL_WINDOW</code>) before comparing, so grain cannot flip a block.</li>
+            <li><b>3 · Score each frame against its own noise</b> — divide by the 10th percentile of that frame's block energies (<code>_NOISE_PERCENTILE</code>). Photon noise grows with brightness, so a bright defocused veil carried 4–12× the high-pass energy of a dark sharp frame <i>in grain alone</i> and stamped its tone across every featureless block.</li>
+            <li><b>4 · No single winner. </b>Every frame within <code>_PLATEAU = 0.80</code> of the peak is the block's depth of field; the <b>middle of that set</b> is the focal plane, to sub-frame accuracy. Out of focus the set is the whole stack and the answer is mid-stack everywhere — uniform, not patchwork. <span class="tag">on a 274-frame stack the old margin test abstained on 91% of blocks</span></li>
+            <li><b>5 · Composite weights, not labels.</b> Frame weights are upsampled across the block lattice, so the transition ramps instead of stepping. Output is no longer verbatim — every pixel stays inside its sources' envelope.</li>
+            <li><b>6 · <code>uint16</code> index map end to end</b> — 256+ frame stacks used to crash or wrap.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
+          <ul>
+            <li><b>Order dependence is reduced, not gone.</b> Shuffling a 12-frame stack agrees to 33.6 dB (was 28.1). What remains is the near-tie that clears the margin. Any fix must land in <code>dct.py</code> and <code>dct_torch.py</code> in one commit or <code>test_gpu_matches_cpu</code> goes red.</li>
+            <li><b>CPU and GPU disagree on the noise floor</b> — <code>torch.quantile</code> vs <code>np.percentile</code> flips a handful of near-tied blocks (41.5 dB on the veil fixture). Harmless today, a trap tomorrow.</li>
+            <li><b>Surface the confidence.</b> <code>best_energy − second_energy</code> is already computed per block and thrown away; it is the one method where "how sure was it here" needs no new work.</li>
+            <li><b>Speed regressed by design</b> — 274 frames of 2048×1364 now take 14.4 s against 5.3 s. Worth revisiting the two measurement passes.</li>
+            <li class="tag">Internal by choice: <code>_POOL_WINDOW</code>, <code>_NOISE_PERCENTILE</code>, <code>_HIGHPASS_SCALE</code> — load-bearing, and no user meaning.</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+
+    <article class="card" style="flex:0.92">
+      <header>
+        <span class="idx">02</span>
+        <h3>Pyramid — Laplacian multiscale fusion</h3>
+        <span class="ref">Burt &amp; Adelson, <i>The Laplacian pyramid as a compact image code</i>, IEEE Trans. Comm. 31(4), 1983, with the classic choose-max fusion rule · <code>fusion_methods/pyramid.py</code>, GPU twin <code>pyramid_torch.py</code></span>
+        <span class="badges"><span class="chip on">order-independent</span><span class="chip">paper rule still selectable</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The published rule</h4>
+          <ul>
+            <li>Build a <b>Laplacian pyramid</b> per frame.</li>
+            <li>For every band, <b>copy the coefficient with the most local energy</b> and discard the rest — choose-max.</li>
+            <li>Collapse the fused pyramid back to an image.</li>
+            <li>Coarse base band: <b>plain mean</b> over the stack.</li>
+          </ul>
+          <p class="fnote" style="margin-top:2mm">Choose-max is right where one frame is plainly sharper — and wrong everywhere else, which on a macro frame is most of the picture.</p>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · Weight, don't choose.</b> Each frame contributes <code>(e / e_best) ** selectivity</code>, default 8. A frame 2× behind the winner contributes 0.4%, so a real decision stays a decision; where frames tie they average — the correct answer for "nothing is in focus here". <code>selectivity = inf</code> reproduces the paper exactly.</li>
+            <li><b>2 · Compare in units of the frame's own grain.</b> Each band divided by a low percentile of its own energies, with exact zeros excluded so a clipped-black backdrop cannot read as noiseless. <span class="tag">veil fixture: 32.3% → 0.0% of a smooth body given to a haze frame</span></li>
+            <li><b>3 · Clamp to the source envelope.</b> A collapsed pyramid sums bands from different frames and can land outside the stack's own range — measured 24 levels below the darkest source, which is what the reported dark filaments over a smooth corner were. <span class="tag">invented pixels gone on all 8 fixtures</span></li>
+            <li><b>4 · Let the detail carry the base.</b> Base band weighted by aggregate activity at exponent 3, not a mean — 24 frames of haze used to outvote the few that resolved the subject. <span class="tag">18.5 → 35.1 dB</span></li>
+            <li><b>5 · Streaming weights.</b> The running peak is rescaled as frames arrive, exactly, so memory is bounded by the accumulators regardless of stack depth. <span class="tag">All 8 scenarios improved; the two carrying the artefacts by 4.5 and 16.7 dB.</span></li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
+          <ul>
+            <li><b>Scale coherence earns nothing yet.</b> Shipped, default off: on every current fixture the envelope clamp already prevents what it was for, and it costs 2.4 dB on <code>fine_texture</code>, 5.3 on <code>long_stack</code>. Either find the stack that needs it or retire the dial.</li>
+            <li><b>Cost.</b> 24 frames of 2048×1364: 3.6 s against 1.6 s for the old masked copy (<code>selectivity=inf</code> still runs at 1.4 s).</li>
+            <li><b>One metric moved the wrong way</b> — <code>defocus_seam_visible</code> on <code>deep_stack</code> 1.5% → 2.7%, because the background got smooth enough to halve the local step it is measured against. Severity fell (0.466 → 0.257). The metric needs a floor.</li>
+            <li><b>No confidence output</b>, and the private folder loader is one of the four copies of item 13.</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <div class="folio"><span>OpenFocus — fusion algorithms, canonical vs. implemented</span><span>2 / 6</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 3 — GFF + DTCWT ══════════════════════════ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Method cards · 3–4 of 8</span><h3 style="font-size:13pt; margin-top:1mm">Guided filtering and the complex wavelet</h3></div>
+    <span class="small">One is near-faithful to its paper; the other carries the set's largest open debt</span>
+  </div>
+
+  <div class="cards">
+    <article class="card">
+      <header>
+        <span class="idx">03</span>
+        <h3>Guided Filter (GFF)</h3>
+        <span class="ref">Li, Kang &amp; Hu, <i>Image fusion with guided filtering</i>, IEEE Trans. Image Process. 22(7), 2013 · <code>fusion_methods/gff.py</code>, GPU twin <code>gff_torch.py</code></span>
+        <span class="badges"><span class="chip on">bit-reproducible</span><span class="chip">closest to its paper</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The published rule</h4>
+          <ul>
+            <li><b>Two-scale decomposition:</b> base = 31×31 mean filter, detail = image − base.</li>
+            <li><b>Saliency</b> = Gaussian-blurred |Laplacian| (σ<sub>r</sub> = 5); the per-pixel argmax gives a binary weight map per frame.</li>
+            <li>Refine each map with a <b>guided filter</b>, twice with different settings: base (r₁ = 45, ε₁ = 0.3), detail (r₂ = 7, ε₂ = 10⁻⁶).</li>
+            <li>Normalise the weights, fuse base and detail separately, add.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · r₁ is derived, not pinned.</b> <code>base_weight_radius()</code> keeps the paper's 3:1 ratio to the averaging radius, so <code>kernel_size = 31</code> still yields exactly r₁ = 45 — but small kernels no longer degrade the result (42.7 → 43.4 dB at kernel 7). Sweep spread across the whole slider fell from 0.74 dB to 0.03.</li>
+            <li><b>2 · Nothing holds the whole stack.</b> Frames are converted to float32 on demand, saliency is reduced with a running maximum, and a sliding window keeps exactly <code>max_workers</code> tasks in flight. <span class="tag">24 frames at 1536²: peak 5570 → 1704 MiB, flat in stack depth</span></li>
+            <li><b>3 · Deterministic accumulation.</b> Results are consumed in index order, so repeat renders are bit-identical; strict <code>&gt;</code> reproduces <code>argmax</code>'s lowest-index tie-break exactly.</li>
+            <li class="tag">Cost of 2 and 3: ~5% throughput, from capping the pool at 8 — the OpenCV filters are already internally parallel.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
+          <ul>
+            <li><b>ε₂ is 10× the paper's.</b> The code sets <code>DEFAULT_EPS2 = 10e-6</code>, which is 1×10⁻⁵, where Li et al. specify 10⁻⁶ — the shape of a transcription slip inherited from the reference implementation. Worth measuring both and either correcting it or writing down why it stays.</li>
+            <li><b>The kernel slider is inert by construction.</b> GFF reconstructs <code>base + detail</code> exactly, so base layers reach the output only through the <i>gap</i> between the two weight maps, and that gap is small: every setting from 7 to 95 is visually identical. Investigated and closed — but the control is still on screen for a method it cannot change. Hide it here, or give it something to do.</li>
+            <li><b>Folder loader</b> infers one extension from the first directory entry and globs only that, so a mixed-extension folder silently loses files (item 13; affects direct API callers, not the GUI).</li>
+            <li><b>No confidence output</b> — the weight maps exist and are discarded.</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+
+    <article class="card">
+      <header>
+        <span class="idx">04</span>
+        <h3>DTCWT — dual-tree complex wavelet</h3>
+        <span class="ref">Lewis, O'Callaghan, Nikolov et al., <i>Pixel- and region-based image fusion with complex wavelets</i>, Information Fusion 8(2), 2007 · <code>fusion_methods/dtcwt.py</code>, GPU twin <code>dtcwt_torch.py</code></span>
+        <span class="badges"><span class="chip crit">order-dependent</span><span class="chip warn">CPU cost superlinear</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The published rule</h4>
+          <ul>
+            <li>Decompose each frame with the <b>DTCWT</b>: N levels, 6 orientations, complex coefficients.</li>
+            <li><b>Activity</b> = coefficient magnitude, max-filtered over a small window.</li>
+            <li><b>Choose-max across all frames</b> per coefficient, then a <b>majority (consistency) filter</b> over the decision mask.</li>
+            <li>Lowpass band: average. Inverse transform.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · One decision mask for all three channels.</b> The reference implementation fused R, G and B in independent passes, so at a depth edge a pixel's red could come from one frame and its blue from another — a colour present in no source. The mask is now built from the strongest channel response and selects all channels together.</li>
+            <li><b>2 · Activity-weighted lowpass.</b> The plain mean ghosts large-scale disagreement (exposure drift, focus breathing) into the coarse band; each frame's lowpass is now weighted by its aggregate highpass activity, with an epsilon so a detail-free stack degrades gracefully to the old mean. <span class="tag">mean abs. error 12.9 → 3.9–5.5 on the drift fixture</span></li>
+            <li><b>3 · scipy out, OpenCV in.</b> <code>cv2.dilate</code> and <code>cv2.boxFilter(normalize=False)</code> replace <code>maximum_filter</code> and <code>convolve</code> — verified <b>bit-identical</b>, and −24.5% CPU on a 6-frame 768² stack. Removed the last direct scipy import in the codebase.</li>
+            <li><b>4 · Streaming fold</b> bounds memory at roughly two frames of coefficients; the reconstruction is cropped back to the input geometry, which dtcwt's odd-size padding otherwise grows by a pixel.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open — the largest debt in the set</h4>
+          <ul>
+            <li><b>Frames are folded pairwise and recursively</b>, so <code>(((1,2),3),4)</code> is not "best of four": early frames pass through more rounds of the consistency filter than late ones. <b>Order agreement 46.4 dB.</b> The canonical fix — measure every frame's activity, take the winner per coefficient in one pass — is also <i>faster</i> (one pass, not N−1). Blocked only by having to change <code>dtcwt_torch.py</code>, which replicates the pairwise order deliberately, in the same commit.</li>
+            <li><b>The majority vote is biased at borders.</b> The neighbour count zero-pads but is compared against a fixed <code>window²/2</code>, so border pixels systematically undercount votes for the first source. Kept deliberately through the OpenCV swap to preserve bit-parity; fix by thresholding against the true neighbour count.</li>
+            <li><b>CPU cost grows faster than area</b> — 4.6× then 5.9× per quadrupling. At 2048² the CPU path takes 29.8 s against the GPU's 0.22 s. Fixing the pairwise fold is the main lever left.</li>
+            <li><b>Folder loader:</b> the type-unstable sort key crashes on a folder mixing <code>img1.png</code> with <code>cover.png</code> (item 13).</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <div class="folio"><span>OpenFocus — fusion algorithms, canonical vs. implemented</span><span>3 / 6</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 4 — GFG-FGF + DEPTH MAP ══════════════════════════ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Method cards · 5–6 of 8</span><h3 style="font-size:13pt; margin-top:1mm">Pixel-domain: gradient guided filtering and the depth map</h3></div>
+    <span class="small">Both decide in the image plane, so their output pixels are (almost) always source pixels</span>
+  </div>
+
+  <div class="cards">
+    <article class="card">
+      <header>
+        <span class="idx">05</span>
+        <h3>GFG-FGF — gradient focus + fast guided filter</h3>
+        <span class="ref">Fu Hongyu, Gong Yan, Wang Luhan et al., <i>Multi-focus microscopy image fusion algorithm</i>, Laser &amp; Optoelectronics Progress 61(6), 2024 · <code>fusion_methods/gfg_fgf.py</code>, GPU twin <code>gfg_fgf_torch.py</code></span>
+        <span class="badges"><span class="chip warn">not bit-reproducible</span><span class="chip warn">whole stack in float32</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The published rule / the code as inherited</h4>
+          <ul>
+            <li>Pick a working channel, measure a <b>Scharr gradient focus score</b> per frame on it.</li>
+            <li>Drop frames scoring below a <b>global sharpness quota</b> (15% of the best).</li>
+            <li>Local contrast (image − box blur), thresholded, then <b>guided-filtered</b> into an activity map per frame.</li>
+            <li>Per-pixel <b>argmax</b> → binary masks → guided-filtered again into smooth weights → weighted sum.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · Split the two roles the single channel played.</b> The guided filter's <b>guide</b> is luminance, as every other method uses; <b>activity</b> is measured on all three channels keeping the strongest response per pixel. A structure living in one channel is seen at full strength instead of being diluted by two flat channels. <span class="tag">chromatic fixture: 25.8 → 40.5 dB, i.e. from "no better than not fusing" to fused</span></li>
+            <li><b>2 · The 15% quota is gone.</b> A frame can be globally soft and still the sharpest thing anywhere in a corner — on <code>depth_edge</code> the background frame scored 12% and the output was one source frame returned byte-for-byte, with no fusion at all. A frame is now dropped only when it carries no gradient energy whatsoever (<code>&gt; 1e-6 × max</code>). <span class="tag">+4.07 dB</span></li>
+            <li><b>3 · Fast guided filter fallback</b> (He et al. 2015, s = 4) when opencv-contrib's <code>ximgproc</code> is absent, so the method runs on a stock OpenCV install.</li>
+            <li class="tag">Cost of 1 and 2: 0.011 s → 0.015 s on a 320² three-frame stack. GPU twin agrees to 0.06 levels.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
+          <ul>
+            <li><b>Accumulation runs in <code>as_completed</code> order</b>, so the float summation order varies and two identical renders differ by about a level. GFF had exactly this defect and fixed it with <code>_map_in_order</code>; reusing that helper here is a small, self-contained change.</li>
+            <li><b>The whole stack is held as float32 BGR</b> (<code>imgs_f32</code>, plus a full set of greys) — 12 bytes per pixel per frame, the same 2.9 GB-for-ten-24MP-frames problem GFF was cured of by lazy per-frame conversion. This is now the memory-hungriest classical method.</li>
+            <li><b>Three magic numbers with no provenance</b> — <code>g_gsz = 5</code>, <code>g_eps = 0.3</code>, <code>threshold = 0.005</code> — none swept, none exposed, none explained. The kernel slider (default 7) is the only control.</li>
+            <li><b>No confidence output.</b></li>
+          </ul>
+        </div>
+      </div>
+    </article>
+
+    <article class="card">
+      <header>
+        <span class="idx">06</span>
+        <h3>Depth Map — hard select or contrast-weighted average</h3>
+        <span class="ref">The DMap family: Zerene DMap, Helicon Methods A/B, Shine Stacker <code>DepthMapStack</code> — no single paper · <code>fusion_methods/depthmap.py</code></span>
+        <span class="badges"><span class="chip on">order-independent</span><span class="chip on">√N SNR in flat areas</span><span class="chip off">CPU only</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The family's rule</h4>
+          <ul>
+            <li>Measure <b>local contrast per pixel</b> in the image plane, not in a transform domain.</li>
+            <li>Build a <b>depth map</b> — which frame is sharpest where — and <b>smooth it</b>.</li>
+            <li>Either <b>hard-select</b> the pixel from that frame (Zerene DMap, Helicon B) or <b>average</b> frames in proportion to contrast (Helicon A).</li>
+            <li>A "Radius" dial indirectly controls halo bleed.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · Channel-tied energy.</b> The Laplacian is taken per channel and the squared responses <b>summed across channels first</b>, so one grey activity map drives the decision and a pixel's colour can never split across sources — the failure DTCWT had for years.</li>
+            <li><b>2 · A scale-free baseline in average mode.</b> Every frame gets a floor weight of 10% of the stack's mean energy (absolute floor 1e-8). Where real focus energy is far above it, the sharp frame dominates; where it is at or below it, the weights go near-equal and the region collapses to the plain mean — which is what recovers the free √N noise reduction across the stack.</li>
+            <li><b>3 · A dedicated halo-suppression radius</b> (default 0, off). Grey-dilating each frame's pooled energy lets a sharply focused edge claim the band its own defocused glow contaminates in the other frames, so the ring renders as that frame's glow-free background. Competitors only offer this indirectly through their analysis radius — this is the one place the implementation is <i>ahead</i> of the field rather than level with it.</li>
+            <li class="tag">Ties are broken with strict <code>&gt;</code> in index order, so both modes are bitwise-stable run to run.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
+          <ul>
+            <li><b>The hard-select map is never regularised.</b> MODE_MAX relies on box-filter pooling alone, where DCT median-filters its index map twice and DTCWT majority-votes. Between depth planes the two pooled energies are near-equal, the winner alternates pixel to pixel, and the seam speckles. Every tool this method descends from smooths the depth map before gathering. An optional median or guided pass over the winning-index map closes it; MODE_AVERAGE needs nothing, blending is its own smoothing.</li>
+            <li><b>No GPU path.</b> The only classical method without one, and the operations involved (Laplacian, box filter, dilate, argmax) are the easiest of the set to port.</li>
+            <li><b>The depth map is computed and discarded.</b> This method literally builds the artefact four of five competitors export as a file — and the substrate for 3D/anaglyph output.</li>
+            <li><b>Folder loader:</b> the third copy of item 13.</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <div class="folio"><span>OpenFocus — fusion algorithms, canonical vs. implemented</span><span>4 / 6</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 5 — NEURAL ══════════════════════════ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Method cards · 7–8 of 8</span><h3 style="font-size:13pt; margin-top:1mm">Neural: one fusion network, one refinement stage</h3></div>
+    <span class="small">No competitor in the field comparison ships either</span>
+  </div>
+
+  <div class="cards">
+    <article class="card">
+      <header>
+        <span class="idx">07</span>
+        <h3>StackMFF-V4 — learned focus-index regression</h3>
+        <span class="ref">Neural focus-index network, weights bundled in <code>weights/</code> · <code>fusion_methods/stackmffv4.py</code> · torch, CUDA/MPS/CPU</span>
+        <span class="badges"><span class="chip on">every output pixel is a source pixel</span><span class="chip warn">no usable CPU path</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The canonical form</h4>
+          <ul>
+            <li>Feed the network the <b>whole grayscale stack</b> as one tensor.</li>
+            <li>It regresses a <b>per-pixel focus index</b> — a continuous depth map over the stack.</li>
+            <li>Gather the fused image by indexing the colour stack with that map.</li>
+            <li>Encoder pools repeatedly, so input dimensions must be padded to a multiple of 32.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · Depth-preserving gather.</b> The grey input is normalised by each frame's <i>own</i> full scale, so the network sees [0,1] whether the stack is 8- or 16-bit; the colour gather then indexes the original array, so <b>the stack's depth carries through untouched</b> and no cast can truncate. Every output pixel is exactly some input pixel.</li>
+            <li><b>2 · An explicit input floor.</b> Below 112 px on the short edge the encoder collapses to a zero-sized feature map and torch raises with a tensor shape. The method now says so itself, and names the three ways out (output size, tile block size, another method).</li>
+            <li><b>3 · Batched tiling with an adaptive cap.</b> Tiles are padded to a common size and inferred as one batch; on CUDA OOM the batch cap halves and retries, so a long stack degrades in throughput instead of failing.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
+          <ul>
+            <li><b>No CPU story.</b> Usable but slow, and there is no smaller variant. Not a defect, but it shapes what can be recommended to a user without a GPU — and it is the one method where the fallback is "pick something else".</li>
+            <li><b>It loses its colour lead on deep stacks.</b> StackMFF-V4 holds the best colour fidelity of the field almost everywhere, then posts 18.5 levels of deviation — the <i>worst</i> of the field — on the 64-frame <code>deep_stack</code> scenario. Never investigated.</li>
+            <li><b>Tile seams are untested at depth.</b> The index map is resized with <code>INTER_NEAREST</code> and tiles are inferred independently, so nothing forces two neighbouring tiles onto a consistent depth.</li>
+            <li><b>No confidence output</b> — the network's index map is exactly the depth map §6 wants exported.</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+
+    <article class="card">
+      <header>
+        <span class="idx">08</span>
+        <h3>IFCNN — refinement stage, not a fusion method</h3>
+        <span class="ref">Runs <i>after</i> a fusion method on its all-in-focus candidate · <code>fusion_methods/ifcnn.py</code> · weights <b>not</b> bundled: drop the official checkpoint at <code>weights/ifcnn.pth</code></span>
+        <span class="badges"><span class="chip on">idempotent on its own output</span><span class="chip warn">off unless weights are supplied</span></span>
+      </header>
+      <div class="cols">
+        <div>
+          <h4><i style="background:var(--muted)"></i>The canonical form</h4>
+          <ul>
+            <li><b>Encode</b> the candidate and every aligned source frame into feature space.</li>
+            <li><b>Merge element-wise</b>, so detail the fusion step missed can be recovered from whichever frame holds it.</li>
+            <li><b>Decode</b> the merged features and output that image.</li>
+          </ul>
+          <p class="fnote" style="margin-top:2mm">The round trip is lossy, and the loss lands on the whole frame as colour drift — measured at ~6× the guided filter's colour deviation, and on one scenario the refined picture scored <i>below</i> keeping the sharpest single frame.</p>
+        </div>
+        <div>
+          <h4><i style="background:var(--s1)"></i>What OpenFocus does instead — and why</h4>
+          <ul>
+            <li><b>1 · Apply only the residual.</b> The round-trip error is measurable in isolation — decode the candidate's own features with nothing merged in — so the stage returns<br><code>candidate + (decode(merged) − decode(candidate))</code>.<br>The bracket is what merging contributed; the drift cancels. Refine an image against itself and the output is now <b>bit-identical</b> to the input, instead of paying a whole-frame round trip for nothing. <span class="tag">30.1 → 37.1 dB · edge 29.2 → 33.4 dB · colour error 6.89 → 2.87</span></li>
+            <li><b>2 · Round, don't truncate.</b> Both float→uint8 casts now use <code>np.rint</code>; truncation was removing half a level from every pixel, systematically. The audit that followed found five more of the same cast across <code>fusion_methods/</code> and <code>core/</code> and fixed all of them. <span class="tag">DTCWT +2.41 dB average, +13.5 on low_contrast</span></li>
+            <li class="tag">Cost: one extra decode per block (conv3+conv4 on an already-computed feature map). Encoding, which dominates, is unchanged. An edge-gated variant was measured and rejected — better whole-frame numbers, 1.3 dB worse at boundaries, which is the one thing the stage exists to improve.</li>
+          </ul>
+        </div>
+        <div>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
+          <ul>
+            <li><b>The weights are not bundled</b>, so for most users the stage simply does not exist. Either ship them, or make the UI say plainly what is missing and where to get it.</li>
+            <li><b>The benefit is still unproven on real stacks.</b> It now improves boundary rendering on 6 of 6 synthetic scenarios but costs overall PSNR on 3 of 6 — those fixtures hand it a near-perfect fusion and no genuinely missed detail, so they show its costs and not its benefits. The measurement that would settle it is a real stack, and it has not been made.</li>
+            <li><b>No control over strength.</b> The residual is applied at 1.0 everywhere; a user-facing amount would let the trade be made per image rather than per release.</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <div class="folio"><span>OpenFocus — fusion algorithms, canonical vs. implemented</span><span>5 / 6</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 6 — ROADMAP ══════════════════════════ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Synthesis</span><h3 style="font-size:13pt; margin-top:1mm">What to fix next — and why it isn't another fusion method</h3></div>
+    <span class="small">Impact × effort over every open item, per-method and cross-cutting</span>
+  </div>
+
+  <div class="quad-wrap">
+    <div>
+      <h2>Open work, placed</h2>
+      <svg viewBox="0 0 460 392" width="100%">
+        <!-- quadrant wash: high impact, low effort -->
+        <rect x="52" y="18" width="188" height="166" fill="#f2f7fd"/>
+        <!-- axes and midlines -->
+        <line x1="52" y1="18"  x2="52"  y2="350" stroke="#c3c2b7" stroke-width="1"/>
+        <line x1="52" y1="350" x2="440" y2="350" stroke="#c3c2b7" stroke-width="1"/>
+        <line x1="240" y1="18" x2="240" y2="350" stroke="#e1e0d9" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="52" y1="184" x2="440" y2="184" stroke="#e1e0d9" stroke-width="1" stroke-dasharray="3 3"/>
+
+        <text x="60" y="178" font-size="9" fill="#898781" letter-spacing="0.5">DO FIRST — high impact, low effort</text>
+        <text x="246" y="382" font-size="10" fill="#52514e" text-anchor="middle">Effort →</text>
+        <text x="0" y="0" font-size="10" fill="#52514e" transform="translate(14,230) rotate(-90)">Impact on a real render →</text>
+        <text x="44" y="26"  font-size="9" fill="#898781" text-anchor="end">high</text>
+        <text x="44" y="348" font-size="9" fill="#898781" text-anchor="end">low</text>
+        <text x="52" y="366" font-size="9" fill="#898781">low</text>
+        <text x="440" y="366" font-size="9" fill="#898781" text-anchor="end">high</text>
+
+        <g fill="#2a78d6">
+          <circle cx="96"  cy="44"  r="6"/>
+          <circle cx="300" cy="77"  r="6"/>
+          <circle cx="150" cy="111" r="6"/>
+          <circle cx="356" cy="134" r="6"/>
+          <circle cx="196" cy="159" r="6"/>
+          <circle cx="120" cy="212" r="6"/>
+          <circle cx="392" cy="247" r="6"/>
+          <circle cx="88"  cy="257" r="6"/>
+          <circle cx="150" cy="292" r="6"/>
+          <circle cx="300" cy="320" r="6"/>
+          <circle cx="100" cy="325" r="6"/>
+        </g>
+        <g font-size="9.4" fill="#0b0b0b">
+          <text x="106" y="41">Photometric alignment (exposure / WB)</text>
+          <text x="290" y="74"  text-anchor="end">Global label optimisation (graph-cut)</text>
+          <text x="160" y="108">DTCWT: joint N-frame selection</text>
+          <text x="346" y="131" text-anchor="end">Contrast / trust threshold</text>
+          <text x="206" y="156">Export the depth map</text>
+          <text x="130" y="209">Depth Map: regularise the MODE_MAX map</text>
+          <text x="382" y="244" text-anchor="end">Non-rigid alignment</text>
+          <text x="98"  y="254">Surface per-method confidence</text>
+          <text x="160" y="289">GFG-FGF: determinism + lazy float32</text>
+          <text x="310" y="317">Depth-wise slabbing</text>
+          <text x="110" y="322">One shared folder loader (item 13)</text>
+        </g>
+      </svg>
+      <p class="fnote" style="margin-top:1mm">
+        Placement is a judgement from the measured audit, not a measurement. Two points are
+        <b>differentiators</b> — graph-cut label optimisation and non-rigid alignment have no
+        precedent in any of the five tools OpenFocus was compared against; everything else is
+        catch-up or parity.
+      </p>
+    </div>
+
+    <div>
+      <h2>Cross-cutting, in priority order</h2>
+      <table class="road">
+        <thead><tr><th class="id">#</th><th style="width:44mm">Item</th><th>Why it outranks another fusion method</th></tr></thead>
+        <tbody>
+          <tr><td class="id">1</td><td><b>Photometric alignment</b><br><span class="chip crit">catch-up</span></td>
+            <td>Every focus measure in the codebase is <b>contrast-linear</b> — Scharr, Laplacian, DCT band energy, pooled Laplacian — so a 5% brighter frame wins the argmax on identical detail. It corrupts the input to all eight methods at once. Four of five competitors normalise brightness; three by default. OpenFocus does none of it.</td></tr>
+          <tr><td class="id">2</td><td><b>Surface the confidence</b><br><span class="chip ser">parity+</span></td>
+            <td>Every method builds a decision map and throws it away. "The stack has no sharp frame here" is the most common cause of a disappointing render and is currently invisible. DCT already computes <code>best − second</code> per block.</td></tr>
+          <tr><td class="id">3</td><td><b>Export the depth map</b><br><span class="chip crit">catch-up</span></td>
+            <td>1.8.0 turned the internal map into a blending method and 1.14.0 added halo suppression, but the map still cannot be saved. Four of five competitors write it out; for PICOLAY it is the point of the software. It is also the substrate for 3D / anaglyph output.</td></tr>
+          <tr><td class="id">4</td><td><b>Contrast / trust threshold</b><br><span class="chip crit">catch-up</span></td>
+            <td>Zerene's DMap marks regions with too little contrast to judge and stretches the estimate across them. OpenFocus takes an unconditional argmax everywhere — including sky and smooth surfaces where the measure is pure noise — and the median filter that follows can only make the speckle blockier. DCT and Pyramid now have per-method noise gates; nothing generalises them.</td></tr>
+          <tr><td class="id">5</td><td><b>One folder loader</b><br><span class="chip warn">robustness</span></td>
+            <td>Four copy-pasted private loaders. Two defects, both measured: a type-unstable sort key that raises <code>TypeError</code> on mixed filenames, and single-extension globbing that silently drops files. GUI-safe, API-hostile.</td></tr>
+          <tr><td class="id">6</td><td><b>Depth-wise slabbing</b><br><span class="chip crit">catch-up</span></td>
+            <td>Three of five tools subdivide the stack <i>along depth</i>, fuse each group, then fuse the results. OpenFocus's tiling subdivides in X/Y for memory — a different operation for a different purpose. Cheap given the existing worker infrastructure.</td></tr>
+          <tr><td class="id">7</td><td><b>Selectable focus operator</b><br><span class="chip ser">parity+</span></td>
+            <td>Shine Stacker alone exposes it — five interchangeable energy measures. The right operator is subject-dependent and no single choice wins everywhere.</td></tr>
+          <tr><td class="id">8</td><td><b>Graph-cut labelling</b><br><span class="chip on">differentiator</span></td>
+            <td>All six tools in the field comparison regularise the decision map with <i>local</i> filters. A global MRF — data term from the focus measure, smoothness penalising label changes, down-weighted at gradients — has no precedent to catch up to.</td></tr>
+        </tbody>
+      </table>
+
+      <p class="small" style="margin-top:2.5mm; border-top:1px solid var(--grid); padding-top:1.8mm">
+        <b>The shape of the result.</b> OpenFocus has more fusion algorithms than anyone in its
+        comparison set and fewer supporting stages than anyone. The competitors converge on two
+        blending methods each and spend the rest of their effort on the pipeline around them.
+        Both mandatory families are present — pyramid since 1.7.0, depth map since 1.8.0 — so
+        the highest-value work left is that pipeline, not a ninth method.
+      </p>
+    </div>
+  </div>
+
+  <div class="folio">
+    <span>Sources: <code>docs/ALGORITHM_IMPROVEMENTS.md</code> · <code>docs/ALGORITHM_COMPARISON.md</code> · <code>fusion_methods/*.py</code> at 1.30.0 · measurements on one machine, synthetic fixtures plus two reported real stacks</span>
+    <span>6 / 6</span>
+  </div>
+</section>
+
+</body>
+</html>
