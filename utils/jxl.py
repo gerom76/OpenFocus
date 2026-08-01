@@ -73,10 +73,13 @@ DEFAULT_EFFORT = 7
 # passed explicitly everywhere rather than left off.
 AUTO_THREADS = 0
 
-# Bytes of the file `probe` reads. The codestream header sits within the first
-# few dozen bytes of the codestream; the slack is for container boxes (Exif and
-# XMP among them) that a tagged file carries ahead of it.
-_PROBE_BYTES = 1 << 16
+# Bytes of the codestream `probe` reads once it has found it. The SizeHeader and
+# ImageMetadata sit within the first few dozen bytes; the rest is slack for the
+# optional fields the parser steps over. The boxes ahead of the codestream are
+# seeked over rather than read, so their size does not enter into this - a file
+# carrying a camera's MakerNote can put a few hundred KB in front of the
+# codestream and still be probed with two short reads.
+_PROBE_BYTES = 1 << 12
 
 try:
     import imagecodecs
@@ -415,25 +418,55 @@ def _parse_codestream(codestream: bytes) -> Optional[Tuple[int, int, int]]:
     return width, height, bits
 
 
-def _codestream_of(payload: bytes) -> Optional[bytes]:
-    """The codestream inside a container, or the payload if it is already one."""
-    if payload.startswith(_CODESTREAM_SIGNATURE):
-        return payload
-    if not payload.startswith(_CONTAINER_SIGNATURE):
+def _codestream_head(handle) -> Optional[bytes]:
+    """The front of the codestream, found without reading what sits before it.
+
+    A bare codestream is read from the start of the file. A container is walked
+    box by box, seeking over each payload rather than reading it, because the
+    boxes ahead of the codestream can be large: a result saved from a camera
+    source carries that camera's EXIF, and a MakerNote alone is routinely a few
+    hundred KB. Reading a fixed window off the front of the file would miss the
+    codestream entirely on exactly those files - which is what used to happen,
+    and left every DNG-sourced save unprobeable.
+
+    Returns None for a file that is not JPEG XL, or whose boxes run out before a
+    codestream appears.
+    """
+    head = handle.read(len(_CONTAINER_SIGNATURE))
+    if head.startswith(_CODESTREAM_SIGNATURE):
+        return head + handle.read(_PROBE_BYTES)
+    if not head.startswith(_CONTAINER_SIGNATURE):
         return None
-    position = len(_CONTAINER_SIGNATURE)
-    while position + 8 <= len(payload):
-        size = int.from_bytes(payload[position:position + 4], "big")
-        box_type = payload[position + 4:position + 8]
-        body = payload[position + 8:] if size == 0 else payload[position + 8:position + size]
-        if box_type == _BOX_CODESTREAM:
-            return body
-        if box_type == _BOX_PARTIAL:
-            return body[4:]  # behind the 4-byte sequence index
-        if size < 8:
+
+    while True:
+        header = handle.read(8)
+        if len(header) < 8:
             return None
-        position += size
-    return None
+        size = int.from_bytes(header[0:4], "big")
+        box_type = header[4:8]
+
+        if size == 1:
+            # A 64-bit size, in the eight bytes behind the type. It counts the
+            # whole box, header included, so 8 comes off to match the 8-byte
+            # header the branches below assume.
+            extended = handle.read(8)
+            if len(extended) < 8:
+                return None
+            size = int.from_bytes(extended, "big")
+            if size < 16:
+                return None
+            size -= 8
+
+        if box_type == _BOX_CODESTREAM:
+            return handle.read(_PROBE_BYTES)
+        if box_type == _BOX_PARTIAL:
+            handle.seek(4, os.SEEK_CUR)  # over the 4-byte sequence index
+            return handle.read(_PROBE_BYTES)
+        if size < 8:
+            # 0 means the box runs to the end of the file, and this one is not a
+            # codestream; anything else below 8 is malformed.
+            return None
+        handle.seek(size - 8, os.SEEK_CUR)
 
 
 # Probe results, keyed by (path, size, mtime) so an edited file is re-read. The
@@ -477,12 +510,11 @@ def probe(path: str) -> Optional[Tuple[int, int, int]]:
 
     try:
         with open(path, "rb") as handle:
-            header = handle.read(_PROBE_BYTES)
+            codestream = _codestream_head(handle)
     except OSError:
         return None
 
     try:
-        codestream = _codestream_of(header)
         result = _parse_codestream(codestream) if codestream else None
     except (EOFError, IndexError, ValueError):
         result = None

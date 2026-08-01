@@ -183,8 +183,37 @@ class TestMetadata:
         assert write_image(out, _result8(), metadata=RenderMetadata(source_path=source))
 
         types = [box_type for box_type, _ in _boxes(out)]
-        assert types[:4] == [b"JXL ", b"ftyp", b"Exif", b"xml "]
+        assert types[:2] == [b"JXL ", b"ftyp"]
+        assert types.index(b"Exif") < types.index(b"xml ")
         assert b"jxlc" in types or b"jxlp" in types
+        assert types.index(b"xml ") < min(types.index(t) for t in types
+                                          if t in (b"jxlc", b"jxlp"))
+
+    @needs_encoder
+    def test_the_level_box_stays_directly_behind_ftyp(self, tmp_path):
+        # libjxl emits the jxll level box for a 16-bit image - level 5 caps the
+        # bit depth, so >8 bits declares level 10 - and ISO/IEC 18181-2 pins that
+        # box directly behind ftyp. Inserting the metadata ahead of it produced a
+        # container whose declared level no longer applied, which readers fall
+        # back from to their 8-bit default: a 16-bit save read as 8-bit.
+        source = _source_with_exif(str(tmp_path / "src.jpg"))
+        out = str(tmp_path / "deep.jxl")
+
+        assert write_image(out, _result16(), metadata=RenderMetadata(source_path=source))
+
+        types = [box_type for box_type, _ in _boxes(out)]
+        assert b"jxll" in types, "a 16-bit codestream should carry a level box"
+        assert types[:3] == [b"JXL ", b"ftyp", b"jxll"]
+
+    @needs_encoder
+    def test_an_untagged_16bit_file_already_orders_its_boxes(self, tmp_path):
+        # The guard for the test above: the order it checks has to come from the
+        # splice, not from a file that never had a level box to begin with.
+        out = str(tmp_path / "plain.jxl")
+
+        assert write_image(out, _result16())
+
+        assert [box_type for box_type, _ in _boxes(out)][:3] == [b"JXL ", b"ftyp", b"jxll"]
 
     @needs_encoder
     def test_pixels_survive_tagging(self, tmp_path):
@@ -430,6 +459,22 @@ class TestProbe:
         assert write_image(out, _result16(), metadata=RenderMetadata(source_path=source))
 
         assert jxl.probe(out) == (32, 24, 16)
+
+    @needs_encoder
+    def test_a_large_metadata_block_does_not_hide_the_codestream(self, tmp_path):
+        # A camera's EXIF is not small - a MakerNote alone runs to a few hundred
+        # KB on a DNG - and the whole block goes into the Exif box ahead of the
+        # codestream. Probing used to read a fixed window off the front of the
+        # file, so every save from such a source came back unprobeable.
+        out = tmp_path / "fat.jxl"
+        out.write_bytes(jxl.encode(_result16()))
+        bulky = meta._jxl_with_metadata(
+            out.read_bytes(), b"II*\x00" + b"\x00" * (1 << 18), None,
+        )
+        assert bulky is not None
+        out.write_bytes(bulky)
+
+        assert jxl.probe(str(out)) == (32, 24, 16)
 
     @needs_encoder
     def test_a_bare_codestream_is_probeable_too(self, tmp_path):

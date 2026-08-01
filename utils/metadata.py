@@ -71,6 +71,13 @@ _PNG_XMP_KEYWORD = b"XML:com.adobe.xmp"
 _JXL_CONTAINER_SIGNATURE = b"\x00\x00\x00\x0cJXL \r\n\x87\n"
 _JXL_EXIF_BOX = b"Exif"
 _JXL_XMP_BOX = b"xml "
+# Boxes that have a fixed place at the head of the container and cannot be
+# pushed back by a metadata box: the file type box, and the level box which
+# ISO/IEC 18181-2 requires to come directly after it. A reader that finds the
+# level box out of position may stop trusting the header boxes and fall back to
+# its own defaults - 8 bits per sample among them - so a 16-bit file written
+# with the boxes in the wrong order can be read back as 8-bit.
+_JXL_HEADER_BOXES = (b"ftyp", b"jxll")
 
 # Byte order marks of a TIFF header, which is what an EXIF block really is.
 _TIFF_HEADERS = (b"II*\x00", b"MM\x00*")
@@ -870,9 +877,10 @@ def _jxl_with_metadata(data: bytes, exif: Optional[bytes],
     """Insert Exif and XMP boxes into a JPEG XL container, ahead of the codestream.
 
     utils.jxl always writes the container form precisely so this can be done.
-    The boxes go after the header boxes that must come first - the signature box
-    and ftyp - and before whatever follows, which keeps the metadata readable
-    from a stream and leaves the codestream boxes byte-identical.
+    The boxes go after the header boxes that must come first - the signature
+    box, ftyp, and the jxll level box that ISO/IEC 18181-2 pins directly behind
+    ftyp - and before whatever follows, which keeps the metadata readable from a
+    stream and leaves the codestream boxes byte-identical.
 
     An Exif box holds a 32-bit offset to the start of the TIFF header before the
     block itself; OpenFocus writes the block at the front, so the offset is 0.
@@ -886,7 +894,7 @@ def _jxl_with_metadata(data: bytes, exif: Optional[bytes],
     insert_at = len(_JXL_CONTAINER_SIGNATURE)
     while True:
         header = data[insert_at:insert_at + 8]
-        if len(header) < 8 or header[4:8] != b"ftyp":
+        if len(header) < 8 or header[4:8] not in _JXL_HEADER_BOXES:
             break
         size = int.from_bytes(header[0:4], "big")
         if size < 8 or insert_at + size > len(data):
