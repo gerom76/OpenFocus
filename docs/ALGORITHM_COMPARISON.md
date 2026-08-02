@@ -134,9 +134,11 @@ than level with them.
 
 **This table is about capability, not accuracy.** Having a stage is not the same
 as that stage helping: measured against the per-frame ground truth in
-`samples/*/scene.json`, the homography stage currently leaves both handheld
-samples *less* well registered than not registering at all, and the GPU warp path
-inverts ECC's correction outright. See
+`samples/*/scene.json`, the homography stage used to leave both handheld samples
+*less* well registered than not registering at all (fixed in 1.30.3, by fitting
+the perspective terms only where they earn their keep), and the GPU warp path
+inverted ECC's correction outright (fixed in 1.30.2). What is still open there
+is the softness of the GPU warp and the untouched reference frame. See
 [REGISTRATION_IMPROVEMENTS.md](REGISTRATION_IMPROVEMENTS.md).
 
 ---

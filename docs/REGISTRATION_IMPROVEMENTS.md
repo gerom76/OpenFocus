@@ -22,8 +22,9 @@ read back out of the running code rather than reimplemented - see
 [Reproducing these measurements](#reproducing-these-measurements).
 
 Measured on OpenFocus 1.30.1, one machine: Python 3.14, OpenCV 5.0, CuPy 14.1.1,
-RTX 4080. Read absolute timings as relative; the pixel errors and the dB are
-hardware-independent except where a row says GPU.
+RTX 4080; the fixes since then were re-measured on the same machine at the
+version each is dated to. Read absolute timings as relative; the pixel errors
+and the dB are hardware-independent except where a row says GPU.
 
 Ranked by expected value: **impact** is how much it changes a real render,
 **effort** is rough implementation cost.
@@ -35,7 +36,7 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | # | Stage | Category | Issue | Impact | Effort | Fixed |
 |---|-------|----------|-------|--------|--------|-------|
 | 1 | ECC | Correctness | The GPU warp applies the inverse of the transform ECC measured, so on any CUDA machine ECC roughly *doubles* misalignment - 11.4 dB off the fused result | Critical | Trivial | **100%** |
-| 2 | Homography | Quality | The 8-DOF fit is less accurate than not registering at all on both handheld samples; the two extra degrees of freedom fit nothing but noise | High | Medium | 0% |
+| 2 | Homography | Quality | The 8-DOF fit is less accurate than not registering at all on both handheld samples; the two extra degrees of freedom fit nothing but noise - *fixed in 1.30.3* | High | Medium | **100%** |
 | 3 | all | Quality | The reference frame is the only frame never resampled, so the focus measure sources 4-21x more of the picture from it than it should | High | Low | 0% |
 | 4 | scale, ECC | Quality | GPU warping is bilinear where CPU warping is Lanczos4: 44% of the high-frequency energy lost, for almost no speed | High | Low | 0% |
 | 5 | all | Robustness | `downscale_width` is silently overridden to 1024 for any frame >= 2048 px, i.e. for every real camera file - the exposed setting does nothing | Medium | Trivial | 0% |
@@ -47,30 +48,32 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
 | 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
 
-**Overall: 1 of 12 done.** Item 1 is fixed in 1.30.2. Items 3 and 4 are the
-other two GPU-path defects and both are cheap; between them they account for
-most of the quality gap this document still measures.
+**Overall: 2 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3. Items 3
+and 4 are the other two GPU-path defects and both are cheap; between them they
+account for most of the quality gap this document still measures.
 
 ### The measurement everything else follows from
 
 Geometric error of each pipeline against ground truth, reference frame `first`,
-`--downscale-width 1024`. "gain" is how many times better than not registering
-at all; below 1.00x means the stage made the stack *worse*.
+`--downscale-width 1024`, CPU warp path. "gain" is how many times better than
+not registering at all; below 1.00x means the stage made the stack *worse*. The
+"was" columns are the pre-1.30.3 reading, before item 2.
 
-| pipeline | handheld_drift mean px | gain | flower01_handheld mean px | gain |
-|---|---|---|---|---|
-| *unregistered* | 3.95 | - | 6.81 | - |
-| **scale** | **2.22** | 1.78x | **2.57** | **2.65x** |
-| homography | 5.00 | **0.79x** | 7.71 | **0.88x** |
-| ecc | 1.67 | 2.36x | 6.40 | 1.06x |
-| both (hom+ecc) | 1.57 | 2.52x | 7.07 | **0.96x** |
-| **scale+hom** (app default) | 3.98 | **0.99x** | 3.37 | 2.02x |
-| scale+ecc | 1.69 | 2.34x | 6.49 | 1.05x |
-| scale+hom+ecc | 1.58 | 2.50x | 6.77 | 1.00x |
+| pipeline | handheld_drift mean px | gain | was | flower01_handheld mean px | gain | was |
+|---|---|---|---|---|---|---|
+| *unregistered* | 3.95 | - | - | 6.81 | - | - |
+| **scale** | **2.22** | 1.78x | 2.22 | **2.57** | 2.65x | 2.57 |
+| homography | 2.22 | 1.78x | **5.00** | 2.57 | 2.65x | **7.71** |
+| **ecc** | **1.67** | **2.36x** | 1.67 | 6.40 | 1.06x | 6.40 |
+| both (hom+ecc) | 1.69 | 2.34x | 1.57 | 6.49 | 1.05x | 7.07 |
+| **scale+hom** (app default) | 2.31 | 1.71x | **3.98** | **1.50** | **4.53x** | 3.37 |
+| scale+ecc | 1.69 | 2.34x | 1.69 | 6.49 | 1.05x | 6.49 |
+| scale+hom+ecc | 1.66 | 2.38x | 1.58 | 6.60 | 1.03x | 6.77 |
 
-The single most reliable stage is `scale`, the only one that fits a constrained
-model. The stage that is on by default and that the UI presents first,
-`homography`, is the only one that is *worse than doing nothing* on both scenes.
+No pipeline is now worse than doing nothing on either scene. The two stages that
+fit a constrained model where the motion is constrained - `scale`, and
+`homography` since 1.30.3 - land in the same place on both scenes, as they
+should, since they now differ only in what they do when the perspective is real.
 
 ---
 
@@ -199,7 +202,7 @@ to return the residue the real one once did.
 
 ## 2. The homography stage is less accurate than not registering at all
 
-**Category: quality. Impact: high. Effort: medium.**
+**Category: quality. Impact: high. Effort: medium. Fixed in 1.30.3.**
 
 `homography` and `scale` share their entire front end - SIFT on the same
 downscaled frames, `BFMatcher` with the same 0.70 ratio test, RANSAC at the same
@@ -260,6 +263,82 @@ Three ways to spend the effort, cheapest first:
 - **Fit the right model per stack.** Estimate similarity, affine and homography,
   and keep the one with the best cross-validated reprojection error over held-out
   matches. Most principled, most work.
+
+### Fixed in 1.30.3, by the third route - and the second does not work
+
+The keystone threshold was tried first and abandoned on arithmetic. Perspective
+terms produce a keystone of roughly `theta * w / f` across a frame, so on a
+normal lens a genuine 1-degree tilt bends the frame by about 2% - the same order
+as the 2.1-5.7% the estimator was inventing out of noise on handheld_drift. A
+threshold low enough to catch the noise (0.2%, which is where the measured
+accuracy plateaus) rejects every real tilt down to a tenth of a degree, which is
+the first option wearing the second's clothes. The size of the keystone does not
+say where it came from.
+
+What does say is whether the two extra degrees of freedom **predict matches they
+were not fitted to**. Per pair, `_select_pair_transform` now:
+
+- fits both models under RANSAC, as before for the homography and exactly as
+  `scale` does for the similarity, and keeps the union of the two inlier sets -
+  the union rather than the intersection because a match only the homography
+  accepts is what real perspective looks like at the frame edges;
+- splits those inliers 70/30 nine times, fits each model to the 70 and takes the
+  median reprojection error on the 30. The fits inside the loop are plain least
+  squares (DLT for the homography, a four-parameter normal equation for the
+  similarity, written out in `_fit_similarity_ls`) so the comparison is
+  deterministic - `estimateAffinePartial2D` is RANSAC-driven and would not be;
+- keeps the homography only if it beats the similarity by 20% out of sample, and
+  only on pairs with at least 24 inliers - three per degree of freedom, below
+  which 8 DOF reproduce their own training points however wrong they are and
+  validation cannot see the overfit.
+
+Neither of the two constants is on a slope. The measured error/similarity ratio
+is 0.13-0.62 on stacks with a real tilt and 0.92-1.39 on the two handheld
+scenes, so the 0.8 threshold sits in the gap rather than inside either
+population; sweeping it over 0.7-0.9, the inlier floor over 18-30 and the split
+count over 3-15 moves the end-to-end result by at most 0.3 px.
+
+**On the scenes with geometric truth**, the stage goes from the worst in the
+document to level with `scale`, and keeps more of the frame because there is no
+keystone to crop away:
+
+| scene | pipeline | before | after | kept before | kept after |
+|---|---|---|---|---|---|
+| handheld_drift | homography | 5.00 px (0.79x) | **2.22 px (1.78x)** | 81.1% | **87.3%** |
+| handheld_drift | scale+hom | 3.98 px (0.99x) | **2.31 px (1.71x)** | 81.6% | 84.5% |
+| flower01_handheld | homography | 7.71 px (0.88x) | **2.57 px (2.65x)** | 91.2% | 93.2% |
+| flower01_handheld | scale+hom | 3.37 px (2.02x) | **1.50 px (4.53x)** | 88.3% | 90.2% |
+
+Every pair takes the similarity - 15 of 15 and 13 of 13 - which is the right
+answer on scenes generated from a per-frame affine. On the fused picture (Pyramid, against each scene's own all-in-focus
+ground truth) that is worth **+1.55 dB** and **+1.45 dB** for `homography`
+alone, and +1.26 dB and +0.66 dB for the `scale`+`homography` default.
+
+**Where the perspective is real the stage still fits it**, which is the half of
+the change the accuracy table cannot show. On a stack whose frames differ by a
+true camera tilt (`K R K^-1`, so no similarity can express it), before and after
+are identical, while forcing the constrained model - the "demote it" option -
+gives up a factor of 20:
+
+| tilt per frame | keystone per pair | unregistered | `scale` (similarity) | homography, before | **after** |
+|---|---|---|---|---|---|
+| 0.15 deg | 0.22% | 15.43 px | 1.01 px | 0.15 px | **0.15 px** |
+| 0.35 deg | 0.51% | 36.02 px | 2.42 px | 0.13 px | **0.13 px** |
+| 1.0 deg | 1.45% | 103.48 px | 7.09 px | 0.23 px | **0.23 px** |
+
+**Two places it costs a little.** `both` and `scale+hom+ecc` on handheld_drift
+go from 1.57 to 1.69 px and 1.58 to 1.66 px: ECC was cleaning up after the
+homography, and it now starts from a differently-biased estimate. Both keep 4-9
+points more of the frame in exchange (76.1% to 84.7%, 77.7% to 81.7%), and the
+fused result is unchanged to within 0.1 dB.
+
+**Cost.** Ten extra least-squares fits per pair, on a few dozen points: 0.34 s
+to 0.35 s for 16 frames of handheld_drift, i.e. nothing measurable.
+
+**Guarded by** `tests/test_registration_homography_model.py`, which fails in
+both directions - the four ground-truth assertions fail on the pre-1.30.3
+estimator, and the two perspective assertions fail if the stage is changed to
+always fit a similarity.
 
 ---
 
@@ -562,6 +641,13 @@ matrix (perspective terms near zero, scale within a few percent of 1, positive
 determinant) - and to fall back to the existing skip path when it fails. The
 skip path already works.
 
+**Partly mitigated by item 2 (1.30.3), not resolved.** The homography stage now
+reads the RANSAC masks it used to discard, and a pair with fewer than 24 inliers
+is fitted with the 4-DOF similarity rather than the 8-DOF homography - so the
+6-match pair above no longer gets to bend the frame by 5.7%. It is still
+accepted, still on nothing but a match count, and `scale` still discards its
+mask entirely.
+
 ---
 
 ## 9. ECC crashes on single-channel input
@@ -698,16 +784,19 @@ not read as uniformly negative.
 
 ## What to run today
 
-Until items 2-4 land, on a machine with CuPy and a CUDA device:
+Until items 3 and 4 land, on a machine with CuPy and a CUDA device:
 
 - **`ecc` is now the most accurate stage on both devices** (2.36x on
   handheld_drift). Item 1 was the only reason to avoid it on GPU, and as of
   1.30.2 the GPU path matches the CPU one.
 - **Use `scale` alone** where ECC is too slow or the stack is mostly breathing.
   It is the most reliable single stage on both scenes (1.78x and 2.65x) and the
-  only one never worse than doing nothing.
+  only one that was never worse than doing nothing.
 - **Set the reference frame to `middle`** (item 6). Free, better everywhere.
-- **`homography` is optional at best** and costs accuracy on both scenes (item 2).
+- **`homography` is safe to leave on** as of 1.30.3, and is worth turning on
+  where the camera may have tilted between frames - it now falls back to the
+  same constrained model `scale` fits wherever the perspective is not real
+  (item 2). It is still not worth stacking on top of `scale` for its own sake.
 - Ignore the `downscale_width` setting; it does nothing on real files (item 5).
 
 GPU output is still softer than CPU output at equal alignment (item 4), so on a
@@ -752,7 +841,8 @@ The existing contract tests remain the guard against regression:
 
 ```bash
 python -m pytest tests/test_registration_scale.py tests/test_registration_reference.py \
-                tests/test_registration_gpu_warp.py -v
+                tests/test_registration_gpu_warp.py \
+                tests/test_registration_homography_model.py -v
 ```
 
 The first two would not catch items 3 or 4 - `test_registration_scale.py`
@@ -762,3 +852,11 @@ caught: it lifts the `without_cupy` helper out of the benchmark, runs a stage
 with the CuPy path forced on and off, and asserts the two agree to within a
 fraction of a pixel. It skips where there is no CUDA device, so it is only load-
 bearing on a machine that can run the path it guards.
+
+The fourth arrived with item 2's fix and measures the same geometric error this
+document does, reading the stage's transforms back through the same crop-helper
+spy: it asserts that the stage beats leaving the stack alone on both
+ground-truth scenes (it does not, on the pre-1.30.3 estimator) and that a stack
+carrying a real camera tilt still comes back sub-pixel (it does not, if the
+stage is changed to always fit a similarity). The scene half skips where
+`samples/` has not been generated.

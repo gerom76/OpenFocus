@@ -120,7 +120,7 @@ class RegistrationHelpDialog(HelpDialog):
     Corrects the magnification change a lens introduces as the focus plane moves through a stack&mdash;"focus breathing". Fits a constrained similarity (uniform scale plus a small rotation and recentring) from SIFT matches, so it cancels the size drift without the overfitting a full homography risks on blurred frames. Enable it when frames grow or shrink slightly from first to last.</p>
 
     <p>Align (Homography)<br/>
-    Uses feature-based homography transformation to align images. Detects SIFT features between consecutive frames and computes perspective transformation matrices. Ideal for most focus stacks that need global geometric correction.</p>
+    Feature-based alignment for stacks that need global geometric correction. Detects SIFT features between consecutive frames and fits both a perspective transform and a constrained similarity to each pair, keeping the perspective one only where its extra freedom predicts matches it was not fitted to. A stack shot on a rail carries no perspective, so its pairs take the constrained fit; a handheld shot where the camera really tilted keeps the full one.</p>
 
     <p>Align (ECC)<br/>
     Enhanced Correlation Coefficient alignment refines alignment at the sub-pixel level. Works well for fine adjustments or whenever feature detection is unreliable.</p>

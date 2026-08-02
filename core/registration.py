@@ -499,6 +499,140 @@ def _crop_with_transforms(images, H_matrices):
 
 # ========== Homography alignment algorithm implementation (non-linear) ==========
 
+# --- Per-pair model selection (docs/REGISTRATION_IMPROVEMENTS.md item 2) -----
+#
+# An 8-DOF homography fitted to SIFT matches spends its two perspective terms on
+# whatever is left in the residual, and on a focus stack that is match noise: a
+# rail moves the focal plane along the optical axis, so the frame-to-frame motion
+# is a magnification change plus small rotation and recentring - a 4-DOF
+# similarity. Genuine perspective needs the camera to tilt between frames.
+#
+# Which model a pair deserves is decided per pair, by held-out reprojection
+# error: fit both on part of the matches, score both on the rest, and keep the
+# homography only when its extra freedom predicts matches it has not seen. Noise
+# does not survive that; a real tilt does.
+
+_CV_SPLITS = 9             # train/test splits averaged per pair
+_CV_TRAIN_FRACTION = 0.7   # share of matches used to fit within a split
+_CV_MARGIN = 0.8           # the homography must beat the similarity by 20%
+_CV_MIN_MATCHES = 24       # three inliers per degree of freedom, or 4 DOF wins
+
+
+def _project_points(M, pts):
+    """Apply a 3x3 projective matrix to an (N, 2) array of points."""
+    q = np.asarray(M, dtype=np.float64) @ np.vstack([pts.T, np.ones(len(pts))])
+    w = np.where(np.abs(q[2]) < 1e-12, 1e-12, q[2])
+    return (q[:2] / w).T
+
+
+def _fit_similarity_ls(src, dst):
+    """Least-squares similarity (uniform scale + rotation + translation).
+
+    Written out rather than taken from estimateAffinePartial2D because the
+    cross-validation below has to be deterministic, and OpenCV's estimator is
+    RANSAC-driven. Solves x' = a*x - b*y + tx, y' = b*x + a*y + ty.
+    """
+    n = len(src)
+    if n < 2:
+        return None
+    A = np.zeros((2 * n, 4), dtype=np.float64)
+    A[0::2, 0] = src[:, 0]
+    A[0::2, 1] = -src[:, 1]
+    A[0::2, 2] = 1.0
+    A[1::2, 0] = src[:, 1]
+    A[1::2, 1] = src[:, 0]
+    A[1::2, 3] = 1.0
+    try:
+        sol, *_ = np.linalg.lstsq(A, dst.reshape(-1).astype(np.float64), rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    a, b, tx, ty = sol
+    return np.array([[a, -b, tx], [b, a, ty], [0.0, 0.0, 1.0]], dtype=np.float64)
+
+
+def _fit_homography_ls(src, dst):
+    """Least-squares (DLT) homography - deterministic, unlike the RANSAC call."""
+    if len(src) < 4:
+        return None
+    H, _ = cv2.findHomography(src.reshape(-1, 1, 2), dst.reshape(-1, 1, 2), 0)
+    return None if H is None else np.asarray(H, dtype=np.float64)
+
+
+def _held_out_error(fit, src, dst, splits=None):
+    """Median reprojection error of `fit` on matches it was not fitted to.
+
+    The same splits are used for every model - the RNG is seeded per call - so
+    the comparison is paired and the whole stage stays reproducible.
+    """
+    splits = _CV_SPLITS if splits is None else splits
+    n = len(src)
+    train_n = int(round(n * _CV_TRAIN_FRACTION))
+    if n - train_n < 2 or train_n < 4:
+        return float('inf')
+
+    rng = np.random.default_rng(0)
+    errors = []
+    for _ in range(splits):
+        order = rng.permutation(n)
+        train, test = order[:train_n], order[train_n:]
+        M = fit(src[train], dst[train])
+        if M is None:
+            return float('inf')
+        # Median over the held-out matches: a ratio test at 0.70 still lets a
+        # few false matches through, and one of those in a test fold would
+        # otherwise decide the model.
+        errors.append(float(np.median(
+            np.linalg.norm(_project_points(M, src[test]) - dst[test], axis=1))))
+    return float(np.median(errors))
+
+
+def _select_pair_transform(pts_curr, pts_last):
+    """Fit both models to one pair's matches and return (matrix, model name).
+
+    Returns (None, "failed") when neither model can be estimated.
+    """
+    src = np.asarray(pts_curr, dtype=np.float64).reshape(-1, 2)
+    dst = np.asarray(pts_last, dtype=np.float64).reshape(-1, 2)
+
+    H_hom, mask_hom = cv2.findHomography(src.reshape(-1, 1, 2), dst.reshape(-1, 1, 2),
+                                         cv2.RANSAC, 5.0)
+    M_sim, mask_sim = cv2.estimateAffinePartial2D(
+        src.reshape(-1, 1, 2), dst.reshape(-1, 1, 2),
+        method=cv2.RANSAC, ransacReprojThreshold=5.0)
+    H_sim = (None if M_sim is None
+             else np.vstack([M_sim, [0.0, 0.0, 1.0]]).astype(np.float64))
+
+    if H_sim is None:
+        return (H_hom, "homography") if H_hom is not None else (None, "failed")
+    if H_hom is None:
+        return H_sim, "similarity"
+
+    # Validate on the matches RANSAC believed, not on everything the ratio test
+    # let through: the folds are fitted by least squares, which one false match
+    # is enough to wreck. The union of the two inlier sets is used so that a
+    # match only the homography accepted - which is what a real perspective
+    # looks like out at the frame edges - still counts as evidence for it.
+    keep = np.zeros(len(src), dtype=bool)
+    if mask_hom is not None:
+        keep |= mask_hom.ravel().astype(bool)
+    if mask_sim is not None:
+        keep |= mask_sim.ravel().astype(bool)
+    if keep.any():
+        src, dst = src[keep], dst[keep]
+
+    if len(src) < _CV_MIN_MATCHES:
+        # Too few matches to tell the models apart: 8 DOF through ~10 points
+        # reproduces them almost exactly however wrong it is, so validation
+        # cannot see the overfit. The constrained model is the safe answer.
+        return H_sim, "similarity"
+
+    err_hom = _held_out_error(_fit_homography_ls, src, dst)
+    err_sim = _held_out_error(_fit_similarity_ls, src, dst)
+    if err_hom < _CV_MARGIN * err_sim:
+        return H_hom, "homography"
+    return H_sim, "similarity"
+
+
 def _align_homography_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4,
                            reference_index: int = 0):
     """
@@ -509,6 +643,12 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
     3. Matrix Chaining: reduces accumulated error
     4. Lanczos interpolation: preserves image sharpness
     5. Parallel computation optimization (Parallel Processing): uses multiple cores to speed up feature extraction and image warping
+    6. Per-pair model selection: the 8-DOF homography is kept only where its two
+       perspective terms predict held-out matches better than a 4-DOF
+       similarity does, so a pair whose motion carries no perspective - which
+       on a focus rail is every pair - is fitted with the constrained model
+       instead of bending the frame to fit match noise. See
+       _select_pair_transform.
     """
     import concurrent.futures
 
@@ -589,9 +729,11 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
     print("  - Step 2/3: Calculating transform matrices...")
     
     bf = cv2.BFMatcher(cv2.NORM_L2)
-    
+
     # Get the features of the first frame
     last_kps, last_des, last_scale = features_list[0]
+
+    constrained_pairs = 0
 
     for idx in range(1, num_images):
         curr_kps, curr_des, curr_scale = features_list[idx]
@@ -621,12 +763,15 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         pts_curr = np.float32([curr_kps[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2) / curr_scale
         pts_last = np.float32([last_kps[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2) / last_scale
 
-        # Compute the homography matrix with RANSAC
-        H_local, mask = cv2.findHomography(pts_curr, pts_last, cv2.RANSAC, 5.0)
+        # Fit a homography and a similarity to the same matches and keep
+        # whichever earns its degrees of freedom on held-out matches.
+        H_local, model = _select_pair_transform(pts_curr, pts_last)
 
         if H_local is None:
             print(f"Frame {idx} alignment failed.")
             H_local = np.eye(3)
+        elif model == "similarity":
+            constrained_pairs += 1
 
         # Matrix chain multiplication
         H_global = np.matmul(H_global, H_local)
@@ -636,6 +781,10 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         last_kps = curr_kps
         last_des = curr_des
         last_scale = curr_scale
+
+    if constrained_pairs:
+        print(f"    {constrained_pairs}/{num_images - 1} pairs took the constrained "
+              f"similarity - their perspective terms did not survive validation.")
 
     # --- 4. Apply transforms and crop in parallel ---
     print("  - Step 3/3: Warping images concurrently...")

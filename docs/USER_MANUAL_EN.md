@@ -193,6 +193,10 @@ Image registration corrects spatial misalignment between frames in your image st
 - Handles larger geometric transformations
 - Faster than ECC for initial alignment
 - Good for images with significant perspective changes
+- Fits a perspective transform and a constrained similarity to each frame pair
+  and keeps the perspective one only where it predicts matches it was not
+  fitted to, so a stack shot on a rail - which has no perspective in it - is
+  not bent to fit feature-matching noise
 
 ### Enabling Registration
 
