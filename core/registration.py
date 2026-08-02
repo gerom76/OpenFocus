@@ -145,61 +145,60 @@ def _detection_scale(width, downscale_width):
     return downscale_width / float(width) if width > downscale_width else 1.0
 
 
+# ========== Stack loading ==========
+
+# The stages have never agreed on which extensions they accept - ECC's list is
+# missing '.tiff', so a folder of .tiff frames aligns under scale and
+# homography and silently loses every frame under ECC. That disagreement is
+# item 12 of docs/REGISTRATION_IMPROVEMENTS.md and is deliberately left
+# standing here: the loader itself is now written once, but the set it is
+# handed is still the set the stage in front of the pipeline used, so nothing
+# about the behaviour changes until item 12 is taken on its own terms.
+_FEATURE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+_ECC_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif'}
+
+_STAGE_EXTENSIONS = {
+    'scale': _FEATURE_EXTENSIONS,
+    'homography': _FEATURE_EXTENSIONS,
+    'ecc': _ECC_EXTENSIONS,
+}
+
+
+def _load_stack(input_source, img_filenames, valid_exts):
+    """Resolve a directory path or a preloaded list into (images, filenames).
+
+    A caller that passes images (which every in-app caller does) gets them back
+    untouched; only the CLI and library entry points reach the directory walk.
+    """
+    if img_filenames is not None or not isinstance(input_source, str):
+        return input_source, img_filenames
+
+    num_pattern = re.compile(r"\d+")
+    img_paths = sorted(
+        (os.path.join(input_source, f) for f in os.listdir(input_source)
+         if os.path.splitext(f)[1].lower() in valid_exts),
+        key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
+    )
+    images = [read_image_any_depth(path) for path in img_paths]
+    images = [img for img in images if img is not None]
+    return images, [os.path.basename(path) for path in img_paths]
+
+
 # ========== Scale / focus-breathing correction (similarity) ==========
 
-def _align_scale_impl(input_source, output_path=None, img_filenames=None,
-                      downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
-                      reference_index: int = 0):
-    """
-    Focus-breathing (magnification) correction via a similarity transform.
+def _estimate_scale(images, downscale_width, thread_count, parallel_ecc=True):
+    """Estimate the focus-breathing similarity of every frame.
 
-    Focus stacking changes the optical magnification slightly from frame to frame
-    as the focus plane moves - the effect photographers call "focus breathing".
-    Geometrically it is a similarity: a uniform scale about the optical axis plus
-    a small rotation and recentring translation (4 DOF). Fitting a full 8-DOF
-    homography to it - as the other methods here do - overfits on frames that
-    differ in blur, so this stage estimates a constrained similarity instead.
-
-    For each consecutive pair the transform is recovered from SIFT matches with
-    cv2.estimateAffinePartial2D under RANSAC, which yields exactly a scaled
-    rotation plus translation and no shear or perspective. The pairwise transforms
-    are chained back to the first frame; every frame is then warped into that
-    shared frame and cropped to the common valid region, matching the homography
-    and ECC methods so the stages compose cleanly.
-
-    Args:
-        input_source: directory path or a preloaded list of images
-        output_path: optional directory to save results (None = return only)
-        img_filenames: optional filenames matching a preloaded image list
-        downscale_width: width the frames are downsampled to for feature detection
-        thread_count: worker threads for feature extraction and warping
-        reference_index: frame held fixed (0 = first frame, the default)
+    See _align_scale_impl for what the model is and why it is constrained.
 
     Returns:
-        list of aligned images
+        list of 3x3 forward maps placing frame i onto the frame-0 canvas.
     """
     import concurrent.futures
 
-    # --- 1. Data loading (mirrors the other methods) ---
-    if img_filenames is None and isinstance(input_source, str):
-        num_pattern = re.compile(r"\d+")
-        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
-        img_paths = sorted(
-            (os.path.join(input_source, f) for f in os.listdir(input_source)
-             if os.path.splitext(f)[1].lower() in valid_exts),
-            key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
-        )
-        images = [read_image_any_depth(path) for path in img_paths]
-        images = [img for img in images if img is not None]
-        img_filenames = [os.path.basename(path) for path in img_paths]
-    else:
-        images = input_source
-
     num_images = len(images)
-    if num_images < 2:
-        return images
 
-    # --- 2. Initialization ---
+    # --- 1. Initialization ---
     h_orig, w_orig = images[0].shape[:2]
     downscale_width = _resolve_detection_width(downscale_width, h_orig, w_orig, "Scale")
 
@@ -210,7 +209,7 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None,
 
     print(f"Aligning {num_images} images using Scale / focus-breathing correction (similarity)...")
 
-    # --- 3. Parallel feature extraction (SIFT on 8-bit downscaled frames) ---
+    # --- 2. Parallel feature extraction (SIFT on 8-bit downscaled frames) ---
     def get_features_task(img):
         # An independent detector per thread keeps this thread-safe.
         local_detector = cv2.SIFT_create()
@@ -225,15 +224,10 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None,
         kps, des = local_detector.detectAndCompute(bitdepth.to_analysis8(img_small), None)
         return kps, des, scale
 
-    try:
-        max_workers = max(1, int(thread_count))
-    except Exception:
-        max_workers = min(8, os.cpu_count() or 1)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
         features_list = list(executor.map(get_features_task, images))
 
-    # --- 4. Sequential similarity estimation (chain must stay serial) ---
+    # --- 3. Sequential similarity estimation (chain must stay serial) ---
     bf = cv2.BFMatcher(cv2.NORM_L2)
     last_kps, last_des, last_scale = features_list[0]
 
@@ -284,42 +278,43 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None,
         last_des = curr_des
         last_scale = curr_scale
 
-    # --- 5. Warp into the shared frame and crop to the common valid region ---
-    # Re-reference the chain onto the chosen frame before cropping and warping.
-    H_matrices = _rereference_transforms(H_matrices, reference_index)
-    top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
+    return H_matrices
 
-    if top >= bottom or left >= right:
-        print("Warning: Invalid crop region, skipping crop.")
-        target_w, target_h = w_orig, h_orig
-        offset_x, offset_y = 0, 0
-    else:
-        target_w = right - left
-        target_h = bottom - top
-        offset_x = -left
-        offset_y = -top
 
-    # Build the crop translation and fold it into each warp. It carries the
-    # sub-pixel offset that keeps the reference frame from being copied through
-    # unresampled, so it is applied whether or not the crop is real.
-    T_crop = _build_crop_transform(offset_x, offset_y)
+def _align_scale_impl(input_source, output_path=None, img_filenames=None,
+                      downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
+                      reference_index: int = 0):
+    """
+    Focus-breathing (magnification) correction via a similarity transform.
 
-    def warp_task(args):
-        img, H = args
-        return _warp_frame(img, T_crop @ H, target_w, target_h)
+    Focus stacking changes the optical magnification slightly from frame to frame
+    as the focus plane moves - the effect photographers call "focus breathing".
+    Geometrically it is a similarity: a uniform scale about the optical axis plus
+    a small rotation and recentring translation (4 DOF). Fitting a full 8-DOF
+    homography to it - as the other methods here do - overfits on frames that
+    differ in blur, so this stage estimates a constrained similarity instead.
 
-    warp_args = list(zip(images, H_matrices))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        aligned_images = list(executor.map(warp_task, warp_args))
+    For each consecutive pair the transform is recovered from SIFT matches with
+    cv2.estimateAffinePartial2D under RANSAC, which yields exactly a scaled
+    rotation plus translation and no shear or perspective. The pairwise transforms
+    are chained back to the first frame; every frame is then warped into that
+    shared frame and cropped to the common valid region, matching the homography
+    and ECC methods so the stages compose cleanly.
 
-    if output_path:
-        os.makedirs(output_path, exist_ok=True)
-        for idx, img in enumerate(aligned_images):
-            fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
-            cv2.imwrite(os.path.join(output_path, fname),
-                        bitdepth.prepare_for_write(img, os.path.splitext(fname)[1]))
+    Args:
+        input_source: directory path or a preloaded list of images
+        output_path: optional directory to save results (None = return only)
+        img_filenames: optional filenames matching a preloaded image list
+        downscale_width: width the frames are downsampled to for feature detection
+        thread_count: worker threads for feature extraction and warping
+        reference_index: frame held fixed (0 = first frame, the default)
 
-    return aligned_images
+    Returns:
+        list of aligned images
+    """
+    return align_stack(input_source, ('scale',), output_path=output_path,
+                       img_filenames=img_filenames, downscale_width=downscale_width,
+                       thread_count=thread_count, reference_index=reference_index)
 
 
 
@@ -672,47 +667,18 @@ def _select_pair_transform(pts_curr, pts_last):
     return H_sim, "similarity"
 
 
-def _align_homography_impl(input_source, output_path=None, img_filenames=None,
-                           downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
-                           reference_index: int = 0):
-    """
-    Optimized commercial-grade image-alignment algorithm
-    Features:
-    1. Sequential Alignment: solves feature loss under large depth of field
-    2. Pyramid speedup (Downscale Processing): greatly improves feature-detection speed
-    3. Matrix Chaining: reduces accumulated error
-    4. Lanczos interpolation: preserves image sharpness
-    5. Parallel computation optimization (Parallel Processing): uses multiple cores to speed up feature extraction and image warping
-    6. Per-pair model selection: the 8-DOF homography is kept only where its two
-       perspective terms predict held-out matches better than a 4-DOF
-       similarity does, so a pair whose motion carries no perspective - which
-       on a focus rail is every pair - is fitted with the constrained model
-       instead of bending the frame to fit match noise. See
-       _select_pair_transform.
+def _estimate_homography(images, downscale_width, thread_count, parallel_ecc=True):
+    """Estimate the per-frame homography (or similarity) of every frame.
+
+    See _align_homography_impl for the stage's properties and
+    _select_pair_transform for how the model is chosen per pair.
+
+    Returns:
+        list of 3x3 forward maps placing frame i onto the frame-0 canvas.
     """
     import concurrent.futures
 
-    # --- 1. Data loading and preprocessing ---
-    if img_filenames is None and isinstance(input_source, str):
-        num_pattern = re.compile(r"\d+")
-        # Support common formats, filter out non-images
-        valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
-        img_paths = sorted(
-            (os.path.join(input_source, f) for f in os.listdir(input_source)
-             if os.path.splitext(f)[1].lower() in valid_exts),
-            key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
-        )
-        # Note: for memory reasons, commercial software usually does not read all large images at once
-        # But to keep the interface consistent, we read them all in here. A better approach would be to build a generator.
-        images = [read_image_any_depth(path) for path in img_paths]
-        images = [img for img in images if img is not None]
-        img_filenames = [os.path.basename(path) for path in img_paths]
-    else:
-        images = input_source
-
     num_images = len(images)
-    if num_images < 2:
-        return images
 
     # --- Initialization ---
     h_orig, w_orig = images[0].shape[:2]
@@ -720,14 +686,14 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None,
 
     # Global accumulated matrix (used to map the current frame directly back to frame 0)
     H_global = np.eye(3, dtype=np.float32)
-    
+
     # Collect all transform matrices for precise cropping
     H_matrices = [np.eye(3, dtype=np.float32)]  # The first image is the reference, identity matrix
 
     print(f"Aligning {num_images} images using Sequential Homography (Parallel Optimized)...")
 
-    # --- 2. Parallel feature extraction ---
-    print("  - Step 1/3: Extracting features concurrently...")
+    # --- 1. Parallel feature extraction ---
+    print("  - Step 1/2: Extracting features concurrently...")
 
     def get_features_task(img):
         # Create an independent detector in each thread to ensure thread safety
@@ -748,17 +714,12 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None,
 
     # Use a thread pool to extract features in parallel
     # Most OpenCV operations release the GIL, so multithreading can effectively speed things up
-    try:
-        max_workers = max(1, int(thread_count))
-    except Exception:
-        max_workers = min(8, os.cpu_count() or 1)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
         features_list = list(executor.map(get_features_task, images))
 
-    # --- 3. Sequential matrix computation (must be serial) ---
-    print("  - Step 2/3: Calculating transform matrices...")
-    
+    # --- 2. Sequential matrix computation (must be serial) ---
+    print("  - Step 2/2: Calculating transform matrices...")
+
     bf = cv2.BFMatcher(cv2.NORM_L2)
 
     # Get the features of the first frame
@@ -817,102 +778,57 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None,
         print(f"    {constrained_pairs}/{num_images - 1} pairs took the constrained "
               f"similarity - their perspective terms did not survive validation.")
 
-    # --- 4. Apply transforms and crop in parallel ---
-    print("  - Step 3/3: Warping images concurrently...")
-    
-    # Re-reference the chain onto the chosen frame before cropping and warping.
-    H_matrices = _rereference_transforms(H_matrices, reference_index)
+    return H_matrices
 
-    # Precompute the crop region and warp directly into the target region, avoiding the waste of warping first and cropping later
-    top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
 
-    if top >= bottom or left >= right:
-        print("Warning: Invalid crop region, skipping crop.")
-        target_w, target_h = w_orig, h_orig
-        offset_x, offset_y = 0, 0
-    else:
-        target_w = right - left
-        target_h = bottom - top
-        offset_x = -left
-        offset_y = -top
-        print(f"    Optimized: Warping directly to cropped region ({target_w}x{target_h})...")
-
-    # Build the crop translation matrix. Its sub-pixel offset is what stops the
-    # reference frame from passing through as an unresampled copy, so it applies
-    # whether or not there is a crop to fold in.
-    T_crop = _build_crop_transform(offset_x, offset_y)
-
-    def warp_task(args):
-        img, H = args
-        # Merge the crop transform
-        return _warp_frame(img, T_crop @ H, target_w, target_h)
-
-    # Prepare the parameters
-    warp_args = zip(images, H_matrices)
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        aligned_images = list(executor.map(warp_task, warp_args))
-
-    # If an output path is provided, save the image
-    if output_path:
-        os.makedirs(output_path, exist_ok=True)
-        print("  - Saving results...")
-        for idx, img in enumerate(aligned_images):
-            fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
-            cv2.imwrite(os.path.join(output_path, fname),
-                        bitdepth.prepare_for_write(img, os.path.splitext(fname)[1]))
-
-    return aligned_images
+def _align_homography_impl(input_source, output_path=None, img_filenames=None,
+                           downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
+                           reference_index: int = 0):
+    """
+    Optimized commercial-grade image-alignment algorithm
+    Features:
+    1. Sequential Alignment: solves feature loss under large depth of field
+    2. Pyramid speedup (Downscale Processing): greatly improves feature-detection speed
+    3. Matrix Chaining: reduces accumulated error
+    4. Lanczos interpolation: preserves image sharpness
+    5. Parallel computation optimization (Parallel Processing): uses multiple cores to speed up feature extraction and image warping
+    6. Per-pair model selection: the 8-DOF homography is kept only where its two
+       perspective terms predict held-out matches better than a 4-DOF
+       similarity does, so a pair whose motion carries no perspective - which
+       on a focus rail is every pair - is fitted with the constrained model
+       instead of bending the frame to fit match noise. See
+       _select_pair_transform.
+    """
+    return align_stack(input_source, ('homography',), output_path=output_path,
+                       img_filenames=img_filenames, downscale_width=downscale_width,
+                       thread_count=thread_count, reference_index=reference_index)
 
 
 # ========== ECC alignment algorithm implementation (high precision) ==========
 
-def _align_ecc_impl(input_source, output_path=None, img_filenames=None,
-                    downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
-                    parallel_ecc: bool = True, reference_index: int = 0):
-    """
-    High-precision image-stack alignment algorithm based on ECC (Enhanced Correlation Coefficient)
-    Suitable for: fine, sub-pixel refinement of global drift when feature detection is unreliable
-    Advantages: sub-pixel precision, does not rely on feature points
-    Optimizations: parallel preprocessing, parallel warping, merged cropping operation
+def _estimate_ecc(images, downscale_width, thread_count, parallel_ecc=True):
+    """Estimate the per-frame ECC homography of every frame.
 
-    Note: this stage fits an 8-DOF homography. For focus-breathing (magnification
-    change) specifically, prefer the dedicated 'scale' method (_align_scale_impl),
-    which fits a constrained 4-DOF similarity and does not overfit on frames that
-    differ in blur.
+    See _align_ecc_impl for what the stage is for and where it is weak.
+
+    Returns:
+        list of 3x3 forward maps placing frame i onto the frame-0 canvas.
     """
     import concurrent.futures
 
-    # --- 1. Data loading ---
-    if img_filenames is None and isinstance(input_source, str):
-        num_pattern = re.compile(r"\d+")
-        img_paths = sorted(
-            (os.path.join(input_source, f) for f in os.listdir(input_source)
-             if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tif'}),
-            key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
-        )
-        images = [read_image_any_depth(path) for path in img_paths]
-        images = [img for img in images if img is not None]
-        img_filenames = [os.path.basename(path) for path in img_paths]
-    else:
-        images = input_source
-
-    if len(images) < 2:
-        return images
-
-    # --- 2. Initialization ---
+    # --- 1. Initialization ---
     h_orig, w_orig = images[0].shape[:2]
     downscale_width = _resolve_detection_width(downscale_width, h_orig, w_orig, "ECC")
 
     # Global transform matrix (3x3 identity matrix)
     H_global = np.eye(3, dtype=np.float32)
-    
+
     # Collect all transform matrices for precise cropping
     H_matrices = [np.eye(3, dtype=np.float32)]  # The first image is the reference
-    
+
     # Define the ECC transform type
-    warp_mode = cv2.MOTION_HOMOGRAPHY 
-    
+    warp_mode = cv2.MOTION_HOMOGRAPHY
+
     # ECC termination criteria
     number_of_iterations = 50
     termination_eps = 1e-4
@@ -926,7 +842,7 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None,
             small_img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         else:
             small_img = img # just reference, no copy needed
-        
+
         gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
         # findTransformECC takes 8-bit or float32 only. 8-bit is used here for
@@ -939,25 +855,15 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None,
 
     print(f"Aligning {len(images)} images using ECC (Parallel Optimized)...")
 
-    # --- 3. Parallel preprocessing ---
-    # print("  - Step 1/3: Preprocessing images concurrently...")
-    try:
-        max_workers = max(1, int(thread_count))
-    except Exception:
-        max_workers = min(8, os.cpu_count() or 1)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # --- 2. Parallel preprocessing ---
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
         # map guarantees the result order matches the input
         preprocessed_data = list(executor.map(preprocess, images))
 
     # All images share the same width, so the first image's scale applies to all pairs
     _, scale_factor = preprocessed_data[0]
 
-    # Create the output directory in advance
-    if output_path:
-        os.makedirs(output_path, exist_ok=True)
-
-    # --- 4. Pairwise matrix computation ---
+    # --- 3. Pairwise matrix computation ---
     # Each pair (frame idx-1 vs idx) is independent; only the chain accumulation
     # below must stay sequential. findTransformECC releases the GIL, so the
     # pairs can run concurrently when parallel_ecc is enabled.
@@ -1002,8 +908,8 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None,
 
     pair_indices = range(1, len(images))
     if parallel_ecc and len(images) > 2:
-        print(f"    ECC: computing {len(images) - 1} pair matrices in parallel ({max_workers} workers)", flush=True)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        print(f"    ECC: computing {len(images) - 1} pair matrices in parallel ({thread_count} workers)", flush=True)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
             pair_matrices = list(executor.map(compute_pair_matrix, pair_indices))
     else:
         pair_matrices = [compute_pair_matrix(idx) for idx in pair_indices]
@@ -1021,53 +927,225 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None,
         H_inv = np.linalg.inv(H_global)
         H_matrices.append(H_inv.copy())
 
-    # Re-reference the chain onto the chosen frame before cropping and warping.
-    H_matrices = _rereference_transforms(H_matrices, reference_index)
+    return H_matrices
 
-    # --- 5. Apply transforms and crop in parallel ---
-    # print("  - Step 3/3: Warping and saving concurrently...")
 
-    # Compute the common valid region
-    top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
-    
+def _align_ecc_impl(input_source, output_path=None, img_filenames=None,
+                    downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
+                    parallel_ecc: bool = True, reference_index: int = 0):
+    """
+    High-precision image-stack alignment algorithm based on ECC (Enhanced Correlation Coefficient)
+    Suitable for: fine, sub-pixel refinement of global drift when feature detection is unreliable
+    Advantages: sub-pixel precision, does not rely on feature points
+    Optimizations: parallel preprocessing, parallel warping, merged cropping operation
+
+    Note: this stage fits an 8-DOF homography. For focus-breathing (magnification
+    change) specifically, prefer the dedicated 'scale' method (_align_scale_impl),
+    which fits a constrained 4-DOF similarity and does not overfit on frames that
+    differ in blur.
+    """
+    return align_stack(input_source, ('ecc',), output_path=output_path,
+                       img_filenames=img_filenames, downscale_width=downscale_width,
+                       thread_count=thread_count, parallel_ecc=parallel_ecc,
+                       reference_index=reference_index)
+
+
+# ========== The pipeline: one resample, one crop ==========
+#
+# (docs/REGISTRATION_IMPROVEMENTS.md item 7)
+#
+# Each stage used to be a complete registration: estimate, warp, crop, hand the
+# *pixels* to the next stage. Resampling is not idempotent, so a three-stage
+# pipeline interpolated every frame three times - 31% of the high-frequency
+# energy gone where one stage costs 20% - and every stage took the intersection
+# of the valid regions again, so the crops composed and a fifth of the frame was
+# thrown away. In a focus stacker both are paid in the wrong currency: the
+# fusion stage decides which frame to source each pixel from by asking which is
+# locally sharpest, and it cannot see detail an earlier warp has already
+# discarded.
+#
+# Every stage already produces a 3x3 matrix per frame, so the stages compose
+# with a matrix product. The pipeline below estimates each stage in turn,
+# accumulates the maps, and warps the *original* frames exactly once, into a
+# single crop computed from the composed maps. Output frames are therefore
+# resampled once and cropped once for any number of stages.
+#
+# The intermediate frames still exist, because a stage measures on pixels: ECC
+# correlates them and SIFT detects on them. They are built the same way the
+# previous stage's output used to be built - same warp, same kernel, same crop -
+# so every estimate is what it was before, and they are then thrown away rather
+# than carried into the result. That keeps the warp count unchanged (n stages
+# still means n warps per frame) and moves the interpolation off the picture and
+# onto a measurement.
+#
+# The bookkeeping is a conjugation. `composed[i]` maps original frame i onto the
+# reference frame's own coordinates; `canvas` maps those coordinates onto the
+# intermediate canvas the current pixels live in. A stage measures `S[i]` in
+# that canvas, so the map in original coordinates is inv(canvas) . S[i] . canvas,
+# applied in front of what is already composed. With one stage `canvas` is the
+# identity and the composition is a no-op, which is what keeps every
+# single-stage result bit-identical to the release before this one.
+
+_STAGE_ESTIMATORS = {
+    'scale': _estimate_scale,
+    'homography': _estimate_homography,
+    'ecc': _estimate_ecc,
+}
+
+# Pipeline order, and what each public method name expands to. 'both' has always
+# meant homography followed by ECC.
+_STAGE_ORDER = ('scale', 'homography', 'ecc')
+_METHOD_STAGES = {
+    'scale': ('scale',),
+    'homography': ('homography',),
+    'ecc': ('ecc',),
+    'both': ('homography', 'ecc'),
+}
+
+
+def resolve_stages(method) -> tuple:
+    """Normalise a method into the stages it runs, in pipeline order.
+
+    Accepts a single name ('scale', 'homography', 'ecc', 'both'), a '+'-joined
+    string ('scale+ecc'), or any sequence of those. Duplicates collapse, so
+    ('scale', 'both', 'ecc') is scale -> homography -> ECC.
+
+    Raises:
+        ValueError: on a name that is not a registration method.
+    """
+    if method is None:
+        return ()
+    names = (method.split('+') if isinstance(method, str) else list(method))
+
+    stages = []
+    for name in names:
+        name = str(name).strip()
+        if not name:
+            continue
+        if name not in _METHOD_STAGES:
+            raise ValueError(
+                f"Unsupported registration method: {name}. "
+                f"Supported methods: {', '.join(_METHOD_STAGES)}"
+            )
+        for stage in _METHOD_STAGES[name]:
+            if stage not in stages:
+                stages.append(stage)
+    return tuple(sorted(stages, key=_STAGE_ORDER.index))
+
+
+def _plan_canvas(H_matrices, img_shape):
+    """Output size and crop translation for one set of composed maps.
+
+    Returns:
+        (target_w, target_h, T_crop). A degenerate valid region - which means
+        the frames have no overlap worth cropping to - falls back to the input
+        size and no crop, as it always has.
+    """
+    h_orig, w_orig = img_shape
+    top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, img_shape)
+
     if top >= bottom or left >= right:
         print("Warning: Invalid crop region, skipping crop.")
-        target_w, target_h = w_orig, h_orig
-        offset_x, offset_y = 0, 0
-    else:
-        target_w = right - left
-        target_h = bottom - top
-        offset_x = -left
-        offset_y = -top
-        # print(f"    Optimized: Warping directly to cropped region ({target_w}x{target_h})...")
+        return w_orig, h_orig, _build_crop_transform(0, 0)
 
-    # Build the crop translation matrix. Its sub-pixel offset is what stops the
-    # reference frame from passing through as an unresampled copy, so it applies
-    # whether or not there is a crop to fold in.
-    T_crop = _build_crop_transform(offset_x, offset_y)
+    # The crop translation carries the sub-pixel offset that keeps the reference
+    # frame from being copied through unresampled (item 3), so it is built the
+    # same way whether or not the crop itself is real.
+    return right - left, bottom - top, _build_crop_transform(-left, -top)
+
+
+def _warp_stack(images, H_matrices, T_crop, target_w, target_h, thread_count):
+    """Warp every frame into the shared canvas, once, in parallel."""
+    import concurrent.futures
 
     def warp_task(args):
-        idx, img, H = args
+        img, H = args
+        return _warp_frame(img, T_crop @ H, target_w, target_h)
 
-        # Merge the crop transform: first apply H, then translate by T_crop
-        aligned_img = _warp_frame(img, T_crop @ H, target_w, target_h)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+        return list(executor.map(warp_task, zip(images, H_matrices)))
 
-        # If an output path is provided, save directly in the thread
-        if output_path:
+
+def align_stack(input_source, stages, output_path=None, img_filenames=None,
+                downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
+                parallel_ecc: bool = True, reference_index: int = 0):
+    """Register a stack with any number of stages, resampling the frames once.
+
+    Args:
+        input_source: directory path or a preloaded list of images
+        stages: stage names in pipeline order, as resolve_stages returns them
+        output_path: optional directory to save the result to (None = return only)
+        img_filenames: optional filenames matching a preloaded image list
+        downscale_width: width the frames are downsampled to before a transform
+            is measured on them - detection accuracy against time
+        thread_count: worker threads for detection and warping
+        parallel_ecc: compute ECC pair matrices concurrently (identical results)
+        reference_index: frame held fixed (0 = first frame, the default)
+
+    Returns:
+        list of aligned images
+    """
+    stages = tuple(stages)
+    images, img_filenames = _load_stack(
+        input_source, img_filenames,
+        _STAGE_EXTENSIONS[stages[0]] if stages else _FEATURE_EXTENSIONS)
+
+    if not stages or len(images) < 2:
+        return images
+
+    try:
+        max_workers = max(1, int(thread_count))
+    except Exception:
+        max_workers = min(8, os.cpu_count() or 1)
+
+    h_orig, w_orig = images[0].shape[:2]
+
+    # Original frame i -> reference-frame coordinates. None until the first
+    # stage has run, so that a single-stage pipeline uses that stage's own
+    # matrices untouched rather than multiplying them by an identity.
+    composed = None
+    # Reference-frame coordinates -> the canvas the current pixels live in.
+    canvas = None
+    current = images
+
+    for position, stage in enumerate(stages):
+        H_stage = _STAGE_ESTIMATORS[stage](
+            current, downscale_width, max_workers, parallel_ecc)
+        # Re-reference the chain onto the chosen frame before it is composed:
+        # the stage measured against frame 0 of whatever it was handed.
+        H_stage = _rereference_transforms(H_stage, reference_index)
+
+        if composed is None:
+            composed = H_stage
+        else:
+            canvas_inv = np.linalg.inv(canvas)
+            composed = [canvas_inv @ np.asarray(S, dtype=np.float64) @ canvas
+                        @ np.asarray(C, dtype=np.float64)
+                        for S, C in zip(H_stage, composed)]
+
+        target_w, target_h, T_crop = _plan_canvas(composed, (h_orig, w_orig))
+
+        if position + 1 == len(stages):
+            break
+
+        # Not the last stage: rebuild the canvas the next estimator measures on.
+        # These pixels are the previous release's stage output exactly, and they
+        # go no further than the next estimate.
+        print(f"    Composing {stage} into the pipeline; "
+              f"measuring the next stage on a {target_w}x{target_h} canvas...")
+        current = _warp_stack(images, composed, T_crop, target_w, target_h, max_workers)
+        canvas = np.asarray(T_crop, dtype=np.float64)
+
+    print(f"    Warping {len(images)} frames once, "
+          f"through {len(stages)} composed stage(s), to {target_w}x{target_h}...")
+    aligned_images = _warp_stack(images, composed, T_crop, target_w, target_h, max_workers)
+
+    if output_path:
+        os.makedirs(output_path, exist_ok=True)
+        for idx, img in enumerate(aligned_images):
             fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
             cv2.imwrite(os.path.join(output_path, fname),
-                        bitdepth.prepare_for_write(aligned_img, os.path.splitext(fname)[1]))
-            
-        return aligned_img
-
-    # Prepare the parameters
-    task_args = []
-    for i in range(len(images)):
-        task_args.append((i, images[i], H_matrices[i]))
-
-    # cv2.warpPerspective releases the GIL, so the pool scales with the cores.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        aligned_images = list(executor.map(warp_task, task_args))
+                        bitdepth.prepare_for_write(img, os.path.splitext(fname)[1]))
 
     return aligned_images
 
@@ -1237,6 +1315,12 @@ class ImageRegistration:
     - 'ecc': ECC alignment registration (high precision, sub-pixel level)
     - 'both': combined registration (Homography first, then ECC)
 
+    Several stages can also be asked for in one call, as a '+'-joined string or
+    a sequence - 'scale+ecc', ['scale', 'both']. That is how they should be run:
+    the stages are composed into a single transform per frame and the frames are
+    resampled and cropped once, where chaining separate calls resamples and
+    crops once per stage (docs/REGISTRATION_IMPROVEMENTS.md item 7).
+
     Example:
         # Correct focus breathing (magnification change)
         registration = ImageRegistration(method='scale')
@@ -1253,18 +1337,26 @@ class ImageRegistration:
         # Use combined alignment
         registration = ImageRegistration(method='both')
         result = registration.process(image_list, './output')
+
+        # The app's default pipeline, composed into one warp
+        registration = ImageRegistration(method='scale+homography')
+        result = registration.process(image_list, './output')
     """
-    
+
     SUPPORTED_METHODS = ['scale', 'homography', 'ecc', 'both']
 
-    def __init__(self, method: str = 'homography', downscale_width: int = DEFAULT_DETECTION_WIDTH,
+    def __init__(self, method='homography', downscale_width: int = DEFAULT_DETECTION_WIDTH,
                  ecc_parallel: bool = True,
                  reference_index: int = 0):
         """
         Initialize the registrar
 
         Args:
-            method (str): registration method name, one of 'scale', 'homography', 'ecc', 'both'
+            method (str or sequence): registration method - one of 'scale',
+                'homography', 'ecc', 'both', or several of them together as a
+                '+'-joined string or a sequence. Stages asked for together are
+                composed and applied as one warp; chaining separate calls costs
+                a resample and a crop per stage.
             downscale_width (int): width the frames are downsampled to before a
                 transform is measured on them. Honoured at any frame size - the
                 stages no longer replace it with 1024 on large input - so it is
@@ -1274,11 +1366,8 @@ class ImageRegistration:
                 0 (the default) keeps the historical behaviour of referencing the
                 first frame; the middle frame minimises accumulated chain drift.
         """
-        if method not in self.SUPPORTED_METHODS:
-            raise ValueError(
-                f"Unsupported registration method: {method}. "
-                f"Supported methods: {', '.join(self.SUPPORTED_METHODS)}"
-            )
+        # Raises ValueError on anything that is not a registration method.
+        self.stages = resolve_stages(method)
 
         self.method = method
         # User-configurable downsampling width, used in preprocessing stages such as feature extraction
@@ -1287,108 +1376,46 @@ class ImageRegistration:
         self.ecc_parallel = bool(ecc_parallel)
         # Frame that stays fixed while the others align onto it (0 = first frame).
         self.reference_index = int(reference_index) if reference_index is not None else 0
-    
-    def process(self, 
-                input_source: Union[str, List[np.ndarray]], 
+
+    def process(self,
+                input_source: Union[str, List[np.ndarray]],
                 output_path: Optional[str] = None,
                 thread_count: int = 4) -> List[np.ndarray]:
         """
         Perform image registration
-        
+
         Args:
             input_source (str or list): image directory path or a preloaded list of images
             output_path (str, optional): output directory path.
                 - If a path is provided, the registered images are saved to disk
                 - If None, only the image list is returned without saving, saving disk space and I/O overhead
-        
+
         Returns:
             list: list of registered images (always returned, whether or not saved to disk)
         """
-        if self.method == 'scale':
-            return self._process_scale(input_source, output_path, thread_count=thread_count)
-        elif self.method == 'homography':
-            return self._process_homography(input_source, output_path, thread_count=thread_count)
-        elif self.method == 'ecc':
-            return self._process_ecc(input_source, output_path, thread_count=thread_count)
-        elif self.method == 'both':
-            # Combined mode: Homography first, then ECC
-            # Step 1: Homography (do not save intermediate results, unless this is the only step)
-            print("=== Step 1: Homography Alignment ===")
-            # In both mode, step 1 does not need to save to output_path, only passing in memory
-            homography_result = self._process_homography(input_source, output_path=None, thread_count=thread_count)
-            
-            print("\n=== Step 2: ECC Alignment ===")
-            # Step 2: ECC (save the final result)
-            return self._process_ecc(homography_result, output_path, thread_count=thread_count)
-    
-    def _process_scale(self,
-                       input_source: Union[str, List[np.ndarray]],
-                       output_path: Optional[str] = None,
-                       thread_count: int = 4) -> List[np.ndarray]:
-        """
-        Scale / focus-breathing correction (similarity transform)
+        if len(self.stages) > 1:
+            print(f"=== Composed registration: {' -> '.join(self.stages)} ===")
+        return align_stack(input_source, self.stages, output_path=output_path,
+                           downscale_width=self.downscale_width,
+                           thread_count=thread_count,
+                           parallel_ecc=self.ecc_parallel,
+                           reference_index=self.reference_index)
 
-        Estimates a per-frame uniform scale + rotation + translation and warps
-        every frame into the first frame, cancelling the magnification change
-        that focus stacking introduces as the focus plane moves.
+    # The three _process_<stage> methods that used to sit here were the dispatch
+    # table `process` walked; the pipeline dispatches on the stage list instead,
+    # so they became three unreachable one-line delegations and went. The module
+    # functions they called - _align_scale_impl and its two neighbours - are
+    # still the single-stage entry points, and still what the CLI uses.
 
-        Args:
-            input_source: image source
-            output_path: output path
-
-        Returns:
-            list of registered images
-        """
-        return _align_scale_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
-                                 reference_index=self.reference_index)
-
-    def _process_homography(self,
-                           input_source: Union[str, List[np.ndarray]],
-                           output_path: Optional[str] = None,
-                           thread_count: int = 4) -> List[np.ndarray]:
-        """
-        Homography alignment registration (non-linear)
-        
-        Args:
-            input_source: image source
-            output_path: output path
-        
-        Returns:
-            list of registered images
-        """
-        return _align_homography_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
-                                      reference_index=self.reference_index)
-    
-    def _process_ecc(self, 
-                    input_source: Union[str, List[np.ndarray]], 
-                    output_path: Optional[str] = None,
-                    thread_count: int = 4) -> List[np.ndarray]:
-        """
-        ECC alignment registration (high precision, sub-pixel level)
-        
-        Args:
-            input_source: image source
-            output_path: output path
-        
-        Returns:
-            list of registered images
-        """
-        return _align_ecc_impl(input_source, output_path, downscale_width=self.downscale_width, thread_count=thread_count,
-                               parallel_ecc=self.ecc_parallel, reference_index=self.reference_index)
-    
-    def set_method(self, method: str):
+    def set_method(self, method):
         """
         Switch the registration method
-        
+
         Args:
-            method (str): the new registration method name
+            method (str or sequence): the new registration method, in any of the
+                forms __init__ accepts
         """
-        if method not in self.SUPPORTED_METHODS:
-            raise ValueError(
-                f"Unsupported registration method: {method}. "
-                f"Supported methods: {', '.join(self.SUPPORTED_METHODS)}"
-            )
-        
+        self.stages = resolve_stages(method)
         self.method = method
     
     def get_info(self) -> dict:

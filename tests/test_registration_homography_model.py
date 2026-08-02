@@ -86,12 +86,12 @@ def _matches(H, n=120, noise=0.7, size=(1280, 720), seed=0, outliers=4):
 # ------------------------------------------------- reading the stage back
 
 class _capture_transforms:
-    """Record the transforms and crop a stage finally applies.
+    """Record the transforms and crop a registration call finally applies.
 
-    Every implementation calls _compute_valid_region_from_transforms exactly
-    once, with the re-referenced transform list and just before folding in the
-    crop translation. Lifted from tests/benchmark_registration.py, which reads
-    the stages back the same way.
+    The pipeline calls _compute_valid_region_from_transforms once per stage,
+    with the transforms composed so far and just before folding in the crop
+    translation, so the last call carries the whole map. Lifted from
+    tests/benchmark_registration.py, which reads the stages back the same way.
     """
 
     def __enter__(self):
@@ -115,14 +115,9 @@ class _capture_transforms:
         registration_module._compute_valid_region_from_transforms = self._original
 
     def maps(self):
-        """Every stage composed into one map per frame, crops included."""
-        composed = []
-        for i in range(len(self.stages[0][0])):
-            M = np.eye(3)
-            for H_matrices, T_crop in self.stages:
-                M = T_crop @ H_matrices[i] @ M
-            composed.append(M)
-        return composed
+        """The one map per frame the pipeline applies, crop included."""
+        H_matrices, T_crop = self.stages[-1]
+        return [T_crop @ H for H in H_matrices]
 
 
 def _register(frames, method="homography"):
@@ -259,13 +254,10 @@ class TestGroundTruthScenes:
         scale_only = _residual_px(scale_maps, truth, shape)
 
         with _capture_transforms() as captured:
-            images = ImageRegistration(method="scale", downscale_width=1024,
-                                       reference_index=0).process(
-                                           [f.copy() for f in frames],
-                                           output_path=None, thread_count=2)
-            ImageRegistration(method="homography", downscale_width=1024,
+            ImageRegistration(method="scale+homography", downscale_width=1024,
                               reference_index=0).process(
-                                  images, output_path=None, thread_count=2)
+                                  [f.copy() for f in frames],
+                                  output_path=None, thread_count=2)
         both = _residual_px(captured.maps(), truth, shape)
 
         # Measured: 2.61 against 2.22 px, and 1.60 against 2.57 px - the stage

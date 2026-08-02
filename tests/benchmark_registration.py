@@ -71,12 +71,14 @@ PIPELINES = [
 ]
 
 class capture_transforms:
-    """Record the (transforms, crop) each registration stage finally applies.
+    """Record the (transforms, crop) a registration call finally applies.
 
-    Every implementation calls _compute_valid_region_from_transforms exactly
-    once, with the re-referenced transform list and just before folding in the
-    crop translation - so wrapping it yields both halves of the map that is
-    actually applied, for whichever stages the caller ran.
+    The pipeline calls _compute_valid_region_from_transforms once per stage,
+    with the transforms composed so far and just before folding in the crop
+    translation - so wrapping it yields both halves of the map that is actually
+    applied. Since item 7 the composition happens inside the pipeline, so the
+    *last* call is the whole map: earlier ones are the intermediate canvases the
+    later estimators measured on, and they are already folded into it.
     """
 
     def __enter__(self):
@@ -100,17 +102,11 @@ class capture_transforms:
         registration_module._compute_valid_region_from_transforms = self._original
 
     def total(self):
-        """Compose every stage into one map per frame, crops included."""
+        """The one map per frame the pipeline applies, crop included."""
         if not self.stages:
             raise RuntimeError("no registration stage ran")
-        count = len(self.stages[0][0])
-        composed = []
-        for i in range(count):
-            M = np.eye(3)
-            for H_matrices, T_crop in self.stages:
-                M = T_crop @ H_matrices[i] @ M
-            composed.append(M)
-        return composed
+        H_matrices, T_crop = self.stages[-1]
+        return [T_crop @ H for H in H_matrices]
 
 
 # --------------------------------------------------------------- scene data
@@ -227,13 +223,18 @@ def sharpness(img):
 # -------------------------------------------------------------------- runner
 
 def run_pipeline(frames, stages, downscale_width, reference_index):
-    """Apply the stages in order and return (images, composed maps, seconds)."""
+    """Apply the stages and return (images, composed maps, seconds).
+
+    The stages go in as one pipeline rather than one call each: since item 7
+    that is what composes them into a single warp and a single crop, and it is
+    what the app does.
+    """
     with capture_transforms() as captured:
         images = [f.copy() for f in frames]
         started = time.time()
-        for mode in stages:
+        if stages:
             images = ImageRegistration(
-                method=mode, downscale_width=downscale_width,
+                method=stages, downscale_width=downscale_width,
                 reference_index=reference_index).process(
                     images, output_path=None, thread_count=4)
         elapsed = time.time() - started

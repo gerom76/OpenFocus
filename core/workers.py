@@ -336,7 +336,11 @@ class RenderWorker(QThread):
             release_render_memory()
 
     def _make_registration(self, mode, reference_index=0):
-        """Build an ImageRegistration for one stage, honouring the UI downscale width."""
+        """Build an ImageRegistration, honouring the UI downscale width.
+
+        `mode` is one method name or a sequence of them; a sequence is run as a
+        single composed pipeline rather than one call per stage.
+        """
         if self.reg_downscale_width is not None:
             return ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
                                      ecc_parallel=self.ecc_parallel, reference_index=reference_index)
@@ -345,9 +349,12 @@ class RenderWorker(QThread):
     def _run_registration(self, images):
         """Perform image registration.
 
-        The selected stages run in sequence, each fed the previous stage's output:
-        scale (focus-breathing) first as a coarse magnification correction, then
-        homography and/or ECC to refine the residual translation and rotation.
+        The selected stages are handed over together rather than chained: scale
+        (focus-breathing) as a coarse magnification correction, then homography
+        and/or ECC to refine the residual translation and rotation. Each stage
+        is still measured on the one before it, but they are composed into a
+        single transform per frame, so the stack is resampled and cropped once
+        however many stages are on (docs/REGISTRATION_IMPROVEMENTS.md item 7).
         """
         alignment_start_time = time.time()
 
@@ -360,25 +367,18 @@ class RenderWorker(QThread):
             print(f"Registration: reference frame = {reference_index} "
                   f"(mode={self.reference_mode})", flush=True)
 
-        # Stage 1: scale / focus-breathing correction (similarity transform)
+        stages = []
         if self.need_align_scale:
-            print(f"Registration started: mode=scale, {len(processed)} images", flush=True)
-            processed = self._make_registration("scale", reference_index).process(
-                processed, output_path=None, thread_count=self.thread_count)
+            stages.append("scale")
+        if self.need_align_homography:
+            stages.append("homography")
+        if self.need_align_ecc:
+            stages.append("ecc")
 
-        # Stage 2: homography and/or ECC refinement
-        if self.need_align_homography and self.need_align_ecc:
-            mode = "both"
-        elif self.need_align_homography:
-            mode = "homography"
-        elif self.need_align_ecc:
-            mode = "ecc"
-        else:
-            mode = None
-
-        if mode is not None:
-            print(f"Registration started: mode={mode}, {len(processed)} images", flush=True)
-            processed = self._make_registration(mode, reference_index).process(
+        if stages:
+            print(f"Registration started: mode={'+'.join(stages)}, "
+                  f"{len(processed)} images", flush=True)
+            processed = self._make_registration(stages, reference_index).process(
                 processed, output_path=None, thread_count=self.thread_count)
 
         alignment_time = time.time() - alignment_start_time
@@ -623,46 +623,40 @@ class BatchWorker(QThread):
         self.resolved_auto = {}
 
     def _register_batch_stack(self, images, reg_methods):
-        """Apply the selected registration stages in pipeline order.
+        """Apply the selected registration stages as one composed pipeline.
 
         Scale (focus-breathing) runs first as a coarse magnification correction,
         then homography and/or ECC refine the residual translation and rotation.
-        Returns the original stack unchanged when nothing is selected.
+        The stages are composed into a single transform per frame, so the stack
+        is resampled and cropped once whichever of them are on. Returns the
+        original stack unchanged when nothing is selected.
         """
         if not reg_methods:
             return images.copy()
 
-        from core.registration import ImageRegistration, resolve_reference_index
+        from core.registration import (ImageRegistration, resolve_reference_index,
+                                       resolve_stages)
 
         reference_index = resolve_reference_index(self.reference_mode, len(images))
+        # Filter rather than hand the list straight over: a settings file
+        # written by an older or newer build could name a stage this one does
+        # not have, and a batch of fifty stacks should not abort on it.
+        stages = resolve_stages([m for m in reg_methods
+                                 if m in ("scale", "homography", "ecc", "both")])
+        if not stages:
+            return images.copy()
 
-        def make(mode):
-            if getattr(self, 'reg_downscale_width', None) is not None:
-                return ImageRegistration(method=mode, downscale_width=self.reg_downscale_width,
-                                         ecc_parallel=self.ecc_parallel, reference_index=reference_index)
-            return ImageRegistration(method=mode, ecc_parallel=self.ecc_parallel, reference_index=reference_index)
-
-        processed = images
-
-        # Stage 1: scale / focus-breathing correction
-        if "scale" in reg_methods:
-            processed = make("scale").process(processed, output_path=None, thread_count=self.thread_count)
-
-        # Stage 2: homography and/or ECC refinement
-        align_homography = "homography" in reg_methods
-        align_ecc = "ecc" in reg_methods
-        if align_homography and align_ecc:
-            mode = "both"
-        elif align_homography:
-            mode = "homography"
-        elif align_ecc:
-            mode = "ecc"
+        if getattr(self, 'reg_downscale_width', None) is not None:
+            registration = ImageRegistration(method=stages, downscale_width=self.reg_downscale_width,
+                                             ecc_parallel=self.ecc_parallel,
+                                             reference_index=reference_index)
         else:
-            mode = None
+            registration = ImageRegistration(method=stages, ecc_parallel=self.ecc_parallel,
+                                             reference_index=reference_index)
 
-        if mode:
-            processed = make(mode).process(processed, output_path=None, thread_count=self.thread_count)
-
+        processed = registration.process(images, output_path=None, thread_count=self.thread_count)
+        # A stack too short to register comes back as the very list it went in
+        # as; the caller owns its copy.
         return processed.copy() if processed is images else processed
 
     def run(self):

@@ -43,22 +43,24 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 4 | scale, ECC | Quality | GPU warping is bilinear where CPU warping is Lanczos4: 44% of the high-frequency energy lost, for almost no speed - *fixed in 1.30.5* | High | Low | **100%** |
 | 5 | all | Robustness | `downscale_width` is silently overridden to 1024 for any frame >= 2048 px, i.e. for every real camera file - the exposed setting does nothing - *fixed in 1.30.6* | Medium | Trivial | **100%** |
 | 6 | all | Quality | The reference frame defaults to `first`, though `middle` is better on every pipeline and every scene measured, and keeps more pixels | Medium | Trivial | 0% |
-| 7 | all | Quality | Each stage is its own resample and its own crop, so the three-stage pipeline interpolates three times and throws away a further 10% of the frame | Medium | Medium | 0% |
+| 7 | all | Quality | Each stage is its own resample and its own crop, so the three-stage pipeline interpolates three times and throws away a further 10% of the frame - *fixed in 1.30.7* | Medium | Medium | **100%** |
 | 8 | Homography, scale | Quality | Transforms are accepted on 6 matches with the RANSAC inlier mask discarded and no sanity check, and a bad one corrupts the whole chain after it | Medium | Low | 0% |
 | 9 | ECC | Robustness | Crashes outright on single-channel input, which `scale` and `homography` both handle | Low | Trivial | 0% |
 | 10 | scale, ECC | Performance | The GPU warp helper allocates 21x the frame size, regardless of frame size, with no fallback if that fails - *removed with the warp in 1.30.5* | Low | Low | **100%** |
 | 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
 | 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
 
-**Overall: 6 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
-in 1.30.4, item 4 in 1.30.5 with item 10, and item 5 in 1.30.6. That closes the
-GPU-path defects: there is one warp path now, so registration produces the same
-pixels on every machine and the "device" columns this document used to carry
-have nothing left to compare. It also closes the one item where the code
-ignored the user - `downscale_width` is now honoured at every frame size, which
-is worth up to 1.75x of geometric accuracy on a full-size stack for anyone
-willing to pay the time. What remains is a default worth changing (item 6) and
-the structural one, item 7.
+**Overall: 7 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
+in 1.30.4, item 4 in 1.30.5 with item 10, item 5 in 1.30.6 and item 7 in 1.30.7.
+That closes the GPU-path defects: there is one warp path now, so registration
+produces the same pixels on every machine and the "device" columns this document
+used to carry have nothing left to compare. It also closes the one item where
+the code ignored the user - `downscale_width` is now honoured at every frame
+size, which is worth up to 1.75x of geometric accuracy on a full-size stack for
+anyone willing to pay the time. And with 1.30.7 it closes the last of the four
+resampling defects: the stages compose into one warp and one crop, so pipeline
+length no longer costs the picture anything. What remains of consequence is a
+default worth changing, item 6.
 
 ### The measurement everything else follows from
 
@@ -73,15 +75,22 @@ are the pre-1.30.3 reading, before item 2.
 | **scale** | **2.22** | 1.78x | 2.22 | **2.57** | 2.65x | 2.57 |
 | homography | 2.22 | 1.78x | **5.00** | 2.57 | 2.65x | **7.71** |
 | **ecc** | **1.67** | **2.36x** | 1.67 | 6.40 | 1.06x | 6.40 |
-| both (hom+ecc) | 1.69 | 2.34x | 1.57 | 6.50 | 1.05x | 7.07 |
-| **scale+hom** (app default) | 2.23 | 1.77x | **3.98** | **2.06** | **3.30x** | 3.37 |
-| scale+ecc | 1.69 | 2.34x | 1.69 | 6.50 | 1.05x | 6.49 |
-| scale+hom+ecc | 1.63 | 2.42x | 1.58 | 6.63 | 1.03x | 6.77 |
+| both (hom+ecc) | 1.69 | 2.34x | 1.57 | 6.51 | 1.05x | 7.07 |
+| **scale+hom** (app default) | 2.23 | 1.78x | **3.98** | **2.06** | **3.30x** | 3.37 |
+| scale+ecc | 1.69 | 2.34x | 1.69 | 6.51 | 1.05x | 6.49 |
+| scale+hom+ecc | 1.69 | 2.34x | 1.58 | 6.57 | 1.04x | 6.77 |
 
 Item 3 (1.30.4) left every single-stage row of this table bit-identical, and
 moves only the two-stage `scale+hom`: 2.31 -> 2.23 px and 1.50 -> 2.06 px, since
 the second stage now detects its features on a resampled anchor frame. That is
 the only accuracy this document trades for item 3, and it is discussed there.
+
+Item 7 (1.30.7) leaves every single-stage row bit-identical again, and moves
+only the three-stage row - 1.63 -> 1.69 px and 6.63 -> 6.57 px - for the same
+kind of reason: the last stage now measures on a stack that has been resampled
+once rather than twice, so it sees slightly different pixels. The multi-stage
+rows of this table are now what the app runs, since the stages are handed over
+together rather than chained.
 
 No pipeline is now worse than doing nothing on either scene. The two stages that
 fit a constrained model where the motion is constrained - `scale`, and
@@ -496,7 +505,9 @@ folded in. Only `scale+hom` moves, in both directions (handheld_drift 2.31 ->
 1.95 -> 2.32 px GPU), because it is the one pipeline whose second stage detects
 SIFT features on pixels the first stage resampled, and the anchor's pixels have
 now changed. This is item 7 showing through: composing the stages into a single
-warp would remove the sensitivity along with the double interpolation.
+warp removes the double interpolation, which 1.30.7 did - the sensitivity
+itself stays, because a second stage measuring on a first stage's pixels is
+what a pipeline is.
 
 **Guarded by** `tests/test_registration_reference_resample.py`, which fails in
 both directions. Its sharpness assertion is two-sided on purpose - reverting to
@@ -839,7 +850,7 @@ weighing against a free 30% accuracy gain.
 
 ## 7. Each stage is its own resample and its own crop
 
-**Category: quality. Impact: medium. Effort: medium.**
+**Category: quality. Impact: medium. Effort: medium. Fixed in 1.30.7.**
 
 `ImageRegistration.process` in `both` mode runs homography to completion -
 estimate, warp, crop - and feeds the *pixels* to ECC, which estimates, warps and
@@ -877,8 +888,8 @@ rest at every stage - and item 4 removed the second row, since every machine now
 takes the first. Neither removes the loss itself: the first row is still paid,
 once per stage, by every frame including the anchor, which is why a three-stage
 pipeline gives up 19% of the picture's high-frequency energy where one stage
-gives up 5%. That is this item, and it is the only one of the four resampling
-defects still open.
+gives up 5%. That is this item, and it is the last of the four resampling
+defects.
 
 **Pixels are paid per stage too.** Every crop takes the intersection of the valid
 regions, and the intersections compose:
@@ -899,6 +910,147 @@ rather than on its output pixels, then applying `T_crop · H₂ · H₁` in a si
 The stages already agree on the convention, so the composition is a matrix
 product. This also subsumes half of item 3: with one warp, there is only one
 frame to keep honest.
+
+### Fixed in 1.30.7 - and the intermediate pixels do not go away, they stop being the result
+
+The composition is the matrix product above. What the sketch above skips is that
+a stage does not measure on coordinates, it measures on *pixels*: ECC correlates
+them and SIFT detects on them. So the intermediate frames still get built, by
+the same warp with the same kernel into the same crop the previous stage's
+output used to be, and the change is what happens to them afterwards. They are
+handed to the next estimator and then thrown away, and the *original* frames are
+warped once, through the composed map, into a single crop computed from it.
+Every estimate in the pipeline is therefore exactly what it was before, and the
+interpolation moves off the picture and onto a measurement.
+
+The warp count does not change: n stages still means n warps per frame, n-1 of
+them onto intermediates. The bookkeeping is a conjugation, because each
+intermediate canvas is offset from the frame's own coordinates by that stage's
+crop. `composed[i]` maps original frame i onto the reference frame's
+coordinates and `canvas` maps those onto the pixels the current stage is looking
+at, so a stage measuring `S[i]` contributes `canvas⁻¹ · S[i] · canvas` in front
+of what is already composed. With one stage `canvas` is the identity and the
+whole thing is a no-op, which is what keeps every single-stage result
+bit-identical to 1.30.6.
+
+Stages are asked for together rather than one call at a time -
+`ImageRegistration(method='scale+homography')`, or a list - which is how the
+render worker, the batch worker and the benchmark now run them. Chaining
+separate calls still works and still costs a resample and a crop per call,
+because two calls genuinely are two registrations.
+
+**What it is worth, per frame.** Mean Laplacian variance over the aligned stack,
+against the unregistered stack's own, so the column is "how much of the
+picture's high-frequency energy survived registration":
+
+| scene | pipeline | before | after | unregistered |
+|---|---|---|---|---|
+| handheld_drift | scale | 47.0 (82%) | 47.0 (82%) | 57.3 |
+| handheld_drift | scale+hom | 39.1 (68%) | **47.0 (82%)** | 57.3 |
+| handheld_drift | scale+hom+ecc | 34.5 (60%) | **45.9 (80%)** | 57.3 |
+| flower01_handheld | scale | 23.6 (79%) | 23.6 (79%) | 29.7 |
+| flower01_handheld | scale+hom | 20.1 (67%) | **23.8 (80%)** | 29.7 |
+| flower01_handheld | scale+hom+ecc | 17.7 (59%) | **23.5 (79%)** | 29.7 |
+
+A three-stage pipeline gave up 40% of the detail and now gives up 20% - which is
+what one stage gives up, on both scenes, which is the whole claim. The
+single-stage rows are unchanged to the last digit, as they have to be.
+
+**On the fused picture** (Pyramid, against each scene's all-in-focus ground
+truth). "sharpness" is the Laplacian variance of the fused result:
+
+| scene | pipeline | sharpness before | after | PSNR before | after |
+|---|---|---|---|---|---|
+| handheld_drift | both (hom+ecc) | 183.6 | **194.2** (+6%) | 29.74 | **30.54** |
+| handheld_drift | **scale+hom** (default) | 185.8 | **205.7** (+11%) | 29.52 | **30.25** |
+| handheld_drift | scale+ecc | 183.6 | **194.2** (+6%) | 29.74 | **30.54** |
+| handheld_drift | scale+hom+ecc | 172.6 | **193.8** (+12%) | 30.03 | **30.52** |
+| flower01_handheld | both (hom+ecc) | 39.8 | **41.7** (+5%) | 27.97 | 27.95 |
+| flower01_handheld | **scale+hom** (default) | 39.8 | **42.8** (+8%) | 28.98 | 28.92 |
+| flower01_handheld | scale+ecc | 39.8 | **41.7** (+5%) | 27.97 | 27.95 |
+| flower01_handheld | scale+hom+ecc | 38.1 | **41.7** (+9%) | 27.84 | **27.95** |
+
+This is the one item where the sharpness and the PSNR move the same way, or near
+enough - four rows gain 0.5 to 0.8 dB and the other four are level to within
+0.06 dB. Item 4 had to argue against PSNR because a narrower kernel suppresses
+the noise and the sub-pixel residual the metric is dominated by; here there is
+no kernel change to be flattered by, only one interpolation instead of three, so
+the mean-squared-error score has nothing to gain from the loss.
+
+Against the unregistered stack's own 214.1 and 42.6, the three-stage pipeline now
+gives up 9% and 2% of the fused picture's high-frequency energy where it used to
+give up 19% and 11%. `scale+hom` on flower01_handheld comes out at 42.8 against
+the unregistered 42.6 - registration is no longer measurably costing that scene
+any detail at all.
+
+**The frame comes back too.** Kept share of the original frame, which is the
+second half of the item:
+
+| scene | pipeline | before | after | one stage |
+|---|---|---|---|---|
+| handheld_drift | both (hom+ecc) | 84.7% | **88.8%** | 88.8% |
+| handheld_drift | **scale+hom** (default) | 84.3% | **88.2%** | 87.3% |
+| handheld_drift | scale+hom+ecc | 81.2% | **89.0%** | 87.3-88.8% |
+| flower01_handheld | both (hom+ecc) | 88.6% | **91.8%** | 91.8% |
+| flower01_handheld | **scale+hom** (default) | 90.0% | **91.3%** | 93.2% |
+| flower01_handheld | scale+hom+ecc | 86.4% | **91.8%** | 91.8-93.2% |
+
+Each pipeline now crops what its own composed transform requires and nothing
+more, so the three-stage figure sits with the single-stage ones instead of eight
+points below them. (The pre-1.30.3 readings in the table this section opened
+with - 76.1% and 83.8% - are lower again, because the unconstrained homography
+was bending the frame; item 2 recovered that part.)
+
+**The selection bias stops compounding with pipeline length.** Item 3 removed
+the anchor's free ride but noted that each additional stage still resampled
+everything again; the share of the picture the focus measure takes from the
+anchor frame therefore still crept up with pipeline length. It no longer does -
+every pipeline now lands on the single-stage figure:
+
+| scene | pipeline | before | after | truth |
+|---|---|---|---|---|
+| handheld_drift | scale / ecc (one stage) | 4.3% | 4.3% | 2.9% |
+| handheld_drift | **scale+hom** (default) | 4.7% | **4.3%** | 2.9% |
+| handheld_drift | scale+hom+ecc | 5.1% | **4.3%** | 2.9% |
+| flower01_handheld | scale (one stage) | 3.0% | 3.0% | 0.0% |
+| flower01_handheld | **scale+hom** (default) | 3.3% | **2.9%** | 0.0% |
+| flower01_handheld | scale+hom+ecc | 4.5% | **3.0%** | 0.0% |
+
+**What it costs in time: nothing.** Both ways of running the pipeline measured
+in one process, best of two, this machine:
+
+| stack | pipeline | chained (before) | composed (after) |
+|---|---|---|---|
+| flower01_handheld, 14x 1280x715 | scale+hom | 0.76s | 0.74s |
+| flower01_handheld | hom+ecc | 0.83s | 0.81s |
+| flower01_handheld | scale+hom+ecc | 1.21s | 1.20s |
+| flower01_subject_hires, 14x 2560x1430 | scale+hom | 1.52s | 1.47s |
+| flower01_subject_hires | hom+ecc | 1.72s | 1.70s |
+| flower01_subject_hires | scale+hom+ecc | 2.54s | **2.44s** |
+
+The same number of warps happen either way; the composed pipeline is marginally
+ahead because its intermediates are the only thing that gets warped twice, and
+the final warp reads the original frame rather than a chain of crops.
+
+**Geometric accuracy is unchanged where nothing changed for it to depend on.**
+Every single-stage row is bit-identical and so are `both`, `scale+hom` and
+`scale+ecc` on handheld_drift. The three-stage row moves - 1.63 -> 1.69 px and
+6.63 -> 6.57 px - and `both`/`scale+ecc` on flower01_handheld move by 0.01 px,
+for the honest reason that the last stage in those pipelines now measures on a
+stack that has been resampled once rather than twice. That is a fraction of the
+spread between reference-frame choices (item 6) and it is bought with 20% of the
+picture's high-frequency energy.
+
+**Guarded by** `tests/test_registration_pipeline_composition.py`, which fails in
+both directions. Chaining the stages inside the pipeline again fails 12 of its
+32 tests - the sharpness, the kept share and the alignment. Dropping the
+intermediate canvas instead, so that a later stage measures on the raw frames,
+fails 9, among them the one that asserts the second stage's input is the first
+stage's output *bit for bit*: that is what makes "the estimates are unchanged"
+a checked claim rather than an assertion in a comment. It also holds that a
+single stage stays byte-identical to what it was, that every stage runs exactly
+once, and that the anchor's composed map is the identity, which is the property
+the conjugation exists to preserve.
 
 ---
 
@@ -1061,6 +1213,15 @@ Low impact because every in-app caller passes a preloaded list
 (`core/workers.py:96`, `:366`, `:381`, `:649`); only `main()` and library users
 reach these paths.
 
+**Half of the copy-pasting went with item 7 (1.30.7), the defect did not.** The
+three loaders are one `_load_stack`, because the pipeline loads once in front of
+the stages rather than each stage loading for itself. It is still handed the
+extension set of whichever stage the pipeline starts with, so a `.tiff` folder
+still loads under `scale` and still loses every frame under `ecc` alone - the
+divergence is now one dict entry instead of three copies, which makes it visible
+rather than fixed. The sort with no fallback survives only in the dead
+`_stabilisation_impl` (item 11).
+
 ---
 
 ## What already works
@@ -1119,11 +1280,17 @@ the same way everywhere, so the advice below is the advice on every machine:
 - **Nothing needs doing about the GPU** as of 1.30.5: there is no GPU warp to
   avoid, and `ecc` or `scale`+`ecc` is the best-looking pipeline as well as the
   best-aligned one, wherever it runs.
+- **Pipeline length is no longer expensive** as of 1.30.7 (item 7). The stages
+  compose into one warp and one crop, so a three-stage pipeline gives up the
+  same 20% of the picture's high-frequency energy as a single stage and keeps
+  the same share of the frame. Turning a stage on now costs its time and
+  whatever it does to the alignment, and nothing else.
 
-What is left to watch is pipeline length. Every stage is still its own resample
-(item 7), so `scale`+`hom`+`ecc` gives up 19% of the picture's high-frequency
-energy where one stage gives up 5%, and crops a fifth of the frame to arrive at
-an alignment barely better than `ecc` alone.
+What is left to watch is whether a stage earns its place at all. Length is free
+now, but `scale`+`hom`+`ecc` still arrives at an alignment barely better than
+`ecc` alone on handheld_drift and a worse one on flower01_handheld, so the
+advice above is unchanged: pick the stage that suits the stack rather than
+running them all.
 
 ---
 
@@ -1132,7 +1299,11 @@ an alignment barely better than `ecc` alone.
 Everything above comes from `tests/benchmark_registration.py`, which runs the
 real `ImageRegistration` and reads its transforms back out by wrapping the crop
 helper every stage calls - so the numbers describe the shipping code rather than
-a reimplementation of it.
+a reimplementation of it. Since item 7 the pipeline composes its stages
+internally and calls that helper once per stage with the transforms composed so
+far, so it is the *last* call that carries the map actually applied; the earlier
+ones are the intermediate canvases the later estimators measured on, already
+folded into it.
 
 ```bash
 # geometric error of every pipeline against per_frame_affine ground truth
@@ -1179,7 +1350,8 @@ python -m pytest tests/test_registration_scale.py tests/test_registration_refere
                 tests/test_registration_warp_kernel.py \
                 tests/test_registration_homography_model.py \
                 tests/test_registration_reference_resample.py \
-                tests/test_registration_downscale_width.py -v
+                tests/test_registration_downscale_width.py \
+                tests/test_registration_pipeline_composition.py -v
 ```
 
 The first two would not catch item 4 - `test_registration_scale.py` asserts
@@ -1221,3 +1393,15 @@ Reinstating the override fails 20 of its 39 tests - the recorded widths, the two
 settings that must now give two different results, and the accuracy assertion
 that full-resolution detection beats detection at 1024 on a large frame. It
 needs no samples and skips nowhere.
+
+The seventh arrived with item 7's fix and is the other guard that fails in both
+directions by construction, because both directions are cheap mistakes to make.
+Chaining the stages inside the pipeline again fails 12 of its 32 tests: the
+composed stack has to keep the detail and the frame area a chained one loses,
+and to keep as much of both as a *single* stage does, which is the claim. Going
+the other way and dropping the intermediate canvas - measuring every stage on
+the raw frames, which would be faster and would look like the same idea - fails
+9, among them the assertion that the second stage's input is the first stage's
+output bit for bit. It also holds that a single stage is byte-identical to what
+it was, that each stage runs exactly once, and that the anchor frame's composed
+map is the identity. It needs no samples and skips nowhere.
