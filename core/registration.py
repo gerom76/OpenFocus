@@ -145,6 +145,47 @@ def _detection_scale(width, downscale_width):
     return downscale_width / float(width) if width > downscale_width else 1.0
 
 
+# ========== Channel handling ==========
+
+# (docs/REGISTRATION_IMPROVEMENTS.md item 9)
+#
+# The two feature stages hand their downscaled frame straight to SIFT, which
+# takes one channel or three and does its own conversion, so a grayscale stack
+# registers under 'scale' and 'homography' without anything special. ECC does
+# not: findTransformECC is single-channel only, so the stage converted
+# unconditionally with COLOR_BGR2GRAY and a single-channel stack died in the
+# preprocessing step with "Bad number of channels" before a single pair had been
+# measured. The conversion now looks at what it was handed.
+#
+# Reachable from the CLI entry point and from library use rather than from the
+# GUI, whose loader normalises everything to BGR.
+
+def _to_gray(img):
+    """Single-channel view of a frame, whatever channel count it arrived with.
+
+    A frame that is already single-channel is returned unchanged (or with a
+    trailing length-1 axis dropped); BGR and BGRA are converted.
+
+    Raises:
+        ValueError: on a channel count no camera or loader produces, rather
+            than letting cv2 raise the same thing from three frames deeper.
+    """
+    if img.ndim == 2:
+        return img
+    if img.ndim == 3:
+        channels = img.shape[2]
+        if channels == 1:
+            return img[:, :, 0]
+        if channels == 3:
+            return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if channels == 4:
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+    raise ValueError(
+        f"Cannot convert an image of shape {img.shape} to grayscale; "
+        f"expected 1, 3 or 4 channels."
+    )
+
+
 # ========== Stack loading ==========
 
 # The stages have never agreed on which extensions they accept - ECC's list is
@@ -955,7 +996,9 @@ def _estimate_ecc(images, downscale_width, thread_count, parallel_ecc=True):
         else:
             small_img = img # just reference, no copy needed
 
-        gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
+        # Single-channel input is not converted, it is used - findTransformECC
+        # wants one channel and a grayscale stack already has it (item 9).
+        gray = _to_gray(small_img)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
         # findTransformECC takes 8-bit or float32 only. 8-bit is used here for
         # the same reason as SIFT above: this measures a transform that is then

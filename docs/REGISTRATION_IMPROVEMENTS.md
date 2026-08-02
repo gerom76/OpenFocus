@@ -45,14 +45,14 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 6 | all | Quality | The reference frame defaults to `first`, though `middle` is better on every pipeline and every scene measured, and keeps more pixels | Medium | Trivial | 0% |
 | 7 | all | Quality | Each stage is its own resample and its own crop, so the three-stage pipeline interpolates three times and throws away a further 10% of the frame - *fixed in 1.30.7* | Medium | Medium | **100%** |
 | 8 | Homography, scale | Quality | Transforms are accepted on 6 matches with the RANSAC inlier mask discarded and no sanity check, and a bad one corrupts the whole chain after it - *fixed in 1.30.8* | Medium | Low | **100%** |
-| 9 | ECC | Robustness | Crashes outright on single-channel input, which `scale` and `homography` both handle | Low | Trivial | 0% |
+| 9 | ECC | Robustness | Crashes outright on single-channel input, which `scale` and `homography` both handle - *fixed in 1.30.9* | Low | Trivial | **100%** |
 | 10 | scale, ECC | Performance | The GPU warp helper allocates 21x the frame size, regardless of frame size, with no fallback if that fails - *removed with the warp in 1.30.5* | Low | Low | **100%** |
 | 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
 | 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
 
-**Overall: 8 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
-in 1.30.4, item 4 in 1.30.5 with item 10, item 5 in 1.30.6, item 7 in 1.30.7 and
-item 8 in 1.30.8.
+**Overall: 9 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
+in 1.30.4, item 4 in 1.30.5 with item 10, item 5 in 1.30.6, item 7 in 1.30.7,
+item 8 in 1.30.8 and item 9 in 1.30.9.
 That closes the GPU-path defects: there is one warp path now, so registration
 produces the same pixels on every machine and the "device" columns this document
 used to carry have nothing left to compare. It also closes the one item where
@@ -62,7 +62,10 @@ anyone willing to pay the time. With 1.30.7 it closes the last of the four
 resampling defects: the stages compose into one warp and one crop, so pipeline
 length no longer costs the picture anything. And with 1.30.8 a pair is chained
 on RANSAC's verdict rather than on a match count, so one bad pair is no longer
-a permanent offset on every frame after it. What remains of consequence is a
+a permanent offset on every frame after it. And 1.30.9 makes the three stages
+agree about their input: all three now take a grayscale stack, where ECC used to
+raise before it had measured anything - they still disagree about which file
+extensions they accept, which is item 12. What remains of consequence is a
 default worth changing, item 6.
 
 ### The measurement everything else follows from
@@ -1204,7 +1207,7 @@ what a stack looks like when a gate has quietly stopped registering it.
 
 ## 9. ECC crashes on single-channel input
 
-**Category: robustness. Impact: low. Effort: trivial.**
+**Category: robustness. Impact: low. Effort: trivial. Fixed in 1.30.9.**
 
 `_align_ecc_impl`'s preprocessing calls `cv2.cvtColor(small_img,
 cv2.COLOR_BGR2GRAY)` unconditionally (`core/registration.py:763`), and its GPU
@@ -1220,10 +1223,76 @@ channels. On a grayscale stack:
 The second half went with item 1's fix, which routed the ECC stage through the
 shared GPU helper rather than its own channel loop, and the helper itself went
 with item 4 - `cv2.warpPerspective` has never cared how many channels it is
-handed. The first half is still open: a two-line guard on the colour conversion.
+handed. The first half stayed open until 1.30.9, below.
 
 Low impact because the app's own loader normalises to BGR, so this is reachable
 from the CLI entry point and from library use rather than from the GUI.
+
+### Fixed in 1.30.9 - and the guard belongs in one place, not in the one stage
+
+The conversion now looks at what it was handed, in a `_to_gray` helper next to
+the other things the stages share: a frame that is already single-channel is
+used as it is, a trailing length-1 axis is dropped, BGR and BGRA are converted,
+and any other channel count raises a `ValueError` naming the shape rather than
+letting cv2 raise "Bad number of channels" from three frames deeper. It is a
+helper rather than the two-line guard the item asked for because ECC is not
+where a grayscale stack should be special-cased - the same conversion is what
+any later stage or preview path would need, and item 12 is the standing lesson
+about what three private copies of a shared step turn into.
+
+Nothing else in the ECC path had to change. `cv2.warpPerspective` has never
+cared how many channels it is given, which is why the two feature stages have
+always worked on grayscale, and the channel loop that was the other half of this
+item went with items 1 and 4.
+
+**The table this item opens with, re-run** - every stage, both real scenes, as
+BGR and as the same frames converted to grayscale, geometric error against
+`scene.json`'s ground truth, `--downscale-width 1024`:
+
+| scene | pipeline | BGR | grayscale | grayscale before |
+|---|---|---|---|---|
+| handheld_drift | scale | 2.16 px | 2.16 px | 2.16 px |
+| handheld_drift | homography | 2.16 px | 2.16 px | 2.16 px |
+| handheld_drift | **ecc** | 1.67 px | **1.67 px** | **`cv2.error`** |
+| handheld_drift | **both** (hom+ecc) | 1.70 px | **1.70 px** | **`cv2.error`** |
+| handheld_drift | scale+hom | 2.23 px | 2.36 px | 2.36 px |
+| handheld_drift | **scale+ecc** | 1.70 px | **1.70 px** | **`cv2.error`** |
+| handheld_drift | **scale+hom+ecc** | 1.71 px | **1.72 px** | **`cv2.error`** |
+| flower01_handheld | scale | 2.57 px | 2.59 px | 2.59 px |
+| flower01_handheld | homography | 2.57 px | 2.59 px | 2.59 px |
+| flower01_handheld | **ecc** | 6.40 px | **6.41 px** | **`cv2.error`** |
+| flower01_handheld | **both** (hom+ecc) | 6.51 px | **6.46 px** | **`cv2.error`** |
+| flower01_handheld | scale+hom | 2.06 px | 1.61 px | 1.61 px |
+| flower01_handheld | **scale+ecc** | 6.51 px | **6.46 px** | **`cv2.error`** |
+| flower01_handheld | **scale+hom+ecc** | 6.57 px | **6.50 px** | **`cv2.error`** |
+
+Four of the seven pipelines raised on grayscale input and now register it, to
+within 0.06 px of what the same scene gives in colour. **The BGR column
+reproduces the document's own accuracy table to the last digit** on both scenes,
+which is the claim that matters for everyone else: the colour path takes exactly
+the `COLOR_BGR2GRAY` call it always took.
+
+The grayscale column is not expected to match the BGR one exactly, and it does
+not - a luma frame is not the frame SIFT and ECC were reading, so they find
+slightly different keypoints and correlate slightly different texture. The
+differences are 0.00-0.02 px on every single-stage row and up to 0.45 px on
+`scale+hom`, in both directions, which is the same sensitivity item 3 records
+for that pipeline: it is the one whose second stage detects features on pixels
+the first stage produced. On synthetic input where the two are genuinely the
+same picture - one channel against three identical copies of it - the aligned
+frames come out bit-identical, which is what `TestGrayscaleMatchesColour`
+asserts.
+
+**Guarded by** `tests/test_registration_grayscale.py`, which fails in both
+directions. Reinstating the unconditional `cv2.cvtColor` fails 13 of its 21
+tests: every ECC-bearing pipeline on a single-channel stack, both as a crash and
+as an alignment that has to actually remove the drift, the `(h, w, 1)` case, the
+bit-identity against the colour twin, and the four unit tests that hold the
+helper to what it returns for each channel count. The other direction is the two
+that pin BGR and BGRA to `COLOR_BGR2GRAY` exactly, which fail if the conversion
+is ever changed to some other luma, and the depth assertion, which fails if the
+conversion is where a 16-bit stack gets narrowed - that happens later, at
+`to_analysis8`, and deliberately.
 
 ---
 
