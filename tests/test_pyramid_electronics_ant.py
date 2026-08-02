@@ -729,33 +729,65 @@ def test_the_shipped_render_reproduces(key):
         f"has moved since it was rendered")
 
 
-def test_a_registered_stack_with_a_black_border_stays_finite(stack):
+def test_pooled_band_energy_is_never_negative(monkeypatch):
     """
-    Chained registration leaves an irregular border that is exactly zero in
-    every frame, and the pooled band energy there must not go negative.
+    Pooled band energy must not reach _mix_parent negative, whatever the box
+    filter hands back.
 
     Found by reproducing the shipped render, which uses coherence 0.75. Pooling
     is a box filter, which slides a running column sum and subtracts the column
-    leaving the window, so over an exactly-zero region the subtraction cancels
-    to float32 residue of either sign - around -1e-19. Harmless until the
+    leaving the window, so over an exactly-zero region the subtraction can
+    cancel to float32 residue of either sign - around -1e-19. Harmless until the
     geometric mix in _mix_parent raises it to a fractional power, which returns
     NaN, which survives to an undefined cast into the output. Any coherence
     above 0 reaches it, which is every preset above "Off".
 
-    A rendered fixture will not show this: mask a clean rectangle to black and
-    the window either covers zeros exactly or does not, and nothing cancels. It
-    took a real stack put through real registration, which is the argument for
-    having a capture in the test set at all.
+    This was originally driven through the real pipeline, by a stack registered
+    with "both" that came back with an irregular all-zero border. That border
+    was itself a defect - the GPU ECC warp applied the inverse of the transform
+    it had measured, pushing content off a canvas cropped for the forward one
+    (docs/REGISTRATION_IMPROVEMENTS.md item 1). With the warp fixed, registration
+    crops to the region its own transforms make valid and leaves no such border,
+    on either device; and masking one in by hand does not reproduce the residue,
+    because the cancellation depended on the pixels the bad warp produced.
+
+    So the trigger is gone and the guard is not: any future pooling that returns
+    a negative would still reach the fractional power. What is checked here is
+    therefore the invariant _band_energy exists to enforce, with the filter made
+    to return the residue that the real one once did.
+    """
+    from fusion_methods.pyramid import _band_energy
+
+    real_box_filter = cv2.boxFilter
+
+    def leaky_box_filter(src, ddepth, ksize, **kwargs):
+        pooled = real_box_filter(src, ddepth, ksize, **kwargs)
+        # What the running column sum left over the zero border, to scale.
+        pooled[0, :4] = -1e-19
+        return pooled
+
+    monkeypatch.setattr(cv2, "boxFilter", leaky_box_filter)
+
+    detail = np.zeros((64, 64, 3), dtype=np.float32)
+    detail[16:48, 16:48] = 12.5
+    pooled = _band_energy(detail, pyramid_module.ENERGY_WINDOW)
+
+    assert pooled.min() >= 0.0, (
+        f"pooled energy came back as low as {pooled.min():.3e}; a fractional "
+        f"power of that is NaN, and the NaN reaches the output cast")
+    # The clamp must not cost the signal it is protecting.
+    assert pooled.max() > 0.0
+
+
+def test_a_registered_stack_fuses_finite(stack):
+    """
+    The end the guard above protects: a real stack, really registered, fused at
+    the coherence the shipped render used, raises nothing and stays in envelope.
     """
     from core.registration import ImageRegistration
 
     aligned = ImageRegistration(method="both", downscale_width=1024,
                                 reference_index=0).process(list(stack))
-    dead = int((np.stack(aligned).max(axis=0).max(axis=-1) == 0).sum())
-    assert dead > 1000, (
-        f"only {dead} pixels are black in every registered frame, so this no "
-        f"longer builds the border the test is about - find another way to "
-        f"produce one before trusting the assertion below")
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

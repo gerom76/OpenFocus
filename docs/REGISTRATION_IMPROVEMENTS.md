@@ -1,0 +1,764 @@
+# Registration algorithms: what could be improved
+
+An audit of the three alignment stages - `scale`, `homography` and `ecc` - in
+the same form as [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) does for
+fusion, and to the same standard: every claim here is measured, and the
+measurement is given so it can be repeated or disputed.
+
+Registration is measured differently from fusion, and better. The fusion audit
+compares a fused picture against an all-in-focus reference and reads the
+difference in dB. Registration has **exact geometric ground truth**: the two
+handheld sample scenes record in `scene.json` the 2x3 affine that was applied to
+every frame, so the error of an estimated alignment is a number of pixels rather
+than an inference from the picture. A point `p` of the scene lands at `A_i(p)`
+in frame i; registration estimates `H_i` mapping frame i onto the reference
+canvas, so the point ends up at `H_i(A_i(p))`. Perfect registration makes
+`H_i . A_i` the same map for every frame, so
+
+    residual_i = RMS over p of | H_i(A_i(p)) - H_ref(A_ref(p)) |
+
+is the misregistration in output pixels, independent of cropping. The `H_i` are
+read back out of the running code rather than reimplemented - see
+[Reproducing these measurements](#reproducing-these-measurements).
+
+Measured on OpenFocus 1.30.1, one machine: Python 3.14, OpenCV 5.0, CuPy 14.1.1,
+RTX 4080. Read absolute timings as relative; the pixel errors and the dB are
+hardware-independent except where a row says GPU.
+
+Ranked by expected value: **impact** is how much it changes a real render,
+**effort** is rough implementation cost.
+
+---
+
+## Summary
+
+| # | Stage | Category | Issue | Impact | Effort | Fixed |
+|---|-------|----------|-------|--------|--------|-------|
+| 1 | ECC | Correctness | The GPU warp applies the inverse of the transform ECC measured, so on any CUDA machine ECC roughly *doubles* misalignment - 11.4 dB off the fused result | Critical | Trivial | **100%** |
+| 2 | Homography | Quality | The 8-DOF fit is less accurate than not registering at all on both handheld samples; the two extra degrees of freedom fit nothing but noise | High | Medium | 0% |
+| 3 | all | Quality | The reference frame is the only frame never resampled, so the focus measure sources 4-21x more of the picture from it than it should | High | Low | 0% |
+| 4 | scale, ECC | Quality | GPU warping is bilinear where CPU warping is Lanczos4: 44% of the high-frequency energy lost, for almost no speed | High | Low | 0% |
+| 5 | all | Robustness | `downscale_width` is silently overridden to 1024 for any frame >= 2048 px, i.e. for every real camera file - the exposed setting does nothing | Medium | Trivial | 0% |
+| 6 | all | Quality | The reference frame defaults to `first`, though `middle` is better on every pipeline and every scene measured, and keeps more pixels | Medium | Trivial | 0% |
+| 7 | all | Quality | Each stage is its own resample and its own crop, so the three-stage pipeline interpolates three times and throws away a further 10% of the frame | Medium | Medium | 0% |
+| 8 | Homography, scale | Quality | Transforms are accepted on 6 matches with the RANSAC inlier mask discarded and no sanity check, and a bad one corrupts the whole chain after it | Medium | Low | 0% |
+| 9 | ECC | Robustness | Crashes outright on single-channel input, which `scale` and `homography` both handle | Low | Trivial | 0% |
+| 10 | scale, ECC | Performance | The GPU warp helper allocates 21x the frame size, regardless of frame size, with no fallback if that fails | Low | Low | 0% |
+| 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
+| 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
+
+**Overall: 1 of 12 done.** Item 1 is fixed in 1.30.2. Items 3 and 4 are the
+other two GPU-path defects and both are cheap; between them they account for
+most of the quality gap this document still measures.
+
+### The measurement everything else follows from
+
+Geometric error of each pipeline against ground truth, reference frame `first`,
+`--downscale-width 1024`. "gain" is how many times better than not registering
+at all; below 1.00x means the stage made the stack *worse*.
+
+| pipeline | handheld_drift mean px | gain | flower01_handheld mean px | gain |
+|---|---|---|---|---|
+| *unregistered* | 3.95 | - | 6.81 | - |
+| **scale** | **2.22** | 1.78x | **2.57** | **2.65x** |
+| homography | 5.00 | **0.79x** | 7.71 | **0.88x** |
+| ecc | 1.67 | 2.36x | 6.40 | 1.06x |
+| both (hom+ecc) | 1.57 | 2.52x | 7.07 | **0.96x** |
+| **scale+hom** (app default) | 3.98 | **0.99x** | 3.37 | 2.02x |
+| scale+ecc | 1.69 | 2.34x | 6.49 | 1.05x |
+| scale+hom+ecc | 1.58 | 2.50x | 6.77 | 1.00x |
+
+The single most reliable stage is `scale`, the only one that fits a constrained
+model. The stage that is on by default and that the UI presents first,
+`homography`, is the only one that is *worse than doing nothing* on both scenes.
+
+---
+
+## 1. ECC's GPU warp applies the inverse of the transform it measured
+
+**Category: correctness. Impact: critical. Effort: trivial. Fixed in 1.30.2.**
+
+`cv2.warpPerspective(img, M, dsize)` computes `dst(x, y) = src(M⁻¹ · (x, y))` -
+it takes the *forward* source-to-destination map and inverts it internally.
+`map_coordinates` has no such convention: it needs the destination-to-source map
+handed to it explicitly.
+
+The `scale` stage knows this. `_warp_perspective_gpu` inverts first
+(`core/registration.py:122`), and its docstring says why:
+
+```python
+M_inv = np.linalg.inv(np.asarray(M, dtype=np.float64))
+...
+src = cp.asarray(M_inv) @ coords
+```
+
+The ECC stage has its own copy of the same code, inlined, and it does not
+(`core/registration.py:936`):
+
+```python
+H_gpu = cp.asarray(H_final)
+src_coords_homo = cp.matmul(H_gpu, coords)
+```
+
+The comment above it - "H_final is already H_inv, i.e. the mapping from
+destination to source" - is the mistake in words. `H_matrices[i]` is
+`inv(H_global)`, which maps frame i onto the frame-0 canvas: that is the
+*forward* map, which is exactly why the CPU branch four lines below hands it
+straight to `cv2.warpPerspective` with no `WARP_INVERSE_MAP` flag. Both branches
+cannot be right, and the GPU one is not.
+
+So every frame is warped by the inverse of its correction. Instead of removing
+the measured displacement, ECC applies it a second time in the opposite
+direction. On a stack drifting 2.5 px per frame:
+
+| frame | true offset | after ECC, CPU | after ECC, GPU |
+|---|---|---|---|
+| 1 | 3.08 px | 0.007 px | 6.24 px |
+| 2 | 6.16 px | 0.004 px | 12.17 px |
+| 3 | 9.24 px | 0.008 px | 18.64 px |
+| 4 | 12.32 px | 0.020 px | 24.57 px |
+| 5 | 15.40 px | 0.017 px | 30.83 px |
+
+The CPU path is excellent - ECC is a sub-pixel method and it lands within
+0.02 px. The GPU path doubles the error it was asked to remove.
+
+End to end, on the fused picture (Pyramid, against each scene's own all-in-focus
+ground truth):
+
+| scene | pipeline | CPU | GPU | cost |
+|---|---|---|---|---|
+| handheld_drift | ecc | 30.75 dB | 19.32 dB | **-11.43 dB** |
+| handheld_drift | both (hom+ecc) | 30.53 dB | 20.33 dB | **-10.20 dB** |
+| handheld_drift | scale+hom+ecc | 30.67 dB | 20.25 dB | **-10.42 dB** |
+| flower01_handheld | ecc | 27.86 dB | 18.13 dB | **-9.73 dB** |
+| flower01_handheld | scale+ecc | 27.85 dB | 23.81 dB | -4.04 dB |
+
+For scale, an 11 dB loss is roughly four times the total spread between the best
+and worst fusion method on a well-aligned stack. It also explains a second
+symptom: on 16-bit input the GPU ECC path returns 40,269 pixels at zero where
+the CPU path returns none - content pushed off the canvas by the doubled
+displacement, appearing as a black border.
+
+`homography` is unaffected because it has no GPU branch at all, which is why its
+GPU and CPU rows are bit-identical throughout this document.
+
+Worth noting where this lands in the app: `ROIAlignWorker` (`core/workers.py:96`)
+hardcodes `method="ecc"`, so the ROI preview alignment is hit by this too.
+
+### The fix
+
+The inlined block was deleted and replaced by a call to `_warp_perspective_gpu`,
+which already existed, already inverted, and already handled single-channel
+input; the duplicated CuPy probe became the existing `_init_gpu_warp`. That
+removed ~75 lines and left one GPU warp in the file rather than two that
+disagreed. Re-measuring, every ECC pipeline now agrees with its own CPU path:
+
+| pipeline | geometric error, GPU | CPU | was, GPU |
+|---|---|---|---|
+| ecc | 1.67 px | 1.67 px | 3.34 px |
+| both (hom+ecc) | 1.57 px | 1.57 px | ~3.1 px |
+| scale+ecc | 1.67 px | 1.69 px | ~3.3 px |
+
+and on the fused picture the 11 dB is back:
+
+| scene | pipeline | GPU before | GPU after | CPU |
+|---|---|---|---|---|
+| handheld_drift | ecc | 19.32 dB | **30.93 dB** | 30.75 dB |
+| handheld_drift | both (hom+ecc) | 20.33 dB | **30.72 dB** | 30.53 dB |
+| handheld_drift | scale+hom+ecc | 20.25 dB | **30.61 dB** | 30.67 dB |
+
+The 16-bit black border went with it: the border pixels the GPU path used to
+leave are now zero on both devices.
+
+`tests/test_registration_gpu_warp.py` is the regression guard the audit asked
+for - it runs a stage with the CuPy path forced on and off and asserts the two
+agree to within a fraction of a pixel, and separately asserts that registering a
+stack with known drift *reduces* that drift rather than doubling it, which is
+what separates this fix from its own reintroduction. Reinstating the sign error
+moves frame 1 from 3.50 px of drift to 6.98 px and fails both.
+
+The GPU and CPU rows for `scale+hom` still differ slightly (5.07 px against
+3.98 px on handheld_drift). That is item 4, not this one: bilinear warping
+changes the pixels the *next* stage detects features on, so the two devices
+estimate marginally different transforms. It is the only GPU/CPU divergence
+left.
+
+One casualty worth recording. `test_a_registered_stack_with_a_black_border_stays_finite`
+in `tests/test_pyramid_electronics_ant.py` built its fixture - a region exactly
+zero in every frame - by running `both` registration on a real capture, which
+only ever produced that border *because of this defect*, and only on CUDA. With
+the warp fixed there is no border on either device, and masking one in by hand
+does not reproduce the float32 residue, because the cancellation depended on the
+pixels the bad warp produced. The test caught this itself: it asserts its own
+fixture is valid before trusting anything. The pyramid guard it protects
+(`np.maximum(pooled, 0.0)` in `_band_energy`) is still correct and still there,
+so the test was retargeted at that invariant directly, with the box filter made
+to return the residue the real one once did.
+
+---
+
+## 2. The homography stage is less accurate than not registering at all
+
+**Category: quality. Impact: high. Effort: medium.**
+
+`homography` and `scale` share their entire front end - SIFT on the same
+downscaled frames, `BFMatcher` with the same 0.70 ratio test, RANSAC at the same
+5.0 px threshold, the same neighbour-to-neighbour chain, the same crop. The only
+difference between them is one line:
+
+```python
+H_local, mask = cv2.findHomography(pts_curr, pts_last, cv2.RANSAC, 5.0)     # 8 DOF
+M_local, _mask = cv2.estimateAffinePartial2D(pts_curr, pts_last, ...)       # 4 DOF
+```
+
+That single line is worth a factor of two. Fitting both models to the *identical*
+match set, pair by pair, and comparing each against the true pair transform:
+
+| scene | 8-DOF homography | 6-DOF affine | 4-DOF similarity |
+|---|---|---|---|
+| handheld_drift | 1.364 px | 0.905 px | **0.679 px** |
+| flower01_handheld | 1.401 px | 0.674 px | **0.583 px** |
+
+The mechanism is visible in the estimated matrices. The two extra degrees of
+freedom are perspective terms, and the true motion has no perspective in it at
+all, so whatever they fit is noise. Expressed as the keystone they introduce
+across the frame:
+
+| pair | good matches | homography error | similarity error | keystone the homography adds |
+|---|---|---|---|---|
+| 3 | 27 | 4.455 px | 1.033 px | 4.08% of frame |
+| 4 | 18 | 2.980 px | 1.179 px | 2.63% of frame |
+| 5 | 34 | 2.219 px | 0.835 px | 2.12% of frame |
+| 12 | 49 | 0.390 px | 0.155 px | 0.32% of frame |
+
+Per-pair errors of ~1.4 px chain up over fifteen pairs, which is how a stage
+that looks locally reasonable ends at 5.00 px and 7.71 px - worse than the 3.95
+px and 6.81 px of leaving the stack alone. Adding it after `scale` degrades
+`scale`'s own result: 2.22 px becomes 3.98 px on handheld_drift, 2.57 px becomes
+3.37 px on flower01_handheld. **`scale` alone beats the app's default
+`scale`+`homography` pipeline on both scenes.**
+
+**The honest caveat:** these two scenes were generated from a per-frame affine,
+so a homography cannot beat a similarity on them by construction. That is not a
+rigged test, it is the physics of the instrument. A focus rail moves the focal
+plane along the optical axis; the resulting frame-to-frame motion is a uniform
+magnification about that axis plus small rotation and recentring - 4 DOF, which
+is precisely the argument `_align_scale_impl`'s own docstring makes for fitting a
+constrained similarity, and precisely the argument against the stage next to it
+fitting eight. A handheld shot adds translation and roll, still within the
+similarity. Genuine perspective needs the camera to *tilt* between frames, which
+a stacking rig exists to prevent.
+
+Three ways to spend the effort, cheapest first:
+
+- **Demote it.** Make `scale` the default and `homography` opt-in for the cases
+  that genuinely need perspective. Nearly free, and it is what the measurements
+  support today.
+- **Constrain it.** Reject an estimated `H_local` whose perspective terms imply
+  more than a fraction of a percent of keystone, falling back to the similarity.
+  This keeps the stage useful where perspective is real.
+- **Fit the right model per stack.** Estimate similarity, affine and homography,
+  and keep the one with the best cross-validated reprojection error over held-out
+  matches. Most principled, most work.
+
+---
+
+## 3. The reference frame is the only frame never resampled
+
+**Category: quality. Impact: high. Effort: low.**
+
+After `_rereference_transforms`, the reference frame's transform is exactly the
+identity, and the crop translation folded in afterwards is an integer offset. A
+warp by an integer translation is a copy: every interpolation weight collapses
+to 1. So the reference frame comes out of registration byte-exact, and every
+other frame comes out resampled once.
+
+That is a systematic, artificial sharpness advantage handed to one frame - and
+selection-based fusion decides everything by asking which frame is locally
+sharpest. Measured on a strip of `handheld_drift` that is defocused in *every*
+frame, so no difference there can be real focus:
+
+| | reference frame 0 | mean of the other 15 | advantage |
+|---|---|---|---|
+| CPU warp (Lanczos4) | 43.4 | 34.8 | **+25%** |
+| GPU warp (bilinear) | 43.4 | 15.2 | **+187%** |
+
+And it changes the answer. Taking the per-pixel argmax of a pooled Laplacian
+focus measure - the decision `depthmap`, `pyramid` and the rest all make - and
+comparing against the scene's own `focus_index.png`:
+
+| pipeline | handheld_drift | flower01_handheld |
+|---|---|---|
+| *ground truth: frame 0 is genuinely sharpest on* | *2.9%* | *0.0%* |
+| unregistered | 5.1% | 4.7% |
+| scale, CPU | 11.7% | 14.7% |
+| homography, CPU | 11.4% | 15.7% |
+| **scale+hom (app default), CPU** | **22.6%** | **29.2%** |
+| scale, GPU | 53.6% | 57.2% |
+| **scale+hom (app default), GPU** | **59.8%** | **67.8%** |
+
+On a CUDA machine, **two thirds of the picture is being sourced from whichever
+frame happened to be the alignment anchor**, on a scene where that frame is
+genuinely the sharpest nowhere. This is the same failure
+[ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §19 describes for the
+pyramid - a selection rule with no answer where nothing is in focus - except
+that here registration is *manufacturing* the tie-break rather than the fusion
+method mishandling one. It also compounds with item 7: each additional stage
+resamples the non-reference frames again while the reference stays untouched, so
+the bias grows with pipeline length (23.6% for `both`, 34.9% for
+`scale+hom+ecc`, CPU).
+
+**The fix is to give the reference frame the same treatment as everything else**
+- put it through one identical resample rather than special-casing it into a
+copy. It costs one warp. Simulated by pushing frame 0 through a half-pixel warp
+with the same kernel:
+
+| | frame-0 share now | with the reference resampled | ground truth |
+|---|---|---|---|
+| GPU | 53.6% | **5.3%** | 2.9% |
+| CPU | 11.7% | **9.1%** | 2.9% |
+
+That is the bias essentially gone on the GPU path and materially reduced on the
+CPU one, for the cost of a single extra warp per render.
+
+---
+
+## 4. GPU warping is bilinear where CPU warping is Lanczos4
+
+**Category: quality. Impact: high. Effort: low.**
+
+The CPU path warps with `cv2.INTER_LANCZOS4` (`core/registration.py:319`, `:674`,
+`:973`). The GPU path uses `order=1` - bilinear - in both copies
+(`core/registration.py:137`, `:956`). The stated reason is speed:
+
+> Interpolation is bilinear (order=1) - map_coordinates has no Lanczos kernel,
+> and the higher spline orders cost far more than the quality difference is worth
+> on stacks.
+
+The quality difference is not small, and the speed is not there. Sweeping the
+spline order on `handheld_drift`:
+
+| variant | time | mean sharpness | share picked from frame 0 |
+|---|---|---|---|
+| order=1 (bilinear, current) | 0.27s | 27.2 | 53.6% |
+| order=3 (cubic spline) | 0.74s | 44.4 | 16.3% |
+| order=5 (quintic) | 0.85s | 49.5 | 11.0% |
+| **CPU `cv2.INTER_LANCZOS4`** | **0.27s** | **48.9** | **11.7%** |
+
+Bilinear discards **44%** of the high-frequency energy Lanczos keeps
+(27.2 vs 48.9), and the GPU warp that costs that is *not faster than the CPU
+warp it replaces* at this size. On the largest sample stack, 14 frames at
+2560x1430, the GPU advantage is 0.74s against 0.94s - 1.27x, for a stage that is
+a fraction of any real render.
+
+The same shows up against ground truth on a synthetic stack with a known
+transform, where the Laplacian variance of each warped frame halves:
+
+| | frame 1 | frame 2 |
+|---|---|---|
+| GPU warp (bilinear) | 619.4 | 554.9 |
+| CPU warp (Lanczos4) | 1220.2 | 1142.5 |
+
+For a focus-stacking application this is the wrong trade in the wrong place.
+Every frame is resampled *before* the focus measure reads it, so half the
+high-frequency detail the whole pipeline exists to find is destroyed on the way
+in. Note the interaction with item 3: it is not merely that frames get softer, it
+is that they get softer *unequally*, and the fusion reads that inequality as
+depth.
+
+**The fix has three options,** and the measurement points at the first:
+
+- **Drop the GPU warp path.** It is not faster, it is materially worse, and it
+  is the source of items 1, 3 (amplified), 4 and 10. Deleting it removes ~110
+  lines and every GPU-versus-CPU divergence in this document.
+- Raise it to `order=3`, which recovers most of the quality at 2.7x the GPU time
+  (still ~0.74s, i.e. no worse than the CPU path it is replacing).
+- Keep bilinear only where a preview is being generated and quality is not the
+  point.
+
+---
+
+## 5. `downscale_width` is silently overridden for every real camera file
+
+**Category: robustness. Impact: medium. Effort: trivial.**
+
+All three stages carry the same block (`core/registration.py:205-208`, `:541-548`,
+`:732-738`):
+
+```python
+max_dim = max(h_orig, w_orig)
+if max_dim >= 2048:
+    downscale_width = 1024
+```
+
+That is an unconditional assignment, not a cap. A user who raises the setting to
+2048 for a difficult stack gets 1024; a user who lowers it to 512 for speed also
+gets 1024. Since the threshold is 2048 and the trigger is the *longer* side, it
+fires on every frame from any camera made this century.
+
+Measured, four settings against the same stack:
+
+| scene | setting | time | output | result |
+|---|---|---|---|---|
+| flower01_handheld (1280x715) | 512 | 0.07s | 1259x696 | used as set |
+| | 1024 | 0.12s | 1267x702 | used as set |
+| | 2048 | 0.16s | 1257x694 | used as set |
+| flower01_subject_hires (2560x1430) | 512 | 0.24s | 2555x1422 | **overridden -> 1024** |
+| | 1024 | 0.24s | 2555x1422 | **overridden -> 1024** |
+| | 2048 | 0.25s | 2555x1422 | **overridden -> 1024** |
+| | 4096 | 0.30s | 2555x1422 | **overridden -> 1024** |
+
+Byte-identical results across a 8x range of the setting. The control in the
+settings dialog, the `reg_downscale_width` key in `openfocus.cfg.json`, and the
+`downscale_width` argument threaded through `ImageRegistration`, `RenderWorker`
+and `BatchWorker` are all inert on real input.
+
+This also sets a hard accuracy floor nobody chose. Detection at 1024 on a
+6000 px frame means a keypoint located to ±0.5 px is known to ±2.9 px at full
+resolution, which is the same order as the residuals in item 2 - so some of what
+looks like estimator error is quantisation.
+
+**The fix is to make it a cap rather than an assignment** -
+`downscale_width = min(downscale_width, 1024)` preserves today's behaviour for
+anyone who has not touched the setting while letting the setting mean something -
+or, better, to remove the override and let the value stand, since it exists
+precisely so the user can make this trade. Either way the three copies should
+become one helper.
+
+---
+
+## 6. The reference frame defaults to `first`, and `middle` is better everywhere
+
+**Category: quality. Impact: medium. Effort: trivial.**
+
+`resolve_reference_index` supports `first`, `middle` and `last`, and
+`_rereference_transforms` implements the re-anchoring exactly - both are well
+built and well tested. The default is `first`, which is the historical behaviour
+rather than the good one.
+
+Anchoring on the middle frame halves the longest chain, so accumulated error
+spreads symmetrically instead of piling up at one end. It won on every pipeline
+and both scenes measured, and it keeps more of the frame as a side effect,
+because the union of displacements to be cropped away is smaller:
+
+| scene | pipeline | first: mean px / kept | middle: mean px / kept |
+|---|---|---|---|
+| handheld_drift | scale | 2.22 / 87.3% | **2.15 / 91.2%** |
+| handheld_drift | ecc | 1.67 / 88.8% | **1.55 / 92.3%** |
+| handheld_drift | homography | 5.00 / 81.1% | **3.76 / 88.9%** |
+| flower01_handheld | scale | 2.57 / 93.2% | **1.73 / 96.0%** |
+| flower01_handheld | ecc | 6.40 / 91.8% | **2.93 / 94.8%** |
+| flower01_handheld | scale+hom | 3.37 / 88.3% | **1.86 / 93.8%** |
+
+The largest single improvement in this document that costs one changed default:
+`scale` on flower01_handheld goes from 2.57 px to 1.73 px and keeps 3% more of
+the frame. focus-stack already defaults to the middle frame
+([ALGORITHM_COMPARISON.md](ALGORITHM_COMPARISON.md) §2).
+
+The reason to hesitate is reproducibility - existing projects would re-render
+differently. That is the same argument that kept `scale` opt-in, and it is worth
+weighing against a free 30% accuracy gain.
+
+---
+
+## 7. Each stage is its own resample and its own crop
+
+**Category: quality. Impact: medium. Effort: medium.**
+
+`ImageRegistration.process` in `both` mode runs homography to completion -
+estimate, warp, crop - and feeds the *pixels* to ECC, which estimates, warps and
+crops again (`core/registration.py:1236-1245`). `RenderWorker._run_registration`
+stacks `scale` in front of that the same way. Two consequences, both measured.
+
+**Interpolation is paid per stage.** Each warp is a fresh resample of an already
+resampled image, and resampling is not idempotent. Pushing one real frame
+through repeated half-pixel warps - the sub-pixel correction each stage
+typically applies - and reading the high-frequency energy that survives:
+
+| kernel | start | after 1 warp | after 2 | after 3 |
+|---|---|---|---|---|
+| `INTER_LANCZOS4` | 30.0 | 23.9 (79.7%) | 23.8 (79.4%) | 20.7 (68.9%) |
+| bilinear (the GPU path) | 30.0 | 9.3 (31.2%) | 6.8 (22.7%) | 4.7 (15.7%) |
+
+Because the reference frame is exempt (item 3), that loss lands on every frame
+*except* one, so the artificial advantage compounds with pipeline length. On
+flower01_handheld, CPU path, comparing the reference frame against the mean of
+the rest:
+
+| pipeline | reference | others | reference advantage |
+|---|---|---|---|
+| unregistered | 26.3 | 30.0 | **-12.2%** (the reference starts *behind*) |
+| scale | 26.3 | 23.9 | +10.3% |
+| scale+hom | 26.3 | 20.5 | +28.8% |
+| scale+hom+ecc | 26.5 | 17.9 | **+47.8%** |
+
+The reference frame begins 12% *less* sharp than the average frame and ends 48%
+sharper than it, without a single photon changing. Three stages is enough to
+invert the picture's own focus ordering.
+
+**Pixels are paid per stage too.** Every crop takes the intersection of the valid
+regions, and the intersections compose:
+
+| scene | scale | homography | both | scale+hom+ecc |
+|---|---|---|---|---|
+| handheld_drift | 87.3% | 81.1% | 76.1% | **77.7%** |
+| flower01_handheld | 93.2% | 91.2% | 87.5% | **83.8%** |
+
+So the full pipeline discards a fifth of the frame on handheld_drift and a sixth
+on flower01_handheld, having resampled the survivors three times, to arrive at an
+alignment that item 2 shows is no better than `scale` alone.
+
+**The fix is to compose the transforms and warp once.** Each stage already
+produces a 3x3 matrix; estimating stage 2 on stage 1's *transformed coordinates*
+rather than on its output pixels, then applying `T_crop · H₂ · H₁` in a single
+`warpPerspective`, gives one interpolation and one crop for any number of stages.
+The stages already agree on the convention, so the composition is a matrix
+product. This also subsumes half of item 3: with one warp, there is only one
+frame to keep honest.
+
+---
+
+## 8. Transforms are accepted on six matches, with the inlier mask discarded
+
+**Category: quality. Impact: medium. Effort: low.**
+
+Both feature-based stages gate on the number of matches surviving the ratio test
+and nothing else (`core/registration.py:261`, `:615`):
+
+```python
+if len(good_matches) < 6:
+    print(f"Warning: Frame {idx} poor matches ({len(good_matches)}).")
+```
+
+Six is two above the four a homography needs. RANSAC's own verdict on the fit is
+then thrown away - `mask` at line 625 is assigned and never read again - and the
+resulting matrix is accepted with no check on its determinant, its perspective
+terms or its scale.
+
+The pair that sits on the floor is exactly the pair that goes wrong. On
+handheld_drift:
+
+| pair | good matches | homography error | keystone introduced |
+|---|---|---|---|
+| 13 | 15 | 1.271 px | 2.00% |
+| 14 | 13 | 1.077 px | 0.95% |
+| **15** | **6** | **4.465 px** | **5.67%** |
+
+The 6-match pair is 3.5x worse than its neighbours and bends the frame by 5.7%.
+Because the chain accumulates - `H_global = np.matmul(H_global, H_local)` - a
+bad estimate is not a bad frame, it is a permanent offset applied to every frame
+after it.
+
+What the code does well and should be credited for: when a pair *is* rejected,
+`last_kps`/`last_des` are deliberately not advanced, so the next frame is matched
+against the last frame that worked and the chain re-closes correctly. Verified by
+blanking frame 4 of an 8-frame stack - frames 5 through 7 come back at 0.11-0.13
+px residual, entirely unharmed. The recovery machinery is right; only the
+decision about *when* to invoke it is too permissive.
+
+**The fix is to gate on the RANSAC verdict rather than the match count** - a
+minimum inlier count and inlier ratio, plus a sanity check on the estimated
+matrix (perspective terms near zero, scale within a few percent of 1, positive
+determinant) - and to fall back to the existing skip path when it fails. The
+skip path already works.
+
+---
+
+## 9. ECC crashes on single-channel input
+
+**Category: robustness. Impact: low. Effort: trivial.**
+
+`_align_ecc_impl`'s preprocessing calls `cv2.cvtColor(small_img,
+cv2.COLOR_BGR2GRAY)` unconditionally (`core/registration.py:763`), and its GPU
+branch iterates `for c in range(img.shape[2])` (`:950`). Both assume three
+channels. On a grayscale stack:
+
+| stage | result |
+|---|---|
+| scale | OK -> (502, 500) |
+| homography | OK -> (501, 499) |
+| **ecc** | **`cv2.error: Bad number of channels`** |
+
+`_warp_perspective_gpu` already handles `img.ndim == 2` correctly
+(`core/registration.py:135`), so the second half of this went with item 1's fix -
+the ECC GPU branch no longer iterates channels itself. The first half is still
+open: a two-line guard on the colour conversion.
+
+Low impact because the app's own loader normalises to BGR, so this is reachable
+from the CLI entry point and from library use rather than from the GUI.
+
+---
+
+## 10. The GPU warp helper allocates 21x the frame, with no fallback
+
+**Category: performance. Impact: low. Effort: low.**
+
+Both GPU warps build a full dense coordinate grid before sampling: an int64
+`meshgrid`, a 3xN stack of homogeneous coordinates, the float64 matrix product,
+and two float64 coordinate planes. That is a fixed multiple of the frame,
+measured against the CuPy pool:
+
+| frame | size on host | GPU pool peak | ratio |
+|---|---|---|---|
+| 6 MP uint16 BGR | 36.0 MB | 767.7 MB | 21.3x |
+| 12 MP | 72.0 MB | 1536.0 MB | 21.3x |
+| 24 MP | 143.9 MB | 3070.9 MB | 21.3x |
+| 60 MP | 359.9 MB | 7678.2 MB | 21.3x |
+
+A 60 MP frame completed here on a 16 GB card. On an 8 GB card it would not, and
+neither `_warp_perspective_gpu` nor either `warp_task` has a `try`/`except`
+around the CuPy calls - so the allocation failure would propagate out of the
+worker thread rather than falling back to the CPU path that is sitting right
+there. This is headroom rather than an observed failure, and it is stated as
+such.
+
+The grid does not need to be dense or float64: the coordinates could be built in
+float32 and streamed in row blocks, or the whole thing replaced by CuPy's own
+affine machinery for the affine case. But given items 1 and 4, the simplest
+resolution is again to delete the GPU warp rather than optimise it.
+
+---
+
+## 11. `_stabilisation_impl` is unreachable code
+
+**Category: maintenance. Impact: low. Effort: trivial.**
+
+117 lines (`core/registration.py:1006-1122`) implementing a Lucas-Kanade
+trajectory-smoothing stabiliser. It is not in `SUPPORTED_METHODS`, not dispatched
+from `process`, and its only two references in the repository are inside
+commented-out blocks (`:1151`, `:1371`). It also carries a hardcoded 1.04
+zoom-crop and would raise `IndexError` on a single-frame input at
+`transforms[-1] = transforms[-2]`.
+
+Trajectory smoothing is a video idea rather than a stacking one - it deliberately
+*keeps* low-frequency motion, which is exactly what a stack wants removed - so
+this is a deletion, not a revival. The same applies to the commented-out
+`_registration_impl` and the four commented-out compatibility aliases below it,
+which reference an `_align_zoom_impl` that no longer exists.
+
+---
+
+## 12. Three copy-pasted folder loaders that disagree
+
+**Category: robustness. Impact: low. Effort: low.**
+
+The same ~12-line directory loader appears in `_align_scale_impl` (`:183-193`),
+`_align_homography_impl` (`:516-529`) and `_align_ecc_impl` (`:712-721`), plus a
+fourth variant in the dead `_stabilisation_impl`. They have already drifted:
+
+```python
+# scale and homography
+valid_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+# ecc
+{'.jpg', '.jpeg', '.png', '.bmp', '.tif'}          # .tiff missing
+```
+
+So a folder of `.tiff` files aligns under `scale` and `homography` and silently
+loses every frame under `ecc`. The dead fourth copy sorts with
+`int(re.findall(r"\d+", ...)[-1])` and no fallback, so it raises `IndexError` on
+any filename without a digit - the same defect
+[ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §13 records for the fusion
+loaders, and the fix should be shared with it: one loader, one extension list,
+one sort with a fallback.
+
+Low impact because every in-app caller passes a preloaded list
+(`core/workers.py:96`, `:366`, `:381`, `:649`); only `main()` and library users
+reach these paths.
+
+---
+
+## What already works
+
+Several things were probed and found sound; they are recorded so the audit is
+not read as uniformly negative.
+
+- **The chain's failure recovery is correct.** Rejecting a pair without advancing
+  the feature reference means the next frame matches against the last good one
+  and the chain closes properly. A blanked frame in the middle of a stack leaves
+  every subsequent frame at 0.11-0.13 px (item 8).
+- **`_rereference_transforms` is exact** - the reference collapses to identity,
+  every other transform is rewritten relative to it, index 0 is a true no-op, and
+  a singular reference falls back rather than raising.
+- **`ecc_parallel` is genuinely free.** Concurrent and serial pair computation
+  produce bit-identical output (max abs diff 0), because the pairs are
+  independent and only the accumulation is ordered.
+- **Registration is deterministic.** `both` run twice on the same input gives max
+  abs diff 0.
+- **The ECC homography rescale is right.** Converting a homography measured at
+  scale s to full resolution needs `S⁻¹HS`, which is exactly the four assignments
+  at `core/registration.py:818-822`.
+- **Bit depth is preserved.** 16-bit input comes out 16-bit with no clipping at
+  either end on every stage and both devices - the one exception being the GPU
+  ECC zeros, which are item 1 and not a depth problem.
+- **ECC's CPU path is the most accurate estimator in the codebase**, landing
+  within 0.02 px on a clean translation stack. Item 1 is the only reason it is
+  not the recommended stage.
+
+---
+
+## What to run today
+
+Until items 2-4 land, on a machine with CuPy and a CUDA device:
+
+- **`ecc` is now the most accurate stage on both devices** (2.36x on
+  handheld_drift). Item 1 was the only reason to avoid it on GPU, and as of
+  1.30.2 the GPU path matches the CPU one.
+- **Use `scale` alone** where ECC is too slow or the stack is mostly breathing.
+  It is the most reliable single stage on both scenes (1.78x and 2.65x) and the
+  only one never worse than doing nothing.
+- **Set the reference frame to `middle`** (item 6). Free, better everywhere.
+- **`homography` is optional at best** and costs accuracy on both scenes (item 2).
+- Ignore the `downscale_width` setting; it does nothing on real files (item 5).
+
+GPU output is still softer than CPU output at equal alignment (item 4), so on a
+CPU-only machine `ecc` or `scale`+`ecc` remains the best-looking pipeline, not
+just the best-aligned one.
+
+---
+
+## Reproducing these measurements
+
+Everything above comes from `tests/benchmark_registration.py`, which runs the
+real `ImageRegistration` and reads its transforms back out by wrapping the crop
+helper every stage calls - so the numbers describe the shipping code rather than
+a reimplementation of it.
+
+```bash
+# geometric error of every pipeline against per_frame_affine ground truth
+python tests/benchmark_registration.py
+
+# the same, GPU warp path against CPU warp path (items 1, 3, 4)
+python tests/benchmark_registration.py --devices
+
+# fused PSNR/SSIM against each scene's all_in_focus.png (item 1)
+python tests/benchmark_registration.py --quality --devices
+
+# which frame the focus measure picks, against focus_index.png (item 3)
+python tests/benchmark_registration.py --selection --devices
+
+# the reference-frame comparison (item 6)
+python tests/benchmark_registration.py --reference middle
+
+# one scene, one setting
+python tests/benchmark_registration.py --scene flower01_handheld --downscale-width 2048
+```
+
+The scenes are `samples/handheld_drift` and `samples/flower01_handheld`,
+regenerated deterministically by `python samples/generate_samples.py`. They are
+the only two that carry `per_frame_affine`, which is what makes the geometric
+error exact; `--scene` on any other name reports that and skips.
+
+The existing contract tests remain the guard against regression:
+
+```bash
+python -m pytest tests/test_registration_scale.py tests/test_registration_reference.py \
+                tests/test_registration_gpu_warp.py -v
+```
+
+The first two would not catch items 3 or 4 - `test_registration_scale.py`
+asserts convergence thresholds loose enough to pass on both interpolators. The
+third arrived with item 1's fix and is where a device-dependent regression gets
+caught: it lifts the `without_cupy` helper out of the benchmark, runs a stage
+with the CuPy path forced on and off, and asserts the two agree to within a
+fraction of a pixel. It skips where there is no CUDA device, so it is only load-
+bearing on a machine that can run the path it guards.

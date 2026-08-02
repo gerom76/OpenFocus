@@ -879,93 +879,23 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
     # Build the crop translation matrix
     T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
 
-    # Try to import cupy
-    try:
-        import cupy as cp
-        import cupyx.scipy.ndimage
-        HAS_CUPY = True
-        try:
-            props = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
-            gpu_name = props['name'].decode()
-            free_mem, total_mem = cp.cuda.runtime.memGetInfo()
-            print(f"    [Info] Cupy {cp.__version__} detected. GPU acceleration enabled for warping.")
-            print(f"           Device: {gpu_name} ({free_mem / 1024**3:.1f}/{total_mem / 1024**3:.1f} GB free)")
-        except Exception as e:
-            # Cupy imports fine but no usable CUDA device (driver mismatch, no GPU, ...)
-            HAS_CUPY = False
-            print(f"    [Info] Cupy installed but GPU unavailable ({e}). Using CPU for warping.")
-    except ImportError as exc:
-        HAS_CUPY = False
-        print(f"    [Info] Cupy unavailable ({_import_error_reason(exc)}). Using CPU for warping.")
+    cp, cp_ndimage = _init_gpu_warp()
 
     def warp_task(args):
         idx, img, H = args
-        
+
         # Merge the crop transform: first apply H, then translate by T_crop
         if do_crop:
             H_final = T_crop @ H
         else:
             H_final = H
-            
-        # If Cupy is available, use GPU acceleration
-        if HAS_CUPY:
-            # Transfer the image to the GPU
-            img_gpu = cp.asarray(img)
-            
-            # Cupy's affine_transform requires the inverse transform matrix
-            # cv2.warpPerspective uses H_final (the inverse of the forward mapping matrix, i.e. from destination to source)
-            # but ndimage.affine_transform also needs a matrix mapping from output coordinates back to input coordinates
-            # Note: ndimage.affine_transform may define the matrix differently from OpenCV
-            # OpenCV: dst(x,y) = src(M * [x,y,1])
-            # ndimage: output[i, j] = input[matrix @ [i,j] + offset]
-            
-            # For perspective transforms (Homography), affine_transform is insufficient because it only supports affine transforms
-            # We need to build the coordinate grid manually and use map_coordinates
-            
-            # Create the target grid
-            y_grid, x_grid = cp.meshgrid(cp.arange(target_h), cp.arange(target_w), indexing='ij')
-            
-            # Flatten the grid
-            ones = cp.ones_like(x_grid)
-            coords = cp.stack([x_grid, y_grid, ones]) # 3 x N
-            coords = coords.reshape(3, -1)
-            
-            # Apply the transform matrix (H_final is already H_inv, i.e. the mapping from destination to source)
-            # src_coords = H_final @ dst_coords
-            H_gpu = cp.asarray(H_final)
-            src_coords_homo = cp.matmul(H_gpu, coords)
-            
-            # Normalize the homogeneous coordinates
-            w_coords = src_coords_homo[2, :]
-            w_coords = cp.where(cp.abs(w_coords) < 1e-10, 1e-10, w_coords)
-            src_x = src_coords_homo[0, :] / w_coords
-            src_y = src_coords_homo[1, :] / w_coords
-            
-            # Reshape back to the image shape
-            src_x = src_x.reshape(target_h, target_w)
-            src_y = src_y.reshape(target_h, target_w)
-            
-            # Interpolate each channel
-            channels = []
-            for c in range(img.shape[2]):
-                # order=1 (linear) is fastest, order=3 (cubic) gives better quality
-                # Here we use order=1 for maximum speed; use order=3 if quality is preferred
-                channel_out = cupyx.scipy.ndimage.map_coordinates(
-                    img_gpu[:, :, c], 
-                    cp.stack([src_y, src_x]), 
-                    order=1, 
-                    mode='constant', 
-                    cval=0
-                )
-                channels.append(channel_out)
-            
-            aligned_img_gpu = cp.stack(channels, axis=2)
-            
-            # Transfer back to the CPU, at the depth the frame came in as
-            aligned_img = cp.asnumpy(aligned_img_gpu).astype(img.dtype)
-            
+
+        # H_final is the forward (source -> destination) map, which is what
+        # cv2.warpPerspective expects; _warp_perspective_gpu inverts it itself,
+        # so both branches below apply the same transform in the same direction.
+        if cp is not None:
+            aligned_img = _warp_perspective_gpu(cp, cp_ndimage, img, H_final, target_w, target_h)
         else:
-            # CPU version (OpenCV)
             aligned_img = cv2.warpPerspective(
                 img,
                 H_final,
@@ -973,7 +903,7 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
                 flags=cv2.INTER_LANCZOS4,
                 borderMode=cv2.BORDER_CONSTANT
             )
-        
+
         # If an output path is provided, save directly in the thread
         if output_path:
             fname = img_filenames[idx] if img_filenames else f'frame_{idx:04d}.png'
@@ -989,7 +919,7 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
 
     # If Cupy is available, do not use multithreading, since GPU operations are already parallel and limited by PCIe bandwidth
     # Multiple threads transferring data to the GPU simultaneously may cause contention
-    if HAS_CUPY:
+    if cp is not None:
         aligned_images = []
         for args in task_args:
             aligned_images.append(warp_task(args))

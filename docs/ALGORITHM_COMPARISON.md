@@ -132,6 +132,13 @@ is limited to whole-frame shift/rotate/scale. This is the one alignment axis
 where an implementation would put OpenFocus ahead of the commercial tools rather
 than level with them.
 
+**This table is about capability, not accuracy.** Having a stage is not the same
+as that stage helping: measured against the per-frame ground truth in
+`samples/*/scene.json`, the homography stage currently leaves both handheld
+samples *less* well registered than not registering at all, and the GPU warp path
+inverts ECC's correction outright. See
+[REGISTRATION_IMPROVEMENTS.md](REGISTRATION_IMPROVEMENTS.md).
+
 ---
 
 ## 3. Photometric alignment

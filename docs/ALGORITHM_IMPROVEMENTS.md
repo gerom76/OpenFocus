@@ -4,6 +4,9 @@ An audit of the six fusion methods, split into **performance** (speed, memory)
 and **quality** (accuracy of the fused result). Every claim here is measured, and
 the measurement is given so it can be repeated or disputed.
 
+The alignment stages that run *before* fusion are audited separately, to the same
+standard, in [REGISTRATION_IMPROVEMENTS.md](REGISTRATION_IMPROVEMENTS.md).
+
 Measurements were taken on one machine (Python 3.14, OpenCV 5.0, CUDA GPU) with
 the synthetic photographic fixture from `tests/synthetic_stack.py`. Read the
 absolute timings as relative.
