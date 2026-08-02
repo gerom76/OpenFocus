@@ -33,7 +33,10 @@ Notes:
 - Use when target machines do not need GPU/torch features.
 - `--add-data "ui;ui"` includes UI styles and resources.
 - `--add-data "docs;docs"` includes documentation files.
-- The CuPy excludes are **not optional** — see the warning below.
+- The CuPy excludes are **not optional** — see the warning below. Since 1.30.5
+  nothing in the app imports CuPy at all (registration no longer warps on the
+  GPU), so every build here excludes it; on this one it also prevents the failure
+  mode described next.
 
 ### ⚠ Why CuPy must be excluded from the no-torch build
 
@@ -43,8 +46,9 @@ CuPy's extension modules link against the CUDA DLLs that ship inside
 `torch/lib/` folder inside the bundle, which has two consequences:
 
 1. **~1.2 GB of dead weight.** Windows does not search bundle subdirectories for
-   DLLs, so CuPy cannot load them anyway: the frozen app logs
-   `[Info] Cupy not found. Using CPU for warping.`
+   DLLs, so CuPy could not load them anyway - the frozen app used to log
+   `[Info] Cupy not found. Using CPU for warping.` and carry on. Since 1.30.5 it
+   does not even look: there is no CuPy code path left to fall back from.
 2. **A fake `torch` package.** `torch/` has no `__init__.py`, so `import torch`
    succeeds and returns an *empty* implicit namespace package. Every
    `except ImportError` CPU fallback is bypassed and the first attribute access
@@ -55,7 +59,9 @@ CuPy's extension modules link against the CUDA DLLs that ship inside
 properly, so a bundle built without the CuPy excludes still falls back to CPU
 instead of crashing. Excluding CuPy removes the cause (and the 1.2 GB).
 
-If a build must keep CuPy, strip the leftovers in a `.spec` file instead:
+If a build must keep CuPy anyway — for something outside this application, since
+nothing inside it uses CuPy any more — strip the leftovers in a `.spec` file
+instead:
 
 ```python
 a.binaries = [b for b in a.binaries if not b[0].lower().startswith('torch\\')]
@@ -90,10 +96,10 @@ Notes:
 
 ---
 
-## 3) GPU build: `torch` + CuPy, output as one directory (`--onedir`) ⭐
+## 3) GPU build: `torch`, output as one directory (`--onedir`) ⭐
 
 The recommended GPU build. `torch` drives GPU fusion (DTCWT / GFF / DCT / pyramid /
-GFG-FGF / StackMFF-V4); CuPy drives GPU warping during registration.
+GFG-FGF / StackMFF-V4) and the nvJPEG decode path.
 
 ```powershell
 pyinstaller --clean --noconfirm --onedir --noconsole `
@@ -109,12 +115,10 @@ pyinstaller --clean --noconfirm --onedir --noconsole `
   --collect-data dtcwt `
   --collect-all torch `
   --collect-all torchvision `
-  --collect-all cupy `
-  --collect-all cupyx `
-  --collect-all cupy_backends `
-  --collect-all cuda `
   --collect-data pytorch_wavelets `
-  --hidden-import graphlib `
+  --exclude-module cupy `
+  --exclude-module cupyx `
+  --exclude-module cupy_backends `
   main.py
 ```
 
@@ -122,18 +126,20 @@ Notes:
 - `--onedir` is strongly preferred here: a `--onefile` GPU build extracts several GB
   to `%TEMP%` on *every* launch, which costs a minute of start-up and the same amount
   of free disk. Zip `dist\OpenFocus\` if you need a single file to hand over.
-- `--collect-all cuda` **and** `--hidden-import graphlib` are both required for CuPy.
-  CuPy locates its CUDA libraries through `cuda.pathfinder`, an implicit namespace
-  package PyInstaller does not pick up on its own, and it imports the `graphlib`
-  standard-library module in a way the dependency scan misses. Missing either one
-  makes `import cupy` fail inside the bundle, and the log then reads
-  `[Info] Cupy unavailable (...). Using CPU for warping.`
+- **CuPy is excluded from this build too, as of 1.30.5.** It used to be collected
+  here because registration warped on the GPU through
+  `cupyx.scipy.ndimage.map_coordinates`. That path is deleted - it resampled
+  bilinearly, which cost 44% of the high-frequency energy the focus measure reads,
+  and at the spline order that matches the CPU's Lanczos4 it was the slower of the
+  two (`docs/REGISTRATION_IMPROVEMENTS.md` item 4). Nothing in the app imports
+  CuPy now, so collecting it only adds ~1.2 GB. The `--collect-all cuda` and
+  `--hidden-import graphlib` flags that CuPy needed inside a bundle go with it.
 - `--collect-data pytorch_wavelets` ships the `.npz` wavelet coefficients that the GPU
   DTCWT path loads at runtime (via the `pkg_resources` shim in
   `fusion_methods/dtcwt_torch.py`). Without them GPU DTCWT falls back to the CPU.
-- CuPy compiles kernels at runtime with NVRTC, so GPU warping additionally needs a
-  CUDA toolkit on the *target* machine (`CUDA_PATH`). GPU fusion via `torch` does not
-  — torch ships its own CUDA runtime in `torch\lib`.
+- A CUDA toolkit on the *target* machine is no longer needed for anything: it was
+  required only because CuPy compiles its kernels at runtime with NVRTC. GPU fusion
+  via `torch` never needed one — torch ships its own CUDA runtime in `torch\lib`.
 - Includes `ui` and `docs` directories for complete application functionality.
 
 ---

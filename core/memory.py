@@ -1,10 +1,14 @@
 """Release memory the render pipeline no longer needs.
 
-torch and cupy keep freed GPU allocations in process-wide caching pools so the
-next operation can reuse them without another driver round-trip. After a large
-render that looks like leaked VRAM (and pinned host memory) sitting on the app.
-This module is the single place that hands those caches back once a render or
-batch job is done; the next render simply re-warms the pools on first use.
+torch keeps freed GPU allocations in a process-wide caching pool so the next
+operation can reuse them without another driver round-trip. After a large render
+that looks like leaked VRAM (and pinned host memory) sitting on the app. This
+module is the single place that hands that cache back once a render or batch job
+is done; the next render simply re-warms the pool on first use.
+
+CuPy's pools were freed here too, until registration stopped warping on the GPU
+(docs/REGISTRATION_IMPROVEMENTS.md item 4) and left nothing in the app that
+allocates through CuPy at all.
 
 Only libraries already present in sys.modules are touched, so a CPU-only run
 never pays a GPU library import just to free nothing.
@@ -71,8 +75,8 @@ def release_render_memory() -> None:
     are deliberately left loaded - they are small compared to the image
     buffers and reloading them would slow every render.
     """
-    # Collect Python-side garbage first so the pools below actually see the
-    # dropped arrays/tensors as free blocks.
+    # Collect Python-side garbage first so the pool below actually sees the
+    # dropped tensors as free blocks.
     gc.collect()
 
     torch = sys.modules.get("torch")
@@ -83,10 +87,3 @@ def release_render_memory() -> None:
         except Exception:
             pass
 
-    cupy = sys.modules.get("cupy")
-    if cupy is not None:
-        try:
-            cupy.get_default_memory_pool().free_all_blocks()
-            cupy.get_default_pinned_memory_pool().free_all_blocks()
-        except Exception:
-            pass

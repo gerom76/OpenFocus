@@ -3,9 +3,12 @@
 #
 #   pip install -r requirements-optional.txt
 
-# GPU registration; falls back to CPU in core/registration.py
-# Pick the wheel matching your CUDA runtime, e.g. cupy-cuda13x.
-cupy-cuda13x
+# CuPy used to be listed here for GPU warping in core/registration.py. It is not
+# any more: `map_coordinates` has no Lanczos kernel, so that path resampled
+# bilinearly and gave up 44% of the high-frequency energy the focus measure reads
+# - and at the spline order that matches Lanczos it was slower than the CPU warp
+# it replaced (docs/REGISTRATION_IMPROVEMENTS.md item 4). Nothing in the app
+# imports CuPy now; installing it changes nothing.
 
 # GPU DTCWT fusion; falls back to CPU in fusion_methods/dtcwt_torch.py.
 # Both are required: _validate_transform_environment in core/multi_focus_fusion.py

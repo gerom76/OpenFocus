@@ -17,24 +17,27 @@ which is the misregistration in output pixels and is independent of cropping.
 ``H_i`` is read back by wrapping the crop helper every stage calls, so the
 numbers describe the code as it runs rather than a reimplementation of it.
 
-Four modes:
+Three modes:
 
 * --accuracy (default) - geometric error of each pipeline, against ground truth
 * --quality             - registration -> fusion -> PSNR/SSIM against the
                           scene's own all-in-focus image
 * --selection           - which frame the focus measure picks after each
                           pipeline, against the scene's focus_index map
-* --devices             - the same run with and without the CuPy warp path
+
+There used to be a fourth, --devices, which ran everything twice: once with the
+CuPy warp path and once without. It is gone with the path (item 4), and with it
+the device column every table used to carry - registration now produces the same
+pixels on every machine, so there are no longer two answers to report.
 
 Examples:
     python tests/benchmark_registration.py
     python tests/benchmark_registration.py --scene flower01_handheld
-    python tests/benchmark_registration.py --quality --devices
+    python tests/benchmark_registration.py --quality
     python tests/benchmark_registration.py --selection --reference middle
 """
 
 import argparse
-import builtins
 import json
 import os
 import sys
@@ -63,24 +66,6 @@ PIPELINES = [
     (["scale", "ecc"], "scale+ecc"),
     (["scale", "both"], "scale+hom+ecc"),
 ]
-
-_real_import = builtins.__import__
-
-
-class without_cupy:
-    """Run a block with the CuPy warp path unavailable, to force the CPU one."""
-
-    def __enter__(self):
-        def guarded(name, *args, **kwargs):
-            if name.startswith("cupy"):
-                raise ImportError("disabled by benchmark_registration")
-            return _real_import(name, *args, **kwargs)
-        builtins.__import__ = guarded
-        return self
-
-    def __exit__(self, *exc):
-        builtins.__import__ = _real_import
-
 
 class capture_transforms:
     """Record the (transforms, crop) each registration stage finally applies.
@@ -205,32 +190,19 @@ def sharpness(img):
 
 # -------------------------------------------------------------------- runner
 
-def run_pipeline(frames, stages, downscale_width, reference_index, force_cpu):
+def run_pipeline(frames, stages, downscale_width, reference_index):
     """Apply the stages in order and return (images, composed maps, seconds)."""
-    context = without_cupy() if force_cpu else None
-    if context:
-        context.__enter__()
-    try:
-        with capture_transforms() as captured:
-            images = [f.copy() for f in frames]
-            started = time.time()
-            for mode in stages:
-                images = ImageRegistration(
-                    method=mode, downscale_width=downscale_width,
-                    reference_index=reference_index).process(
-                        images, output_path=None, thread_count=4)
-            elapsed = time.time() - started
-        composed = captured.total() if stages else [np.eye(3)] * len(frames)
-    finally:
-        if context:
-            context.__exit__()
+    with capture_transforms() as captured:
+        images = [f.copy() for f in frames]
+        started = time.time()
+        for mode in stages:
+            images = ImageRegistration(
+                method=mode, downscale_width=downscale_width,
+                reference_index=reference_index).process(
+                    images, output_path=None, thread_count=4)
+        elapsed = time.time() - started
+    composed = captured.total() if stages else [np.eye(3)] * len(frames)
     return images, composed, elapsed
-
-
-def devices_for(args):
-    if args.devices:
-        return [("gpu", False), ("cpu", True)]
-    return [("cpu", True)] if args.cpu else [("gpu", False)]
 
 
 # --------------------------------------------------------------------- modes
@@ -247,20 +219,19 @@ def report_accuracy(scene, args):
     print(f"\n### {scene}  {meta['resolution'][0]}x{meta['resolution'][1]}, "
           f"{meta['frame_count']} frames, reference={args.reference}")
     print(f"    unregistered: mean {np.mean(baseline):5.2f} px, worst {np.max(baseline):5.2f} px")
-    print(f"    {'pipeline':<18}{'device':<7}{'mean px':>9}{'worst px':>10}"
+    print(f"    {'pipeline':<18}{'mean px':>9}{'worst px':>10}"
           f"{'gain':>7}{'time':>8}{'kept':>8}")
     for stages, label in PIPELINES:
         if not stages:
             continue
-        for device, force_cpu in devices_for(args):
-            images, composed, elapsed = run_pipeline(
-                frames, stages, args.downscale_width, reference_index, force_cpu)
-            residual = residual_px(composed, affines, shape, reference_index)
-            kept = 100.0 * images[0].shape[0] * images[0].shape[1] / (shape[0] * shape[1])
-            gain = np.mean(baseline) / np.mean(residual)
-            flag = "" if gain >= 1.0 else "  <- worse than no registration"
-            print(f"    {label:<18}{device:<7}{np.mean(residual):9.2f}"
-                  f"{np.max(residual):10.2f}{gain:6.2f}x{elapsed:7.2f}s{kept:7.1f}%{flag}")
+        images, composed, elapsed = run_pipeline(
+            frames, stages, args.downscale_width, reference_index)
+        residual = residual_px(composed, affines, shape, reference_index)
+        kept = 100.0 * images[0].shape[0] * images[0].shape[1] / (shape[0] * shape[1])
+        gain = np.mean(baseline) / np.mean(residual)
+        flag = "" if gain >= 1.0 else "  <- worse than no registration"
+        print(f"    {label:<18}{np.mean(residual):9.2f}"
+              f"{np.max(residual):10.2f}{gain:6.2f}x{elapsed:7.2f}s{kept:7.1f}%{flag}")
 
 
 def report_quality(scene, args):
@@ -273,15 +244,13 @@ def report_quality(scene, args):
     reference_index = resolve_reference_index(args.reference, len(frames))
 
     print(f"\n### {scene}: registration -> {method.label} -> vs ground truth")
-    print(f"    {'pipeline':<18}{'device':<7}{'PSNR':>8}{'SSIM':>9}{'sharpness':>12}")
+    print(f"    {'pipeline':<18}{'PSNR':>8}{'SSIM':>9}{'sharpness':>12}")
     for stages, label in PIPELINES:
-        for device, force_cpu in (devices_for(args) if stages else [("-", True)]):
-            images, _, _ = run_pipeline(
-                frames, stages, args.downscale_width, reference_index, force_cpu)
-            fused = method.fuse(images, **method.params)
-            score, structure = locate_and_score(fused, all_in_focus)
-            print(f"    {label:<18}{device:<7}{score:8.2f}{structure:9.4f}"
-                  f"{sharpness(fused):12.1f}")
+        images, _, _ = run_pipeline(
+            frames, stages, args.downscale_width, reference_index)
+        fused = method.fuse(images, **method.params)
+        score, structure = locate_and_score(fused, all_in_focus)
+        print(f"    {label:<18}{score:8.2f}{structure:9.4f}{sharpness(fused):12.1f}")
 
 
 def report_selection(scene, args):
@@ -295,16 +264,15 @@ def report_selection(scene, args):
     print(f"\n### {scene}: share of the picture the focus measure sources from "
           f"the reference frame (index {reference_index})")
     print(f"    ground truth: {truth:.1f}% of pixels are genuinely sharpest there")
-    print(f"    {'pipeline':<18}{'device':<7}{'share':>8}{'vs truth':>10}")
+    print(f"    {'pipeline':<18}{'share':>8}{'vs truth':>10}")
     for stages, label in PIPELINES:
-        for device, force_cpu in (devices_for(args) if stages else [("-", True)]):
-            images, _, _ = run_pipeline(
-                frames, stages, args.downscale_width, reference_index, force_cpu)
-            share = 100.0 * float((focus_argmax(images) == reference_index).mean())
-            # A truth share of zero - the reference frame is nowhere the
-            # sharpest - makes the ratio meaningless, so report the share alone.
-            ratio = f"{share / truth:8.1f}x" if truth > 0 else "     n/a"
-            print(f"    {label:<18}{device:<7}{share:7.1f}%{ratio:>10}")
+        images, _, _ = run_pipeline(
+            frames, stages, args.downscale_width, reference_index)
+        share = 100.0 * float((focus_argmax(images) == reference_index).mean())
+        # A truth share of zero - the reference frame is nowhere the
+        # sharpest - makes the ratio meaningless, so report the share alone.
+        ratio = f"{share / truth:8.1f}x" if truth > 0 else "     n/a"
+        print(f"    {label:<18}{share:7.1f}%{ratio:>10}")
 
 
 def main():
@@ -318,9 +286,6 @@ def main():
                         help="fused PSNR/SSIM against all_in_focus.png")
     parser.add_argument("--selection", action="store_true",
                         help="which frame the focus measure picks, vs focus_index.png")
-    parser.add_argument("--devices", action="store_true",
-                        help="run each pipeline both with and without the CuPy warp")
-    parser.add_argument("--cpu", action="store_true", help="force the CPU warp path")
     parser.add_argument("--reference", default="first",
                         choices=["first", "middle", "last"], help="reference frame mode")
     parser.add_argument("--downscale-width", type=int, default=1024, dest="downscale_width",
