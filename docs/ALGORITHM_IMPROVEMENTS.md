@@ -631,6 +631,15 @@ callers only.
 (`(0, number)` / `(1, name)` tuples) and the same extension handling
 everywhere.
 
+**Half of that already exists.** Registration had the same defect - three
+copied loaders, drifted extension lists, a sort key that returned a bare `int`
+or `str` - and [REGISTRATION_IMPROVEMENTS.md](REGISTRATION_IMPROVEMENTS.md)
+item 12 fixed it in 1.30.10 by moving the loader into `utils/image_utils.py`
+rather than writing a fourth private one: `supported_input_extensions`,
+`stack_sort_key` and `load_image_folder`, the extension set derived from what
+`read_image_any_depth` can decode. This item is now adopting those three in
+`dtcwt.py`, `pyramid.py`, `depthmap.py` and `dct.py`, not designing them.
+
 ---
 
 ## 14. DTCWT's consistency vote is biased at image borders

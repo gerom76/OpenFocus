@@ -1,4 +1,5 @@
 import os
+import re
 
 import cv2
 import numpy as np
@@ -72,6 +73,70 @@ def read_image_any_depth(path: str, apply_mode: bool = True) -> Optional[np.ndar
         return None
     img = ensure_bgr(img)
     return bitdepth.apply_load_mode(img) if apply_mode else img
+
+
+# Containers OpenCV decodes directly. JPEG XL and DNG are added by the backends
+# themselves, so a build without libjxl or rawpy does not offer an extension it
+# cannot then read.
+_CV2_INPUT_EXTENSIONS = frozenset(
+    {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'})
+
+_STACK_NUMBER = re.compile(r"\d+")
+
+
+def supported_input_extensions() -> frozenset:
+    """Extensions a folder of frames is scanned for, as read_image_any_depth reads.
+
+    One list, computed once per call because the JPEG XL and DNG backends are
+    optional and report their own availability. Callers that scan a directory
+    for a stack should use this rather than writing the set out again: the
+    three registration stages each carried their own copy and they had already
+    drifted apart - ECC's was missing '.tiff', so a folder of .tiff frames
+    aligned under `scale` and silently lost every frame under `ecc`
+    (docs/REGISTRATION_IMPROVEMENTS.md item 12).
+    """
+    return frozenset(_CV2_INPUT_EXTENSIONS | set(jxl.extensions()) | set(dng.extensions()))
+
+
+def stack_sort_key(filename: str):
+    """Order frames by the last number in the name, with a fallback that sorts.
+
+    The key is type-stable: a numbered name gives `(0, number, name)` and an
+    unnumbered one `(1, 0, name)`, so a folder holding both - `img1.png` beside
+    `cover.png` - orders instead of raising `TypeError: '<' not supported
+    between instances of 'str' and 'int'`, which is what a key returning a bare
+    `int` or `str` does. Unnumbered names sort after numbered ones, among
+    themselves alphabetically.
+    """
+    name = os.path.basename(filename)
+    numbers = _STACK_NUMBER.findall(name)
+    return (0, int(numbers[-1]), name) if numbers else (1, 0, name)
+
+
+def load_image_folder(directory: str, extensions=None):
+    """Read a directory of frames into (images, filenames), in stack order.
+
+    Undecodable files are dropped from the image list, as they always have
+    been; the filename list keeps every path that matched, so the two can
+    disagree in length exactly where a file failed to decode.
+
+    Args:
+        directory: folder to scan, non-recursively
+        extensions: lowercase extension set to accept; defaults to
+            supported_input_extensions()
+
+    Returns:
+        (list of BGR arrays, list of basenames)
+    """
+    valid_exts = supported_input_extensions() if extensions is None else extensions
+    img_paths = sorted(
+        (os.path.join(directory, f) for f in os.listdir(directory)
+         if os.path.splitext(f)[1].lower() in valid_exts),
+        key=stack_sort_key,
+    )
+    images = [read_image_any_depth(path) for path in img_paths]
+    images = [img for img in images if img is not None]
+    return images, [os.path.basename(path) for path in img_paths]
 
 
 def get_imwrite_params(extension: str) -> list:

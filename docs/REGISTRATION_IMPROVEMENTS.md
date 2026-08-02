@@ -47,12 +47,12 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 8 | Homography, scale | Quality | Transforms are accepted on 6 matches with the RANSAC inlier mask discarded and no sanity check, and a bad one corrupts the whole chain after it - *fixed in 1.30.8* | Medium | Low | **100%** |
 | 9 | ECC | Robustness | Crashes outright on single-channel input, which `scale` and `homography` both handle - *fixed in 1.30.9* | Low | Trivial | **100%** |
 | 10 | scale, ECC | Performance | The GPU warp helper allocates 21x the frame size, regardless of frame size, with no fallback if that fails - *removed with the warp in 1.30.5* | Low | Low | **100%** |
-| 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
-| 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
+| 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code - *deleted in 1.30.10* | Low | Trivial | **100%** |
+| 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other - *fixed in 1.30.10* | Low | Low | **100%** |
 
-**Overall: 9 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
+**Overall: 11 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
 in 1.30.4, item 4 in 1.30.5 with item 10, item 5 in 1.30.6, item 7 in 1.30.7,
-item 8 in 1.30.8 and item 9 in 1.30.9.
+item 8 in 1.30.8, item 9 in 1.30.9, and items 11 and 12 in 1.30.10.
 That closes the GPU-path defects: there is one warp path now, so registration
 produces the same pixels on every machine and the "device" columns this document
 used to carry have nothing left to compare. It also closes the one item where
@@ -64,9 +64,11 @@ length no longer costs the picture anything. And with 1.30.8 a pair is chained
 on RANSAC's verdict rather than on a match count, so one bad pair is no longer
 a permanent offset on every frame after it. And 1.30.9 makes the three stages
 agree about their input: all three now take a grayscale stack, where ECC used to
-raise before it had measured anything - they still disagree about which file
-extensions they accept, which is item 12. What remains of consequence is a
-default worth changing, item 6.
+raise before it had measured anything. 1.30.10 finishes that sentence - the
+stages now accept the same file extensions as each other and as the rest of the
+app, so a folder of .tiff frames no longer aligns under `scale` and vanishes
+under `ecc` - and deletes the one stage nothing dispatched to. **What remains
+is a single item: a default worth changing, item 6.**
 
 ### The measurement everything else follows from
 
@@ -1333,7 +1335,7 @@ and it was never fixed on its own terms - it stopped existing.
 
 ## 11. `_stabilisation_impl` is unreachable code
 
-**Category: maintenance. Impact: low. Effort: trivial.**
+**Category: maintenance. Impact: low. Effort: trivial. Deleted in 1.30.10.**
 
 117 lines (`core/registration.py:1006-1122`) implementing a Lucas-Kanade
 trajectory-smoothing stabiliser. It is not in `SUPPORTED_METHODS`, not dispatched
@@ -1348,11 +1350,32 @@ this is a deletion, not a revival. The same applies to the commented-out
 `_registration_impl` and the four commented-out compatibility aliases below it,
 which reference an `_align_zoom_impl` that no longer exists.
 
+### Deleted in 1.30.10
+
+All of it: the 117 lines, the commented-out `_registration_impl` above them and
+the four commented-out aliases at the foot of the file, which is 150 lines out
+of `core/registration.py` and the last reference to `_align_zoom_impl` anywhere
+in the code. `re` and `glob` were imported for it and went with it - `re` had
+one other user, the sort key, which is now item 12's shared helper.
+
+There was nothing to measure and nothing to keep. The stabiliser was never
+reachable: it is not in `SUPPORTED_METHODS`, `resolve_stages` raises on any name
+that is not one of the four, and `_STAGE_ESTIMATORS` has three entries. What it
+would have done had it run is the argument against reviving it - a 30-frame
+moving average over the trajectory preserves the slow drift a focus stack most
+needs removed, then hides the border it creates behind a fixed 1.04 zoom crop,
+which is 8% of the frame thrown away at a magnification nobody asked for.
+
+**Guarded by** `tests/test_registration_stack_loading.py`, whose
+`TestDeadCodeIsGone` fails on each symbol individually - in the module and in
+the source text, since these survived as long as they did precisely by being
+commented out.
+
 ---
 
 ## 12. Three copy-pasted folder loaders that disagree
 
-**Category: robustness. Impact: low. Effort: low.**
+**Category: robustness. Impact: low. Effort: low. Fixed in 1.30.10.**
 
 The same ~12-line directory loader appears in `_align_scale_impl` (`:183-193`),
 `_align_homography_impl` (`:516-529`) and `_align_ecc_impl` (`:712-721`), plus a
@@ -1385,6 +1408,69 @@ still loads under `scale` and still loses every frame under `ecc` alone - the
 divergence is now one dict entry instead of three copies, which makes it visible
 rather than fixed. The sort with no fallback survives only in the dead
 `_stabilisation_impl` (item 11).
+
+### Fixed in 1.30.10 - and the list registration should agree with is not its own
+
+The three sets and the `_STAGE_EXTENSIONS` dict that indexed them are gone. The
+temptation was to add `.tiff` to ECC's copy and stop, which reconciles the two
+lists without answering why registration was keeping a list at all: the question
+"is this file a frame" is not the alignment stage's to answer, and every wrong
+answer it gave was an answer that disagreed with the loader standing behind it.
+`utils.image_utils.supported_input_extensions()` is what `read_image_any_depth`
+can actually decode, so the stages inherit it rather than restating it, and the
+optional backends report their own entries - a build without libjxl does not
+offer `.jxl` and then fail to read it.
+
+**What each stage accepts, then and now.** A folder of four frames, loaded by
+each stage from a directory path:
+
+| extension | scale, before | homography, before | ecc, before | all three, after |
+|---|---|---|---|---|
+| `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif` | 4 | 4 | 4 | 4 |
+| **`.tiff`** | 4 | 4 | **0** | **4** |
+| **`.webp`** | **0** | **0** | **0** | **4** |
+| **`.jxl`**, **`.dng`** | **0** | **0** | **0** | **4** (with the backend) |
+
+The `.tiff` row is the defect as this item states it. The three rows below it
+are the same defect the other way round: `.webp` has been a supported input
+everywhere else in the app for as long as `ImageStackLoader` has listed it, and
+JPEG XL and DNG since their backends landed, and registration's folder path
+silently dropped every one of them - a "no images found" on a folder the file
+dialog would have opened. Zero frames rather than a raised error, because
+`align_stack` returns the stack unchanged when it is handed fewer than two
+frames, so the alignment simply did not happen.
+
+**The sort is now type-stable**, which is the third of the three copy-pasted
+defects and the one that had outlived the copies. The key returned `int` for a
+numbered name and `str` for anything else, so a folder holding `img1.png` beside
+`cover.png` raised `TypeError: '<' not supported between instances of 'str' and
+'int'` - the same failure [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md)
+§13 records for the fusion loaders. `stack_sort_key` returns `(0, number, name)`
+or `(1, 0, name)`, so the two populations order against each other, numbered
+frames first and unnumbered ones alphabetically after them. Frame order within a
+numbered stack is unchanged, last-number-wins as before: `frame_2` still precedes
+`frame_10`, and `2024_shot_2` still precedes `2024_shot_10`.
+
+**The shared half of the fix is shared.** `supported_input_extensions`,
+`stack_sort_key` and `load_image_folder` sit in `utils/image_utils.py` next to
+the decoder they are derived from, not in `core/registration.py`, so
+ALGORITHM_IMPROVEMENTS §13 - the same defect in `dtcwt.py`, `pyramid.py`,
+`depthmap.py` and `dct.py` - is now a matter of adopting them rather than
+designing them again. Those four still carry their own copies; that item is open
+on its own terms.
+
+**Still low impact, and still worth doing.** Every in-app caller passes a
+preloaded list (`core/workers.py:96`, `:366`, `:381`, `:649`), which
+`_load_stack` hands straight back untouched, so nothing about a GUI render
+changes - this is the CLI and library path, where the failure was silent rather
+than loud.
+
+**Guarded by** `tests/test_registration_stack_loading.py`. It writes a real
+folder per extension and registers it through each stage, so reinstating the
+per-stage sets fails 7 of its 51 tests - the `.tiff` folder under ECC, `.webp`
+under all three, the mixed-extension folder, and the constants themselves, since
+the point of the item is that the stages stop being able to disagree. Restoring
+the sort key that returned a bare `int` or `str` fails 2 more.
 
 ---
 
@@ -1453,6 +1539,12 @@ the same way everywhere, so the advice below is the advice on every machine:
   frames after it stop inheriting the bad estimate - worth 3.92 -> 3.41 px over
   the tail of the stack where a mid-chain pair goes wrong. Watch the console:
   the stages now say which pairs they rejected and why.
+- **A folder path is safe to hand any stage** as of 1.30.10 (item 12). The
+  stages take the same extensions as each other and as the rest of the app, so
+  `.tiff`, `.webp`, JPEG XL and DNG folders all register under `ecc` as well as
+  under `scale`, where several of them used to load as zero frames and skip the
+  alignment silently. This is the CLI and library path only - the GUI has always
+  handed the stages decoded arrays.
 - **Pipeline length is no longer expensive** as of 1.30.7 (item 7). The stages
   compose into one warp and one crop, so a three-stage pipeline gives up the
   same 20% of the picture's high-frequency energy as a single stage and keeps

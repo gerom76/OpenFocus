@@ -25,17 +25,15 @@ python Registration.py --mode both
 
 
 import argparse
-import re
 import time
 import cv2
 import numpy as np
 import os
-import glob
 import sys
 from typing import Union, List, Optional
 
 from utils import bitdepth
-from utils.image_utils import read_image_any_depth
+from utils.image_utils import load_image_folder
 
 # Set standard output encoding to utf-8 when a console stream exists.
 #
@@ -188,24 +186,24 @@ def _to_gray(img):
 
 # ========== Stack loading ==========
 
-# The stages have never agreed on which extensions they accept - ECC's list is
-# missing '.tiff', so a folder of .tiff frames aligns under scale and
-# homography and silently loses every frame under ECC. That disagreement is
-# item 12 of docs/REGISTRATION_IMPROVEMENTS.md and is deliberately left
-# standing here: the loader itself is now written once, but the set it is
-# handed is still the set the stage in front of the pipeline used, so nothing
-# about the behaviour changes until item 12 is taken on its own terms.
-_FEATURE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
-_ECC_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tif'}
+# (docs/REGISTRATION_IMPROVEMENTS.md item 12)
+#
+# The stages used to carry a copy of this loader each, and the copies had
+# already drifted: ECC's extension list was missing '.tiff', so a folder of
+# .tiff frames aligned under `scale` and `homography` and silently lost every
+# frame under `ecc`. Item 7 (1.30.7) made it one loader by loading in front of
+# the pipeline, but it was still handed whichever stage's set the pipeline
+# started with, which moved the disagreement rather than removing it.
+#
+# There is one set now, and it is not registration's - `supported_input_extensions`
+# is the app's answer to "is this file a frame", derived from what
+# read_image_any_depth can actually decode, so the stages accept .webp, JPEG XL
+# and DNG as well and all three accept the same thing as each other. The sort
+# is the shared one too, whose key is type-stable, so a folder holding
+# `img1.png` beside `cover.png` orders rather than raising TypeError.
 
-_STAGE_EXTENSIONS = {
-    'scale': _FEATURE_EXTENSIONS,
-    'homography': _FEATURE_EXTENSIONS,
-    'ecc': _ECC_EXTENSIONS,
-}
 
-
-def _load_stack(input_source, img_filenames, valid_exts):
+def _load_stack(input_source, img_filenames):
     """Resolve a directory path or a preloaded list into (images, filenames).
 
     A caller that passes images (which every in-app caller does) gets them back
@@ -213,16 +211,7 @@ def _load_stack(input_source, img_filenames, valid_exts):
     """
     if img_filenames is not None or not isinstance(input_source, str):
         return input_source, img_filenames
-
-    num_pattern = re.compile(r"\d+")
-    img_paths = sorted(
-        (os.path.join(input_source, f) for f in os.listdir(input_source)
-         if os.path.splitext(f)[1].lower() in valid_exts),
-        key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1]) if num_pattern.findall(os.path.basename(x)) else x
-    )
-    images = [read_image_any_depth(path) for path in img_paths]
-    images = [img for img in images if img is not None]
-    return images, [os.path.basename(path) for path in img_paths]
+    return load_image_folder(input_source)
 
 
 # ========== Per-pair acceptance, shared by the two feature stages ==========
@@ -1241,9 +1230,7 @@ def align_stack(input_source, stages, output_path=None, img_filenames=None,
         list of aligned images
     """
     stages = tuple(stages)
-    images, img_filenames = _load_stack(
-        input_source, img_filenames,
-        _STAGE_EXTENSIONS[stages[0]] if stages else _FEATURE_EXTENSIONS)
+    images, img_filenames = _load_stack(input_source, img_filenames)
 
     if not stages or len(images) < 2:
         return images
@@ -1303,158 +1290,6 @@ def align_stack(input_source, stages, output_path=None, img_filenames=None,
                         bitdepth.prepare_for_write(img, os.path.splitext(fname)[1]))
 
     return aligned_images
-
-
-# ========== Stable registration algorithm implementation ==========
-
-def _stabilisation_impl(input_source, output_path=None, filenames=None):
-    """
-    Stabilize images from directory path or image list
-    Args:
-        input_source: string (directory path) or list of images
-        output_path: string, directory path to save results (optional, None means no saving)
-        filenames: list of original filenames (optional)
-    Returns:
-        list of stabilized images (always returns processed images regardless of output_path)
-    """
-    # Process input source
-    img_filenames = filenames  # Use passed filenames or detect from input
-    if isinstance(input_source, str):
-        img_paths = sorted(
-            [os.path.join(input_source, file) for file in os.listdir(input_source)
-             if os.path.splitext(file)[1].lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tif']],
-            key=lambda x: int(re.findall(r"\d+", os.path.basename(x))[-1])
-        )
-        images = [read_image_any_depth(path) for path in img_paths]
-        images = [img for img in images if img is not None]
-        # Store original filenames with extensions
-        img_filenames = [os.path.basename(path) for path in img_paths]
-    else:
-        images = input_source
-
-    n_frames = len(images)
-    img_first = images[0]
-    h, w = img_first.shape[:2]
-
-    prev_gray = cv2.cvtColor(img_first, cv2.COLOR_BGR2GRAY)
-    transforms = np.zeros((n_frames, 3), np.float32)
-
-    # Feature detection parameters
-    feature_params = dict(maxCorners=200, qualityLevel=0.01, minDistance=30, blockSize=3)
-    lk_params = dict(winSize=(15, 15), maxLevel=2, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
-
-    # Calculate transforms (frame i to frame i+1)
-    for i in range(n_frames - 1):
-        curr = images[i + 1]
-        curr_gray = cv2.cvtColor(curr, cv2.COLOR_BGR2GRAY)
-
-        prev_pts = cv2.goodFeaturesToTrack(prev_gray, **feature_params)
-        if prev_pts is None:
-            # If no feature points are found, use the previous transform
-            if i > 0:
-                transforms[i] = transforms[i-1]
-            continue
-            
-        curr_pts, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, prev_pts, None, **lk_params)
-
-        idx = status.ravel() == 1
-        prev_pts = prev_pts[idx]
-        curr_pts = curr_pts[idx]
-        
-        if len(prev_pts) < 4:
-            # If there are too few matching points, use the previous transform
-            if i > 0:
-                transforms[i] = transforms[i-1]
-            continue
-
-        m, _ = cv2.estimateAffinePartial2D(prev_pts, curr_pts)
-        if m is None:
-            # If estimation fails, use the previous transform
-            if i > 0:
-                transforms[i] = transforms[i-1]
-            continue
-            
-        dx, dy = m[0, 2], m[1, 2]
-        da = np.arctan2(m[1, 0], m[0, 0])
-
-        transforms[i] = [dx, dy, da]
-        prev_gray = curr_gray
-
-    # The last frame uses the same transform as the second-to-last frame
-    transforms[-1] = transforms[-2]
-
-    # Smooth trajectory
-    def smooth(trajectory, radius=30):
-        smoothed_trajectory = np.copy(trajectory)
-        kernel = np.ones(2 * radius + 1) / (2 * radius + 1)
-        padding = np.pad(trajectory, ((radius, radius), (0, 0)), 'edge')
-        for i in range(3):
-            smoothed_trajectory[:, i] = np.convolve(padding[:, i], kernel, mode='valid')
-        return smoothed_trajectory
-
-    trajectory = np.cumsum(transforms, axis=0)
-    smoothed_trajectory = smooth(trajectory)
-    difference = smoothed_trajectory - trajectory
-
-    # Apply transforms
-    stabilized_images = []
-    for i, frame in enumerate(images):
-        # Apply the corresponding difference correction to each frame
-        dx, dy, da = difference[i]
-        
-        m = np.array([
-            [np.cos(da), -np.sin(da), dx],
-            [np.sin(da), np.cos(da), dy]
-        ], dtype=np.float32)
-
-        frame_stabilized = cv2.warpAffine(frame, m, (w, h))
-        T = cv2.getRotationMatrix2D((w / 2, h / 2), 0, 1.04)
-        frame_stabilized = cv2.warpAffine(frame_stabilized, T, (w, h))
-        stabilized_images.append(frame_stabilized)
-
-        # Save results if output path is provided
-        if output_path:
-            if not os.path.exists(output_path):
-                os.makedirs(output_path)
-            # Use original filename if available, otherwise use default naming
-            if img_filenames:
-                output_file = os.path.join(output_path, img_filenames[i])
-            else:
-                output_file = os.path.join(output_path, f'frame_{i:04d}.png')
-            cv2.imwrite(output_file, frame_stabilized)
-
-    return stabilized_images
-
-
-# # ========== Combined registration algorithm implementation ==========
-
-# def _registration_impl(input_source, output_path=None):
-#     """
-#     Internal implementation of combined registration
-#     Args:
-#         input_source: string (directory path) or list of images
-#         output_path: string, directory path to save results (optional, None means no saving)
-#     Returns:
-#         list of registered images (always returns processed images regardless of output_path)
-#     """
-#     # Store original filenames if input is a directory
-#     img_filenames = None
-#     if isinstance(input_source, str):
-#         num_pattern = re.compile(r"\d+")
-#         img_paths = sorted(
-#             (os.path.join(input_source, f) for f in os.listdir(input_source)
-#              if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tif'}),
-#             key=lambda x: int(num_pattern.findall(os.path.basename(x))[-1])
-#         )
-#         img_filenames = [os.path.basename(path) for path in img_paths]
-    
-#     # Step 1: Coarse alignment using zoom
-#     zoom_aligned_images = _align_zoom_impl(input_source)
-    
-#     # Step 2: Fine registration using stabilisation
-#     final_images = _stabilisation_impl(zoom_aligned_images, output_path, img_filenames)
-    
-#     return final_images
 
 
 # ========== Unified interface class ==========
@@ -1618,24 +1453,6 @@ def register_images(input_source: Union[str, List[np.ndarray]],
     registration = ImageRegistration(method=method)
     return registration.process(input_source, output_path=output_path)
 
-
-# ========== Backward-compatible function aliases ==========
-
-# def image_stack_align_zoom(input_source, output_path=None):
-#     """Backward-compatible function aliases"""
-#     return _align_zoom_impl(input_source, output_path)
-
-# def image_stack_stabilisation(input_source, output_path=None, filenames=None):
-#     """Backward-compatible function aliases"""
-#     return _stabilisation_impl(input_source, output_path, filenames)
-
-# def image_stack_registration(input_source, output_path=None):
-#     """Backward-compatible function aliases"""
-#     return _registration_impl(input_source, output_path)
-
-# def process_image_stack(input_path, output_path=None):
-#     """Backward-compatible function aliases"""
-#     return _registration_impl(input_path, output_path)
 
 def main():
     """
