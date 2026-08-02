@@ -160,6 +160,8 @@ class TranslationManager(QObject):
                 'btn_roi': 'ROI',
                 'btn_zoom_100': '100%',
                 'tip_zoom_100': 'Zoom to 100% (actual size)',
+                'btn_zoom_fit': 'Fit',
+                'tip_zoom_fit': 'Zoom to fit the panel',
                 'btn_render_processing': '⏳ Processing...',
                 'btn_render_stopping': '⏳ Stopping...',
                 
@@ -756,6 +758,8 @@ class TranslationManager(QObject):
                 'btn_roi': '选择感兴趣区域',
                 'btn_zoom_100': '100%',
                 'tip_zoom_100': '缩放至 100%（实际大小）',
+                'btn_zoom_fit': '适应',
+                'tip_zoom_fit': '缩放以适应面板大小',
                 'btn_render_processing': '⏳ 处理中...',
                 'btn_render_stopping': '⏳ 正在停止...',
                 

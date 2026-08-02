@@ -180,6 +180,7 @@ class MagnifierLabel(QLabel):
     def reset_view(self):
         self._zoom_factor = 1.0
         self._pan_offset = QPointF(0, 0)
+        self._cached_scaled_pixmap = None
         if self._base_pixmap is None or self._base_pixmap.isNull():
             super().clear()
             self._last_cursor_state = None

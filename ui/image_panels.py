@@ -34,6 +34,7 @@ class ResultPanel:
     slider: QSlider
     info_label: QLabel
     zoom_100_btn: QPushButton
+    zoom_fit_btn: QPushButton
 
 
 def create_source_panel() -> SourcePanel:
@@ -118,17 +119,25 @@ def create_result_panel() -> ResultPanel:
     title.setStyleSheet("color: #aaa; background: transparent; border: none;")
     title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-    zoom_100_btn = QPushButton(trans.t('btn_zoom_100'))
-    zoom_100_btn.setToolTip(trans.t('tip_zoom_100'))
-    zoom_100_btn.setFixedHeight(19)
-    zoom_100_btn.setStyleSheet(
+    zoom_btn_style = (
         "QPushButton { background-color: #3a3a3a; color: #aaa; border: 1px solid #555; "
         "border-radius: 2px; padding: 0 6px; } "
         "QPushButton:hover { background-color: #444; color: #fff; }"
     )
 
+    zoom_fit_btn = QPushButton(trans.t('btn_zoom_fit'))
+    zoom_fit_btn.setToolTip(trans.t('tip_zoom_fit'))
+    zoom_fit_btn.setFixedHeight(19)
+    zoom_fit_btn.setStyleSheet(zoom_btn_style)
+
+    zoom_100_btn = QPushButton(trans.t('btn_zoom_100'))
+    zoom_100_btn.setToolTip(trans.t('tip_zoom_100'))
+    zoom_100_btn.setFixedHeight(19)
+    zoom_100_btn.setStyleSheet(zoom_btn_style)
+
     title_bar_layout.addWidget(title, 1)
     title_bar_layout.addWidget(zoom_100_btn)
+    title_bar_layout.addWidget(zoom_fit_btn)
 
     image_label = MagnifierLabel()
     image_label.setStyleSheet("background-color: #222;")
@@ -167,4 +176,5 @@ def create_result_panel() -> ResultPanel:
         slider=slider,
         info_label=info_label,
         zoom_100_btn=zoom_100_btn,
+        zoom_fit_btn=zoom_fit_btn,
     )

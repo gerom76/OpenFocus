@@ -259,6 +259,8 @@ class OpenFocus(QMainWindow):
         self.lbl_result_img.doubleClicked.connect(self.toggle_source_panel)
         self.btn_zoom_100 = result_panel.zoom_100_btn
         self.btn_zoom_100.clicked.connect(self.lbl_result_img.zoom_to_100)
+        self.btn_zoom_fit = result_panel.zoom_fit_btn
+        self.btn_zoom_fit.clicked.connect(self.lbl_result_img.reset_view)
 
         self.lbl_source_img.enterPreview.connect(self._on_enter_source_preview)
         self.lbl_source_img.leavePreview.connect(self._on_leave_source_preview)
