@@ -11,6 +11,7 @@ from constants import (
     PYRAMID_BASE_DEFAULT, PYRAMID_COHERENCE_DEFAULT, PYRAMID_SELECTIVITY_DEFAULT,
 )
 from core import contrast
+from core.app import OpenFocusApplication
 from dialogs import DurationDialog, ExportFormatDialog
 from ui.styles import PROGRESS_DIALOG_STYLE
 from utils import (
@@ -370,7 +371,8 @@ class ExportManager:
 
     def generate_default_filename(self) -> str:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"OpenFocus_{timestamp}_{self._fusion_suffix()}_{self._registration_suffix()}"
+        version = OpenFocusApplication.VERSION
+        return f"OpenFocus_{version}_{timestamp}_{self._fusion_suffix()}_{self._registration_suffix()}"
 
     def _suggested_output_name(self) -> str:
         """Prefer the name of the selected output entry, so saving matches the list."""
@@ -384,12 +386,13 @@ class ExportManager:
     def generate_default_foldername(self) -> str:
         window = self.window
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        version = OpenFocusApplication.VERSION
 
         folder_basename = "OpenFocus_Stack"
         if getattr(window, "current_folder_path", None):
             folder_basename = os.path.basename(window.current_folder_path)
 
-        return f"{folder_basename}_{timestamp}_{self._fusion_suffix()}_{self._registration_suffix()}"
+        return f"{folder_basename}_{version}_{timestamp}_{self._fusion_suffix()}_{self._registration_suffix()}"
 
     # ------------------------------------------------------------------
     # Export helpers
