@@ -221,6 +221,8 @@ Access additional settings via **Settings → Registration**:
 - **Downscale Width**: Control preprocessing resolution (default: 1024px)
 - Lower values = faster processing, potentially lower accuracy
 - Higher values = slower processing, potentially higher accuracy
+- Setting it to the full width of your frames aligns at full resolution. Before
+  1.30.6 the setting was ignored on frames of 2048px or more.
 
 #### Reference Frame
 
@@ -423,7 +425,8 @@ Access via **Settings → Registration**:
 
 - **Downscale Width**: Preprocessing resolution for registration
   - Default: 1024px
-  - Lower for speed, higher for accuracy
+  - Lower for speed, higher for accuracy — honoured at every image size since
+    1.30.6; values above the frame width mean full-resolution alignment
 - **Reference Frame**: Frame held fixed during alignment — **First** (default),
   **Middle**, or **Last**. Middle minimises accumulated drift on long stacks.
 

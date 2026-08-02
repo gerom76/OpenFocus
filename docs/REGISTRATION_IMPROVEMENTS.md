@@ -41,7 +41,7 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 2 | Homography | Quality | The 8-DOF fit is less accurate than not registering at all on both handheld samples; the two extra degrees of freedom fit nothing but noise - *fixed in 1.30.3* | High | Medium | **100%** |
 | 3 | all | Quality | The reference frame is the only frame never resampled, so the focus measure sources 4-21x more of the picture from it than it should - *fixed in 1.30.4* | High | Low | **100%** |
 | 4 | scale, ECC | Quality | GPU warping is bilinear where CPU warping is Lanczos4: 44% of the high-frequency energy lost, for almost no speed - *fixed in 1.30.5* | High | Low | **100%** |
-| 5 | all | Robustness | `downscale_width` is silently overridden to 1024 for any frame >= 2048 px, i.e. for every real camera file - the exposed setting does nothing | Medium | Trivial | 0% |
+| 5 | all | Robustness | `downscale_width` is silently overridden to 1024 for any frame >= 2048 px, i.e. for every real camera file - the exposed setting does nothing - *fixed in 1.30.6* | Medium | Trivial | **100%** |
 | 6 | all | Quality | The reference frame defaults to `first`, though `middle` is better on every pipeline and every scene measured, and keeps more pixels | Medium | Trivial | 0% |
 | 7 | all | Quality | Each stage is its own resample and its own crop, so the three-stage pipeline interpolates three times and throws away a further 10% of the frame | Medium | Medium | 0% |
 | 8 | Homography, scale | Quality | Transforms are accepted on 6 matches with the RANSAC inlier mask discarded and no sanity check, and a bad one corrupts the whole chain after it | Medium | Low | 0% |
@@ -50,12 +50,15 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
 | 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
 
-**Overall: 5 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
-in 1.30.4, item 4 in 1.30.5, and item 10 goes with it. That closes the GPU-path
-defects: there is one warp path now, so registration produces the same pixels on
-every machine and the "device" columns this document used to carry have nothing
-left to compare. What remains is ordinary work - a setting that does nothing
-(item 5), a default worth changing (item 6), and the structural one, item 7.
+**Overall: 6 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
+in 1.30.4, item 4 in 1.30.5 with item 10, and item 5 in 1.30.6. That closes the
+GPU-path defects: there is one warp path now, so registration produces the same
+pixels on every machine and the "device" columns this document used to carry
+have nothing left to compare. It also closes the one item where the code
+ignored the user - `downscale_width` is now honoured at every frame size, which
+is worth up to 1.75x of geometric accuracy on a full-size stack for anyone
+willing to pay the time. What remains is a default worth changing (item 6) and
+the structural one, item 7.
 
 ### The measurement everything else follows from
 
@@ -675,7 +678,7 @@ nothing left for it to run twice.
 
 ## 5. `downscale_width` is silently overridden for every real camera file
 
-**Category: robustness. Impact: medium. Effort: trivial.**
+**Category: robustness. Impact: medium. Effort: trivial. Fixed in 1.30.6.**
 
 All three stages carry the same block (`core/registration.py:205-208`, `:541-548`,
 `:732-738`):
@@ -719,6 +722,84 @@ anyone who has not touched the setting while letting the setting mean something 
 or, better, to remove the override and let the value stand, since it exists
 precisely so the user can make this trade. Either way the three copies should
 become one helper.
+
+### Fixed in 1.30.6, by the second route - the cap only half-fixes it
+
+The override is gone rather than capped, and the three copies are one
+`_resolve_detection_width`. The cap was the safer-sounding option and it is the
+wrong one: it leaves a user who raises the setting for a difficult stack in
+exactly the position this item describes, silently getting 1024 while believing
+they asked for more, and the measurements below are precisely the accuracy that
+half of the range was hiding. Nothing is lost by removing it, because
+`REG_DOWNSCALE_WIDTH`, `openfocus.cfg.json` and `ImageRegistration` all default
+to 1024 already - a user who has not touched the setting gets the same detection
+resolution as before, and now gets it because it is the default rather than
+because the value was overwritten.
+
+The three stage defaults were inconsistent behind the override - 1600 for
+`scale` and `homography`, 1000 for `ECC` - and are now the one
+`DEFAULT_DETECTION_WIDTH = 1024` the app ships. That is only reachable from
+library and CLI use; every in-app caller passes the setting explicitly.
+
+**What the setting is worth**, on a stack large enough that the override used to
+fire. Neither scene carrying a per-frame affine is that big - 640 and 1280 px -
+so the measurement runs on `flower01_subject_hires` (2560x1430) put through the
+same breathing/drift affine `samples/generate_samples.py` applies to
+`handheld_drift`, which makes the ground truth exact at full size. Every row
+below was the same number before the fix, because every row was detected at
+1024:
+
+| pipeline | 512 | 1024 (what you used to get) | 2048 | 2560 = full resolution |
+|---|---|---|---|---|
+| scale | 3.65 px | 6.77 px | 5.47 px | **4.80 px** |
+| homography | 3.65 px | 6.77 px | 5.47 px | **4.04 px** |
+| ecc | 12.54 px | 12.98 px | 11.49 px | **10.34 px** |
+| both (hom+ecc) | 13.06 px | 13.34 px | 11.26 px | **9.53 px** |
+| scale+hom | 4.48 px | 5.05 px | 3.19 px | **2.89 px** |
+| scale+ecc | 13.06 px | 13.34 px | 11.26 px | **9.50 px** |
+| scale+hom+ecc | 13.17 px | 13.63 px | 10.85 px | **9.11 px** |
+
+Full-resolution detection beats the forced 1024 on all seven pipelines, by
+1.26x to 1.75x, and a second noise seed (`--seed 313`) reproduces that on all
+seven. **The intermediate columns do not order themselves**, and the 512 column
+is the honest illustration of why: it beats 1024 on this seed and loses to it on
+the other, because at that reduction SIFT is finding a different, smaller set of
+keypoints rather than the same ones less precisely. So this is not a "more is
+better" dial below full resolution - what the measurement supports is that 1024
+is not the best value on a full-size frame, not that the error falls smoothly as
+the width rises.
+
+Above the frame width nothing changes: `_detection_scale` never upsamples, so
+4096 and 2560 are the same run on a 2560 px frame, to the last digit.
+
+**What it costs.** Full-resolution detection is roughly 2x the stage time for
+the feature-based stages and 3.4x for ECC, on 14 frames of 2560x1430:
+
+| pipeline | 1024 | full resolution |
+|---|---|---|
+| scale | 1.10s | 2.76s |
+| homography | 1.46s | 2.62s |
+| ecc | 1.65s | 5.55s |
+| scale+hom+ecc | 3.97s | 10.09s |
+
+That is the trade the setting exists to offer, and it is now the user's to make.
+The default does not move: 1024 stays the shipped value, so nobody pays this
+without asking for it.
+
+**The table this item opens with, re-run.** Running `scale` on
+`samples/flower01_subject_hires` at each setting used to give 2555x1422 four
+times over, byte-identical across an 8x range; it now gives 2543x1405,
+2550x1414, 2555x1419 and 2551x1422 for 512, 1024, 2048 and 4096 - four different
+alignments, which is what a setting that does something looks like.
+
+**Guarded by** `tests/test_registration_downscale_width.py`. It records the
+width each stage actually resamples to before SIFT or ECC sees it, on a frame
+over the old 2048 threshold, and asserts it is the width the caller asked for -
+including a width large enough that no downscaling happens at all, which the
+override made unreachable. Reinstating the override fails 20 of its 39 tests,
+among them the accuracy assertion that full-resolution detection is materially
+better than detection at 1024 on a large frame, which is the whole of what the
+setting buys.
 
 ---
 
@@ -1027,7 +1108,11 @@ the same way everywhere, so the advice below is the advice on every machine:
   where the camera may have tilted between frames - it now falls back to the
   same constrained model `scale` fits wherever the perspective is not real
   (item 2). It is still not worth stacking on top of `scale` for its own sake.
-- Ignore the `downscale_width` setting; it does nothing on real files (item 5).
+- **The `downscale_width` setting works** as of 1.30.6, on real camera files as
+  well as small ones (item 5). Leave it at 1024 unless a stack is misbehaving;
+  raising it to the frame width is worth 1.26x to 1.75x of geometric accuracy on
+  a 2560 px stack, for roughly twice the stage time - and lowering it now
+  genuinely buys speed rather than being ignored.
 - **Nothing needs doing about the anchor frame** as of 1.30.4: every frame is
   now resampled once, so the focus measure no longer prefers whichever frame the
   alignment happened to be anchored on (item 3).
@@ -1062,6 +1147,10 @@ python tests/benchmark_registration.py --selection
 # the reference-frame comparison (item 6)
 python tests/benchmark_registration.py --reference middle
 
+# geometric error against the detection width, full-size stack (item 5)
+python tests/benchmark_registration.py --detection-width
+python tests/benchmark_registration.py --detection-width --seed 313 --widths 1024,2560
+
 # one scene, one setting
 python tests/benchmark_registration.py --scene flower01_handheld --downscale-width 2048
 ```
@@ -1070,6 +1159,14 @@ The scenes are `samples/handheld_drift` and `samples/flower01_handheld`,
 regenerated deterministically by `python samples/generate_samples.py`. They are
 the only two that carry `per_frame_affine`, which is what makes the geometric
 error exact; `--scene` on any other name reports that and skips.
+
+`--detection-width` is the exception, because both of those scenes are smaller
+than the 2048 px the override triggered on. It builds its own stack instead -
+the frames of `samples/flower01_subject_hires` (2560x1430) put through the same
+`breathing_transform` the sample generator applies to `handheld_drift`, so the
+ground truth is exact at a size a camera actually produces. `--seed` changes the
+noise, which is how the ordering of the intermediate widths was found to be
+unstable while the full-resolution column was not.
 
 Everything runs once now. The `--devices` flag and the device column in all
 three tables went with item 4: there is one warp path, so there is no second
@@ -1081,7 +1178,8 @@ The existing contract tests remain the guard against regression:
 python -m pytest tests/test_registration_scale.py tests/test_registration_reference.py \
                 tests/test_registration_warp_kernel.py \
                 tests/test_registration_homography_model.py \
-                tests/test_registration_reference_resample.py -v
+                tests/test_registration_reference_resample.py \
+                tests/test_registration_downscale_width.py -v
 ```
 
 The first two would not catch item 4 - `test_registration_scale.py` asserts
@@ -1113,3 +1211,13 @@ share on the real scenes against `focus_index.png`, skipping where `samples/`
 has not been generated, and that registering with and without the offset crops
 identically and aligns equally well - which is what makes the shared offset a
 resample rather than a misalignment.
+
+The sixth arrived with item 5's fix and is the one guard here that needs a frame
+larger than any sample scene: it builds a 2176 px stack, over the threshold the
+override fired on, and records the width each stage actually resamples to before
+SIFT or ECC reads it. That number has to be the width the caller asked for, at
+every setting including one large enough to skip the downscale entirely.
+Reinstating the override fails 20 of its 39 tests - the recorded widths, the two
+settings that must now give two different results, and the accuracy assertion
+that full-resolution detection beats detection at 1024 on a large frame. It
+needs no samples and skips nowhere.

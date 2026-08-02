@@ -17,15 +17,17 @@ which is the misregistration in output pixels and is independent of cropping.
 ``H_i`` is read back by wrapping the crop helper every stage calls, so the
 numbers describe the code as it runs rather than a reimplementation of it.
 
-Three modes:
+Four modes:
 
 * --accuracy (default) - geometric error of each pipeline, against ground truth
 * --quality             - registration -> fusion -> PSNR/SSIM against the
                           scene's own all-in-focus image
 * --selection           - which frame the focus measure picks after each
                           pipeline, against the scene's focus_index map
+* --detection-width     - geometric error against the width the transform is
+                          measured at, on a full-size stack (item 5)
 
-There used to be a fourth, --devices, which ran everything twice: once with the
+There used to be a fifth, --devices, which ran everything twice: once with the
 CuPy warp path and once without. It is gone with the path (item 4), and with it
 the device column every table used to carry - registration now produces the same
 pixels on every machine, so there are no longer two answers to report.
@@ -35,6 +37,7 @@ Examples:
     python tests/benchmark_registration.py --scene flower01_handheld
     python tests/benchmark_registration.py --quality
     python tests/benchmark_registration.py --selection --reference middle
+    python tests/benchmark_registration.py --detection-width
 """
 
 import argparse
@@ -136,6 +139,39 @@ def load_scene(name):
     focus_index = cv2.imread(os.path.join(gt_dir, "focus_index.png"), cv2.IMREAD_UNCHANGED)
 
     return frames, affines, all_in_focus, focus_index, meta
+
+
+# The detection width only ever did anything below 2048 px, because above it the
+# stages replaced the caller's value with 1024 (item 5). Neither scene carrying
+# a per-frame affine is that large - 640 and 1280 px - so measuring what the
+# setting is worth on a real camera file needs a full-size stack with exact
+# geometric truth, which is built here rather than shipped: the frames of
+# flower01_subject_hires (2560x1430) put through the same breathing/drift affine
+# samples/generate_samples.py applies to handheld_drift.
+HIRES_SOURCE = "flower01_subject_hires"
+
+
+def build_hires_drift(seed=909, noise=1.2, drift=1.0):
+    """Return (frames, affines) for a 2560 px stack with known ground truth."""
+    from samples.generate_samples import breathing_transform
+
+    frame_dir = os.path.join(ROOT, "samples", HIRES_SOURCE, "frames")
+    if not os.path.isdir(frame_dir):
+        raise SystemExit(f"{HIRES_SOURCE} not found - run python samples/generate_samples.py")
+
+    names = sorted(f for f in os.listdir(frame_dir) if f.lower().endswith(".png"))
+    rng = np.random.default_rng(seed)
+    frames, affines = [], []
+    for index, name in enumerate(names):
+        img = cv2.imread(os.path.join(frame_dir, name), cv2.IMREAD_UNCHANGED)
+        h, w = img.shape[:2]
+        matrix = breathing_transform((h, w), index, len(names), drift)
+        warped = cv2.warpAffine(img.astype(np.float32), matrix, (w, h),
+                                flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT)
+        warped += rng.normal(0.0, noise, warped.shape).astype(np.float32)
+        frames.append(np.clip(warped, 0, 255).astype(np.uint8))
+        affines.append(np.vstack([matrix, [0.0, 0.0, 1.0]]))
+    return frames, affines
 
 
 # ------------------------------------------------------------------ metrics
@@ -275,6 +311,36 @@ def report_selection(scene, args):
         print(f"    {label:<18}{share:7.1f}%{ratio:>10}")
 
 
+def report_detection_width(args):
+    """What the detection width buys, on a frame large enough to have been overridden."""
+    frames, affines = build_hires_drift(seed=args.seed)
+    shape = frames[0].shape[:2]
+    reference_index = resolve_reference_index(args.reference, len(frames))
+    baseline = residual_px([np.eye(3)] * len(frames), affines, shape, reference_index)
+
+    widths = [int(w) for w in args.widths.split(",")]
+    print(f"\n### {HIRES_SOURCE} + per-frame affine  {shape[1]}x{shape[0]}, "
+          f"{len(frames)} frames, reference={args.reference}")
+    print(f"    unregistered: mean {np.mean(baseline):5.2f} px, "
+          f"worst {np.max(baseline):5.2f} px")
+    print("    detection above the frame width is full-resolution detection - "
+          "the frames are never upsampled")
+    print(f"    {'pipeline':<14}{'width':>7}{'mean px':>10}{'worst px':>10}"
+          f"{'gain':>7}{'time':>8}{'kept':>8}")
+    for stages, label in PIPELINES:
+        if not stages:
+            continue
+        for width in widths:
+            images, composed, elapsed = run_pipeline(
+                frames, stages, width, reference_index)
+            residual = residual_px(composed, affines, shape, reference_index)
+            kept = 100.0 * images[0].shape[0] * images[0].shape[1] / (shape[0] * shape[1])
+            print(f"    {label:<14}{width:>7}{np.mean(residual):10.2f}"
+                  f"{np.max(residual):10.2f}"
+                  f"{np.mean(baseline) / np.mean(residual):6.2f}x"
+                  f"{elapsed:7.2f}s{kept:7.1f}%")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Registration accuracy benchmark against sample ground truth")
@@ -286,15 +352,26 @@ def main():
                         help="fused PSNR/SSIM against all_in_focus.png")
     parser.add_argument("--selection", action="store_true",
                         help="which frame the focus measure picks, vs focus_index.png")
+    parser.add_argument("--detection-width", action="store_true", dest="detection_width",
+                        help="sweep the detection width on a full-size stack (item 5)")
     parser.add_argument("--reference", default="first",
                         choices=["first", "middle", "last"], help="reference frame mode")
     parser.add_argument("--downscale-width", type=int, default=1024, dest="downscale_width",
-                        help="detection width (overridden to 1024 for frames >= 2048 px)")
+                        help="detection width, honoured at every frame size")
+    parser.add_argument("--widths", default="512,1024,2048,4096",
+                        help="widths swept by --detection-width")
+    parser.add_argument("--seed", type=int, default=909,
+                        help="noise seed for the stack --detection-width builds")
     parser.add_argument("--method", default="pyramid", help="fusion method for --quality")
     args = parser.parse_args()
 
-    if not (args.accuracy or args.quality or args.selection):
+    if not (args.accuracy or args.quality or args.selection or args.detection_width):
         args.accuracy = True
+
+    if args.detection_width:
+        report_detection_width(args)
+        if not (args.accuracy or args.quality or args.selection):
+            return 0
 
     scenes = [args.scene] if args.scene else list(HANDHELD_SCENES)
     for scene in scenes:

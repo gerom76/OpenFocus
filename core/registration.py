@@ -101,9 +101,54 @@ def _warp_frame(img, H_final, target_w, target_h):
                                borderMode=cv2.BORDER_CONSTANT)
 
 
+# ========== Detection resolution ==========
+
+# Width the frames are downsampled to before a transform is measured on them.
+# Only the *measurement* happens at this size - the transform is rescaled and
+# applied to the full-resolution frame - so this is a straight trade of
+# detection accuracy against time, which is why it is exposed as a setting.
+#
+# The three stages used to assign this value themselves: any frame whose longer
+# side reached 2048 px had the requested width replaced by 1024, unconditionally
+# rather than as a cap. Since that fires on every frame from any camera made
+# this century, the setting was inert on real input - raising it to 2048 for a
+# difficult stack and lowering it to 512 for speed both produced byte-identical
+# output. The override is gone; the value the caller passes is the value used.
+# 1024 is what the app, its config file and ImageRegistration have always
+# defaulted to, so a user who has not touched the setting sees no change.
+DEFAULT_DETECTION_WIDTH = 1024
+
+
+def _resolve_detection_width(downscale_width, h_orig, w_orig, tag):
+    """Detection width for one stage, as asked for rather than as overridden.
+
+    Args:
+        downscale_width: the value the caller passed, possibly None or invalid
+        h_orig, w_orig: frame size, for the log line only
+        tag: stage name for the log line
+
+    Returns:
+        int width to downsample to before detecting features.
+    """
+    try:
+        width = int(downscale_width)
+    except (TypeError, ValueError):
+        width = 0
+    if width <= 0:
+        width = DEFAULT_DETECTION_WIDTH
+    print(f"[Registration][{tag}] Frame {w_orig}x{h_orig}, detecting at {width} px")
+    return width
+
+
+def _detection_scale(width, downscale_width):
+    """Factor a frame of this width is resampled by for detection (<= 1.0)."""
+    return downscale_width / float(width) if width > downscale_width else 1.0
+
+
 # ========== Scale / focus-breathing correction (similarity) ==========
 
-def _align_scale_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4,
+def _align_scale_impl(input_source, output_path=None, img_filenames=None,
+                      downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
                       reference_index: int = 0):
     """
     Focus-breathing (magnification) correction via a similarity transform.
@@ -156,12 +201,7 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None, downsc
 
     # --- 2. Initialization ---
     h_orig, w_orig = images[0].shape[:2]
-    # Match the other methods: cap the detection resolution for very large frames.
-    max_dim = max(h_orig, w_orig)
-    if max_dim >= 2048:
-        prev_down = downscale_width
-        downscale_width = 1024
-        print(f"[Registration][Scale] Large image detected ({h_orig}x{w_orig}), setting downscale_width {prev_down} -> {downscale_width}")
+    downscale_width = _resolve_detection_width(downscale_width, h_orig, w_orig, "Scale")
 
     # Global accumulated matrix maps the current frame back to frame 0.
     H_global = np.eye(3, dtype=np.float32)
@@ -175,7 +215,7 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None, downsc
         # An independent detector per thread keeps this thread-safe.
         local_detector = cv2.SIFT_create()
         h, w = img.shape[:2]
-        scale = downscale_width / float(w) if w > downscale_width else 1.0
+        scale = _detection_scale(w, downscale_width)
         if scale < 1.0:
             img_small = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
         else:
@@ -632,7 +672,8 @@ def _select_pair_transform(pts_curr, pts_last):
     return H_sim, "similarity"
 
 
-def _align_homography_impl(input_source, output_path=None, img_filenames=None, downscale_width=1600, thread_count: int = 4,
+def _align_homography_impl(input_source, output_path=None, img_filenames=None,
+                           downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
                            reference_index: int = 0):
     """
     Optimized commercial-grade image-alignment algorithm
@@ -675,17 +716,8 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
 
     # --- Initialization ---
     h_orig, w_orig = images[0].shape[:2]
-    # If a single image is too large (any side >= 2048), force the target width used for downsampling to 1024
-    max_dim = max(h_orig, w_orig)
-    if max_dim >= 2048:
-        try:
-            # Record the previous value for debugging
-            prev_down = downscale_width
-        except NameError:
-            prev_down = None
-        downscale_width = 1024
-        print(f"[Registration] Large image detected ({h_orig}x{w_orig}), setting downscale_width {prev_down} -> {downscale_width}")
-    
+    downscale_width = _resolve_detection_width(downscale_width, h_orig, w_orig, "Homography")
+
     # Global accumulated matrix (used to map the current frame directly back to frame 0)
     H_global = np.eye(3, dtype=np.float32)
     
@@ -701,7 +733,7 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         # Create an independent detector in each thread to ensure thread safety
         local_detector = cv2.SIFT_create()
         h, w = img.shape[:2]
-        scale = downscale_width / float(w) if w > downscale_width else 1.0
+        scale = _detection_scale(w, downscale_width)
         if scale < 1.0:
             # INTER_LINEAR is faster and usually good enough for feature detection
             img_small = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
@@ -835,7 +867,8 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
 
 # ========== ECC alignment algorithm implementation (high precision) ==========
 
-def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscale_width=1000, thread_count: int = 4,
+def _align_ecc_impl(input_source, output_path=None, img_filenames=None,
+                    downscale_width=DEFAULT_DETECTION_WIDTH, thread_count: int = 4,
                     parallel_ecc: bool = True, reference_index: int = 0):
     """
     High-precision image-stack alignment algorithm based on ECC (Enhanced Correlation Coefficient)
@@ -869,16 +902,8 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
 
     # --- 2. Initialization ---
     h_orig, w_orig = images[0].shape[:2]
-    # If a single image is too large (any side >= 2048), force the target width used for downsampling to 1024
-    max_dim = max(h_orig, w_orig)
-    if max_dim >= 2048:
-        try:
-            prev_down = downscale_width
-        except NameError:
-            prev_down = None
-        downscale_width = 1024
-        print(f"[Registration][ECC] Large image detected ({h_orig}x{w_orig}), setting downscale_width {prev_down} -> {downscale_width}")
-    
+    downscale_width = _resolve_detection_width(downscale_width, h_orig, w_orig, "ECC")
+
     # Global transform matrix (3x3 identity matrix)
     H_global = np.eye(3, dtype=np.float32)
     
@@ -896,7 +921,7 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
     # Preprocessing function: to grayscale + downsampling + Gaussian blur
     def preprocess(img):
         h, w = img.shape[:2]
-        scale = downscale_width / float(w) if w > downscale_width else 1.0
+        scale = _detection_scale(w, downscale_width)
         if scale < 1.0:
             small_img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         else:
@@ -1232,13 +1257,18 @@ class ImageRegistration:
     
     SUPPORTED_METHODS = ['scale', 'homography', 'ecc', 'both']
 
-    def __init__(self, method: str = 'homography', downscale_width: int = 1024, ecc_parallel: bool = True,
+    def __init__(self, method: str = 'homography', downscale_width: int = DEFAULT_DETECTION_WIDTH,
+                 ecc_parallel: bool = True,
                  reference_index: int = 0):
         """
         Initialize the registrar
 
         Args:
             method (str): registration method name, one of 'scale', 'homography', 'ecc', 'both'
+            downscale_width (int): width the frames are downsampled to before a
+                transform is measured on them. Honoured at any frame size - the
+                stages no longer replace it with 1024 on large input - so it is
+                a real trade of detection accuracy against time.
             ecc_parallel (bool): Compute ECC pair matrices concurrently (identical results, faster)
             reference_index (int): index of the frame held fixed during alignment.
                 0 (the default) keeps the historical behaviour of referencing the
@@ -1252,7 +1282,8 @@ class ImageRegistration:
 
         self.method = method
         # User-configurable downsampling width, used in preprocessing stages such as feature extraction
-        self.downscale_width = int(downscale_width) if downscale_width is not None else 1024
+        self.downscale_width = (int(downscale_width) if downscale_width is not None
+                                else DEFAULT_DETECTION_WIDTH)
         self.ecc_parallel = bool(ecc_parallel)
         # Frame that stays fixed while the others align onto it (0 = first frame).
         self.reference_index = int(reference_index) if reference_index is not None else 0

@@ -409,12 +409,17 @@ class TranslationManager(QObject):
         registration features. Smaller values can speed up feature detection and reduce
         memory usage, but may sacrifice some geometric accuracy.</p>
 
-        <p>Recommended values: Use <code>1024</code> for large images (>=2048px),
-        <code>1600</code> for medium images. Only set higher values when maximum
-        registration accuracy is needed and you have sufficient CPU/GPU resources.</p>
+        <p>The value is used as set, at any image size. Up to version 1.30.5 it was
+        silently replaced by 1024 whenever the longer side of a frame reached 2048px,
+        which is every file from a modern camera, so the setting did nothing on real
+        input.</p>
 
-        <p>Lowering this value speeds up registration and reduces memory usage;
-        increasing it can improve accuracy for very detailed images but increases runtime.</p>
+        <p><code>1024</code>, the default, is a good balance. Setting it to the full
+        width of your frames measures the alignment at full resolution, which was worth
+        1.3x to 1.8x better geometric accuracy on a 2560px test stack for roughly twice
+        the registration time. Lowering it speeds registration up and reduces memory
+        use, at the cost of accuracy. Values above the frame width behave the same as
+        the frame width - the frames are never upsampled.</p>
 
         <h3>Parallel ECC Computation</h3>
         <p>Computes the ECC transform between each pair of adjacent frames concurrently
@@ -1143,9 +1148,9 @@ class TranslationManager(QObject):
                 'dialog_reg_help_text': '''<h3>下采样宽度</h3>
         <p>downscale_width 控制在提取配准特征时的预处理（下采样）宽度。较小的值可以加快特征检测速度并减少内存使用，但可能会牺牲一些几何精度。</p>
 
-        <p>推荐值：对于大图像（>=2048px）使用 <code>1024</code>，对于中等图像使用 <code>1600</code>。仅在需要最大配准精度且有足够的CPU/GPU资源时才将其设置得更高。</p>
+        <p>该值在任何图像尺寸下都会按设置生效。在 1.30.5 及更早版本中，只要帧的长边达到 2048px（即所有现代相机文件），此值都会被悄悄替换为 1024，因此该设置对真实输入毫无作用。</p>
 
-        <p>降低此值可加速配准并减少内存使用；增加此值可以提高非常精细图像的准确性，但会增加运行时间。</p>
+        <p>默认值 <code>1024</code> 是较好的折中。将其设为帧的完整宽度即在全分辨率下测量对齐，在 2560px 测试图像栈上可将几何精度提高 1.3 至 1.8 倍，代价约为两倍的配准时间。降低该值可加快配准并减少内存占用，但会损失精度。大于帧宽度的值与帧宽度等效——帧永远不会被放大。</p>
 
         <h3>并行 ECC 计算</h3>
         <p>在多个 CPU 核心上并发计算相邻帧之间的 ECC 变换。结果与串行计算完全一致，
