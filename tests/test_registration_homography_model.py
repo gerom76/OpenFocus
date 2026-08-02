@@ -186,7 +186,7 @@ class TestModelChoice:
         H = _similarity(1.012, 0.6, 4.0, -3.0, 1280, 720)
         src, dst = _matches(H, seed=1)
 
-        _M, model = _select_pair_transform(src, dst)
+        _M, model, _mask = _select_pair_transform(src, dst)
 
         assert model == "similarity", (
             "a zoom-roll-shift pair has no perspective in it; fitting 8 DOF to "
@@ -196,7 +196,7 @@ class TestModelChoice:
         H = _tilt(np.deg2rad(0.5), np.deg2rad(0.2), 1280, 720)
         src, dst = _matches(H, seed=2)
 
-        M, model = _select_pair_transform(src, dst)
+        M, model, _mask = _select_pair_transform(src, dst)
 
         assert model == "homography", (
             "the stage still has to fit perspective where the camera really tilted")
@@ -210,14 +210,14 @@ class TestModelChoice:
         H = _tilt(np.deg2rad(0.5), np.deg2rad(0.2), 1280, 720)
         src, dst = _matches(H, n=10, outliers=0, seed=3)
 
-        _M, model = _select_pair_transform(src, dst)
+        _M, model, _mask = _select_pair_transform(src, dst)
 
         assert model == "similarity"
 
     def test_a_pair_with_no_usable_motion_still_returns_a_matrix(self):
         src, dst = _matches(np.eye(3), n=40, noise=0.5, seed=4)
 
-        M, model = _select_pair_transform(src, dst)
+        M, model, _mask = _select_pair_transform(src, dst)
 
         assert model in ("similarity", "homography")
         assert M is not None and np.all(np.isfinite(M))

@@ -184,6 +184,80 @@ def _load_stack(input_source, img_filenames, valid_exts):
     return images, [os.path.basename(path) for path in img_paths]
 
 
+# ========== Per-pair acceptance, shared by the two feature stages ==========
+
+# --- (docs/REGISTRATION_IMPROVEMENTS.md item 8) ------------------------------
+#
+# A pair used to be accepted on the number of matches that survived the ratio
+# test - six of them, two above the four a homography needs - and RANSAC's own
+# verdict on that fit was then thrown away. The pair sitting on the floor is
+# exactly the pair that goes wrong: on handheld_drift the 6-match pair came out
+# 3.5x worse than its neighbours and bent the frame by ~5%. Because the chain
+# accumulates, that is not one bad frame, it is a permanent offset applied to
+# every frame after it.
+#
+# A pair is now accepted on the RANSAC verdict - how many matches the fit
+# actually agreed with, and what share of the matches offered to it that is -
+# plus a sanity check on the matrix itself: no reflection, a magnification
+# within a few percent of 1, and perspective terms too small to keystone the
+# frame. A pair that fails any of it takes the skip path the stages already
+# have, which keeps the running trajectory and deliberately does not advance
+# the reference features, so the next frame is matched against the last frame
+# that worked and the chain re-closes.
+
+_MIN_PAIR_INLIERS = 12         # three RANSAC agreements per DOF of the 4-DOF model
+_MIN_PAIR_INLIER_RATIO = 0.40  # ...and that share of the matches offered to it
+_MAX_PAIR_SCALE_DRIFT = 0.10   # per-pair magnification change, |s - 1|
+_MAX_PAIR_KEYSTONE = 0.03      # perspective across the frame, as a fraction of it
+
+
+def _pair_rejection_reason(H, mask, num_matches, img_shape):
+    """Why this pair's transform must not be chained, or None to accept it.
+
+    Args:
+        H: the 3x3 forward map fitted to the pair, or None if fitting failed
+        mask: the inlier mask RANSAC returned for that fit
+        num_matches: how many matches the estimator was given
+        img_shape: (h, w) of the full-resolution frame - what turns the two
+                   perspective terms into a displacement one can bound
+
+    Returns:
+        a short human-readable reason, or None when the pair is trustworthy.
+    """
+    if H is None:
+        return "no transform"
+
+    # No mask means no verdict; the count gate below then has nothing to read,
+    # so the pair is judged on the matrix alone.
+    inliers = int(np.count_nonzero(mask)) if mask is not None else num_matches
+    if inliers < _MIN_PAIR_INLIERS:
+        return f"{inliers} inliers"
+    if num_matches > 0 and inliers < _MIN_PAIR_INLIER_RATIO * num_matches:
+        return f"{inliers}/{num_matches} inliers"
+
+    H = np.asarray(H, dtype=np.float64)
+    if not np.all(np.isfinite(H)):
+        return "non-finite transform"
+    if abs(H[2, 2]) < 1e-12:
+        return "degenerate transform"
+    H = H / H[2, 2]
+
+    # A negative determinant is a reflection, which no camera motion produces.
+    det = float(np.linalg.det(H[:2, :2]))
+    if det <= 0.0:
+        return f"determinant {det:.3g}"
+    scale = float(np.sqrt(det))
+    if abs(scale - 1.0) > _MAX_PAIR_SCALE_DRIFT:
+        return f"scale {scale:.3f}"
+
+    h, w = img_shape[:2]
+    keystone = max(abs(H[2, 0]) * w, abs(H[2, 1]) * h)
+    if keystone > _MAX_PAIR_KEYSTONE:
+        return f"keystone {keystone * 100:.1f}%"
+
+    return None
+
+
 # ========== Scale / focus-breathing correction (similarity) ==========
 
 def _estimate_scale(images, downscale_width, thread_count, parallel_ecc=True):
@@ -231,6 +305,8 @@ def _estimate_scale(images, downscale_width, thread_count, parallel_ecc=True):
     bf = cv2.BFMatcher(cv2.NORM_L2)
     last_kps, last_des, last_scale = features_list[0]
 
+    rejected_pairs = 0
+
     for idx in range(1, num_images):
         curr_kps, curr_des, curr_scale = features_list[idx]
 
@@ -248,7 +324,8 @@ def _estimate_scale(images, downscale_width, thread_count, parallel_ecc=True):
                 if m.distance < 0.70 * n.distance:
                     good_matches.append(m)
 
-        if len(good_matches) < 6:
+        # Fewer matches than the inlier gate needs cannot pass it; skip the fit.
+        if len(good_matches) < _MIN_PAIR_INLIERS:
             print(f"Warning: Frame {idx} poor matches ({len(good_matches)}). Keeping previous trajectory.")
             H_matrices.append(H_global.copy())
             continue
@@ -259,16 +336,23 @@ def _estimate_scale(images, downscale_width, thread_count, parallel_ecc=True):
 
         # Partial affine == similarity: uniform scale + rotation + translation,
         # no shear or perspective. This is the focus-breathing model.
-        M_local, _mask = cv2.estimateAffinePartial2D(
+        M_local, mask = cv2.estimateAffinePartial2D(
             pts_curr, pts_last, method=cv2.RANSAC, ransacReprojThreshold=5.0
         )
 
-        if M_local is None:
-            print(f"Frame {idx} scale alignment failed. Assuming no breathing.")
-            H_local = np.eye(3, dtype=np.float32)
-        else:
-            # Lift the 2x3 similarity to a 3x3 homogeneous matrix for chaining.
-            H_local = np.vstack([M_local, [0.0, 0.0, 1.0]]).astype(np.float32)
+        # Lift the 2x3 similarity to a 3x3 homogeneous matrix for chaining.
+        H_local = (None if M_local is None
+                   else np.vstack([M_local, [0.0, 0.0, 1.0]]).astype(np.float32))
+
+        # Accept on what RANSAC agreed with, not on how many matches it was
+        # offered - a fit the estimator half-believes is worse than no fit,
+        # because the chain carries it into every later frame.
+        reason = _pair_rejection_reason(H_local, mask, len(good_matches), (h_orig, w_orig))
+        if reason is not None:
+            print(f"Warning: Frame {idx} scale fit rejected ({reason}). Keeping previous trajectory.")
+            rejected_pairs += 1
+            H_matrices.append(H_global.copy())
+            continue
 
         # Chain: current -> previous -> ... -> frame 0.
         H_global = np.matmul(H_global, H_local)
@@ -277,6 +361,10 @@ def _estimate_scale(images, downscale_width, thread_count, parallel_ecc=True):
         last_kps = curr_kps
         last_des = curr_des
         last_scale = curr_scale
+
+    if rejected_pairs:
+        print(f"    {rejected_pairs}/{num_images - 1} pairs were rejected on the RANSAC "
+              f"verdict - those frames keep the trajectory of the last pair that fitted.")
 
     return H_matrices
 
@@ -296,10 +384,14 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None,
 
     For each consecutive pair the transform is recovered from SIFT matches with
     cv2.estimateAffinePartial2D under RANSAC, which yields exactly a scaled
-    rotation plus translation and no shear or perspective. The pairwise transforms
-    are chained back to the first frame; every frame is then warped into that
-    shared frame and cropped to the common valid region, matching the homography
-    and ECC methods so the stages compose cleanly.
+    rotation plus translation and no shear or perspective. A pair is chained only
+    if RANSAC agreed with enough of its matches and the similarity it produced is
+    a motion a camera could have made (_pair_rejection_reason); anything else
+    keeps the running trajectory and is matched against the last frame that
+    fitted. The pairwise transforms are chained back to the first frame; every
+    frame is then warped into that shared frame and cropped to the common valid
+    region, matching the homography and ECC methods so the stages compose
+    cleanly.
 
     Args:
         input_source: directory path or a preloaded list of images
@@ -621,9 +713,12 @@ def _held_out_error(fit, src, dst, splits=None):
 
 
 def _select_pair_transform(pts_curr, pts_last):
-    """Fit both models to one pair's matches and return (matrix, model name).
+    """Fit both models to one pair's matches.
 
-    Returns (None, "failed") when neither model can be estimated.
+    Returns:
+        (matrix, model name, inlier mask of the model that was kept), or
+        (None, "failed", None) when neither model can be estimated. The mask is
+        what the acceptance gate reads - see _pair_rejection_reason.
     """
     src = np.asarray(pts_curr, dtype=np.float64).reshape(-1, 2)
     dst = np.asarray(pts_last, dtype=np.float64).reshape(-1, 2)
@@ -637,9 +732,10 @@ def _select_pair_transform(pts_curr, pts_last):
              else np.vstack([M_sim, [0.0, 0.0, 1.0]]).astype(np.float64))
 
     if H_sim is None:
-        return (H_hom, "homography") if H_hom is not None else (None, "failed")
+        return ((H_hom, "homography", mask_hom) if H_hom is not None
+                else (None, "failed", None))
     if H_hom is None:
-        return H_sim, "similarity"
+        return H_sim, "similarity", mask_sim
 
     # Validate on the matches RANSAC believed, not on everything the ratio test
     # let through: the folds are fitted by least squares, which one false match
@@ -658,13 +754,13 @@ def _select_pair_transform(pts_curr, pts_last):
         # Too few matches to tell the models apart: 8 DOF through ~10 points
         # reproduces them almost exactly however wrong it is, so validation
         # cannot see the overfit. The constrained model is the safe answer.
-        return H_sim, "similarity"
+        return H_sim, "similarity", mask_sim
 
     err_hom = _held_out_error(_fit_homography_ls, src, dst)
     err_sim = _held_out_error(_fit_similarity_ls, src, dst)
     if err_hom < _CV_MARGIN * err_sim:
-        return H_hom, "homography"
-    return H_sim, "similarity"
+        return H_hom, "homography", mask_hom
+    return H_sim, "similarity", mask_sim
 
 
 def _estimate_homography(images, downscale_width, thread_count, parallel_ecc=True):
@@ -726,6 +822,7 @@ def _estimate_homography(images, downscale_width, thread_count, parallel_ecc=Tru
     last_kps, last_des, last_scale = features_list[0]
 
     constrained_pairs = 0
+    rejected_pairs = 0
 
     for idx in range(1, num_images):
         curr_kps, curr_des, curr_scale = features_list[idx]
@@ -746,7 +843,8 @@ def _estimate_homography(images, downscale_width, thread_count, parallel_ecc=Tru
                 if m.distance < 0.70 * n.distance:
                     good_matches.append(m)
 
-        if len(good_matches) < 6:
+        # Fewer matches than the inlier gate needs cannot pass it; skip the fit.
+        if len(good_matches) < _MIN_PAIR_INLIERS:
             print(f"Warning: Frame {idx} poor matches ({len(good_matches)}). Keeping previous trajectory.")
             H_matrices.append(H_global.copy())
             continue
@@ -757,12 +855,19 @@ def _estimate_homography(images, downscale_width, thread_count, parallel_ecc=Tru
 
         # Fit a homography and a similarity to the same matches and keep
         # whichever earns its degrees of freedom on held-out matches.
-        H_local, model = _select_pair_transform(pts_curr, pts_last)
+        H_local, model, mask = _select_pair_transform(pts_curr, pts_last)
 
-        if H_local is None:
-            print(f"Frame {idx} alignment failed.")
-            H_local = np.eye(3)
-        elif model == "similarity":
+        # Accept on what RANSAC agreed with, not on how many matches it was
+        # offered - a fit the estimator half-believes is worse than no fit,
+        # because the chain carries it into every later frame.
+        reason = _pair_rejection_reason(H_local, mask, len(good_matches), (h_orig, w_orig))
+        if reason is not None:
+            print(f"Warning: Frame {idx} {model} fit rejected ({reason}). Keeping previous trajectory.")
+            rejected_pairs += 1
+            H_matrices.append(H_global.copy())
+            continue
+
+        if model == "similarity":
             constrained_pairs += 1
 
         # Matrix chain multiplication
@@ -777,6 +882,9 @@ def _estimate_homography(images, downscale_width, thread_count, parallel_ecc=Tru
     if constrained_pairs:
         print(f"    {constrained_pairs}/{num_images - 1} pairs took the constrained "
               f"similarity - their perspective terms did not survive validation.")
+    if rejected_pairs:
+        print(f"    {rejected_pairs}/{num_images - 1} pairs were rejected on the RANSAC "
+              f"verdict - those frames keep the trajectory of the last pair that fitted.")
 
     return H_matrices
 
@@ -798,6 +906,10 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None,
        on a focus rail is every pair - is fitted with the constrained model
        instead of bending the frame to fit match noise. See
        _select_pair_transform.
+    7. Per-pair acceptance: a pair is chained only if RANSAC agreed with enough
+       of its matches and the matrix it produced is a motion a camera could
+       have made; anything else keeps the running trajectory and is matched
+       against the last frame that fitted. See _pair_rejection_reason.
     """
     return align_stack(input_source, ('homography',), output_path=output_path,
                        img_filenames=img_filenames, downscale_width=downscale_width,

@@ -44,22 +44,25 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 5 | all | Robustness | `downscale_width` is silently overridden to 1024 for any frame >= 2048 px, i.e. for every real camera file - the exposed setting does nothing - *fixed in 1.30.6* | Medium | Trivial | **100%** |
 | 6 | all | Quality | The reference frame defaults to `first`, though `middle` is better on every pipeline and every scene measured, and keeps more pixels | Medium | Trivial | 0% |
 | 7 | all | Quality | Each stage is its own resample and its own crop, so the three-stage pipeline interpolates three times and throws away a further 10% of the frame - *fixed in 1.30.7* | Medium | Medium | **100%** |
-| 8 | Homography, scale | Quality | Transforms are accepted on 6 matches with the RANSAC inlier mask discarded and no sanity check, and a bad one corrupts the whole chain after it | Medium | Low | 0% |
+| 8 | Homography, scale | Quality | Transforms are accepted on 6 matches with the RANSAC inlier mask discarded and no sanity check, and a bad one corrupts the whole chain after it - *fixed in 1.30.8* | Medium | Low | **100%** |
 | 9 | ECC | Robustness | Crashes outright on single-channel input, which `scale` and `homography` both handle | Low | Trivial | 0% |
 | 10 | scale, ECC | Performance | The GPU warp helper allocates 21x the frame size, regardless of frame size, with no fallback if that fails - *removed with the warp in 1.30.5* | Low | Low | **100%** |
 | 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
 | 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
 
-**Overall: 7 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
-in 1.30.4, item 4 in 1.30.5 with item 10, item 5 in 1.30.6 and item 7 in 1.30.7.
+**Overall: 8 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
+in 1.30.4, item 4 in 1.30.5 with item 10, item 5 in 1.30.6, item 7 in 1.30.7 and
+item 8 in 1.30.8.
 That closes the GPU-path defects: there is one warp path now, so registration
 produces the same pixels on every machine and the "device" columns this document
 used to carry have nothing left to compare. It also closes the one item where
 the code ignored the user - `downscale_width` is now honoured at every frame
 size, which is worth up to 1.75x of geometric accuracy on a full-size stack for
-anyone willing to pay the time. And with 1.30.7 it closes the last of the four
+anyone willing to pay the time. With 1.30.7 it closes the last of the four
 resampling defects: the stages compose into one warp and one crop, so pipeline
-length no longer costs the picture anything. What remains of consequence is a
+length no longer costs the picture anything. And with 1.30.8 a pair is chained
+on RANSAC's verdict rather than on a match count, so one bad pair is no longer
+a permanent offset on every frame after it. What remains of consequence is a
 default worth changing, item 6.
 
 ### The measurement everything else follows from
@@ -72,13 +75,13 @@ are the pre-1.30.3 reading, before item 2.
 | pipeline | handheld_drift mean px | gain | was | flower01_handheld mean px | gain | was |
 |---|---|---|---|---|---|---|
 | *unregistered* | 3.95 | - | - | 6.81 | - | - |
-| **scale** | **2.22** | 1.78x | 2.22 | **2.57** | 2.65x | 2.57 |
-| homography | 2.22 | 1.78x | **5.00** | 2.57 | 2.65x | **7.71** |
+| **scale** | **2.16** | 1.83x | 2.22 | **2.57** | 2.65x | 2.57 |
+| homography | 2.16 | 1.83x | **5.00** | 2.57 | 2.65x | **7.71** |
 | **ecc** | **1.67** | **2.36x** | 1.67 | 6.40 | 1.06x | 6.40 |
-| both (hom+ecc) | 1.69 | 2.34x | 1.57 | 6.51 | 1.05x | 7.07 |
+| both (hom+ecc) | 1.70 | 2.32x | 1.57 | 6.51 | 1.05x | 7.07 |
 | **scale+hom** (app default) | 2.23 | 1.78x | **3.98** | **2.06** | **3.30x** | 3.37 |
-| scale+ecc | 1.69 | 2.34x | 1.69 | 6.51 | 1.05x | 6.49 |
-| scale+hom+ecc | 1.69 | 2.34x | 1.58 | 6.57 | 1.04x | 6.77 |
+| scale+ecc | 1.70 | 2.32x | 1.69 | 6.51 | 1.05x | 6.49 |
+| scale+hom+ecc | 1.71 | 2.31x | 1.58 | 6.57 | 1.04x | 6.77 |
 
 Item 3 (1.30.4) left every single-stage row of this table bit-identical, and
 moves only the two-stage `scale+hom`: 2.31 -> 2.23 px and 1.50 -> 2.06 px, since
@@ -91,6 +94,13 @@ kind of reason: the last stage now measures on a stack that has been resampled
 once rather than twice, so it sees slightly different pixels. The multi-stage
 rows of this table are now what the app runs, since the stages are handed over
 together rather than chained.
+
+Item 8 (1.30.8) moves the handheld_drift column only, because that scene is the
+only one carrying a pair the gate rejects: `scale` and `homography` go 2.22 ->
+2.16 px as the frame that pair was moving stops being moved wrongly, and the
+three ECC pipelines drift by 0.01-0.02 px because the stage in front of them
+hands over a slightly different stack. flower01_handheld is untouched to the
+last digit - none of its pairs is rejected.
 
 No pipeline is now worse than doing nothing on either scene. The two stages that
 fit a constrained model where the motion is constrained - `scale`, and
@@ -1105,6 +1115,91 @@ is fitted with the 4-DOF similarity rather than the 8-DOF homography - so the
 accepted, still on nothing but a match count, and `scale` still discards its
 mask entirely.
 
+### Fixed in 1.30.8 - the verdict was already there, it was being thrown away
+
+Both stages now put the fitted pair through one shared gate,
+`_pair_rejection_reason` (`core/registration.py:214`), before it is chained. It
+reads four things, and a pair failing any of them takes the skip path the stages
+already had - the running trajectory is kept, the reference features are *not*
+advanced, and the next frame is matched against the last frame that fitted:
+
+| the gate | the bound | why that number |
+|---|---|---|
+| RANSAC inliers | >= 12 | three agreements per degree of freedom of the 4-DOF model - the same arithmetic that set `_CV_MIN_MATCHES = 24` for the 8-DOF one in item 2 |
+| inlier share | >= 40% of the matches offered | a fit the estimator half-believes is a fit of the outliers |
+| determinant | > 0, magnification within 10% of 1 | a reflection is not a camera motion, and breathing is a fraction of a percent per pair |
+| keystone | < 3% across the frame | the bad pair above bends it by 4.8% on this measure; a 0.5 degree tilt bends it by 0.7% |
+
+The bounds sit above what a stack that is fitting properly produces, which is
+the constraint that matters - a gate that rejects sound pairs stops registering
+the stack. Across the eight sample scenes the *worst* pair-level readings are an
+inlier share of 0.53 (macro_dome), a magnification 0.34% from 1 (macro_dome) and
+2.75% of keystone on a homography fit (flower01_subject_hires). Every bound is
+clear of its worst case, and measured end to end no pair of any scene other than
+handheld_drift changes what it did.
+
+**What it does to the stack the item is about.** Per-frame residual on
+handheld_drift, `scale` and `homography` (identical here, as they are throughout
+this document since item 2):
+
+| frame | before | after |
+|---|---|---|
+| 0-14 | unchanged, 0.00 - 5.01 px | unchanged |
+| **15** | **5.60 px** | **4.66 px** |
+| mean | 2.22 px | **2.16 px** |
+| worst | 5.60 px | **5.01 px** |
+| kept share | 87.3% | **88.0%** |
+
+The rejected pair is the last one in the stack, so exactly one frame is exposed
+to it and the improvement stops there. That is the least interesting case, and
+the reason it is the one the audit found: a bad pair at the *end* of a chain
+costs one frame.
+
+**What a bad pair in the middle costs.** The same scene with frame 7 defocused
+(sigma 5) and noised until its matches collapse - RANSAC agrees with 11 of them,
+one under the floor - measured from the degraded frame to the end of the stack:
+
+| | frame 7 | mean, frames 7-15 |
+|---|---|---|
+| chained anyway (before) | 3.28 px | 3.92 px |
+| **rejected (after)** | **1.92 px** | **3.41 px** |
+| the same stack never degraded | 1.09 px | 3.18 px |
+
+Nine frames pay for one bad pair when it is chained, and the chain that rejects
+it lands within 7% of the chain that never met it. This is the whole value of
+the item: not the 0.06 px off a mean, but that a single bad pair stops being a
+permanent offset on everything after it.
+
+**On the fused picture it is close to a wash, and that is the honest reading.**
+handheld_drift through Pyramid, against its all-in-focus ground truth:
+
+| pipeline | PSNR before | after | SSIM before | after | sharpness before | after |
+|---|---|---|---|---|---|---|
+| scale / homography | 29.91 | **29.98** | 0.8231 | **0.8239** | 204.1 | 202.7 |
+| **scale+hom** (default) | 30.25 | 30.13 | 0.8357 | 0.8323 | 205.7 | 201.3 |
+| ecc | 30.51 | 30.51 | 0.8507 | 0.8507 | 194.5 | 194.5 |
+| scale+hom+ecc | 30.52 | 30.51 | 0.8512 | 0.8507 | 193.8 | 194.1 |
+
+The single stage gains 0.07 dB. `scale+hom` loses 0.12 dB, for a reason worth
+stating plainly: the scale stage rejecting the last pair changes the crop of the
+intermediate canvas, so the homography stage detects its features on slightly
+different pixels and every pair moves a little. Its per-frame residuals wobble
+by up to 0.2 px in *both* directions and its mean is unchanged at 2.23 px
+(worst 5.38 -> 5.28 px). That is canvas noise, not a regression the gate causes,
+and it is the same mechanism item 7 described. A tenth of a dB in either
+direction is what this item is worth on a stack whose bad pair is the last one;
+what it is worth is in the table above it.
+
+**Guarded by** `tests/test_registration_pair_gate.py`, which fails in both
+directions. Reverting the thresholds to the old behaviour - six matches, no
+verdict, no sanity check - fails 10 of its 21 tests: the six-match pair gets
+chained again, and the degraded chain goes back to paying for it nine frames
+running. Tightening the gate until it bites sound stacks instead (40 inliers,
+95% of matches) fails 17, among them the four that hold every pair of
+flower01_handheld and flower01_subject_hires exactly where it was and the two
+that assert no two consecutive frames are left on top of each other - which is
+what a stack looks like when a gate has quietly stopped registering it.
+
 ---
 
 ## 9. ECC crashes on single-channel input
@@ -1232,7 +1327,8 @@ not read as uniformly negative.
 - **The chain's failure recovery is correct.** Rejecting a pair without advancing
   the feature reference means the next frame matches against the last good one
   and the chain closes properly. A blanked frame in the middle of a stack leaves
-  every subsequent frame at 0.11-0.13 px (item 8).
+  every subsequent frame at 0.11-0.13 px (item 8). Only the decision about when
+  to invoke it was too permissive, which is what 1.30.8 changed.
 - **`_rereference_transforms` is exact** - the reference collapses to identity,
   every other transform is rewritten relative to it, index 0 is a true no-op, and
   a singular reference falls back rather than raising.
@@ -1280,6 +1376,14 @@ the same way everywhere, so the advice below is the advice on every machine:
 - **Nothing needs doing about the GPU** as of 1.30.5: there is no GPU warp to
   avoid, and `ecc` or `scale`+`ecc` is the best-looking pipeline as well as the
   best-aligned one, wherever it runs.
+- **A stack with a bad frame in it is safer** as of 1.30.8 (item 8). Both
+  feature stages now chain a pair only if RANSAC agreed with it and the matrix
+  it produced is a motion a camera could have made; anything else keeps the
+  previous trajectory and is matched against the last frame that fitted. On a
+  clean stack nothing changes. On one with a frame the detector cannot read, the
+  frames after it stop inheriting the bad estimate - worth 3.92 -> 3.41 px over
+  the tail of the stack where a mid-chain pair goes wrong. Watch the console:
+  the stages now say which pairs they rejected and why.
 - **Pipeline length is no longer expensive** as of 1.30.7 (item 7). The stages
   compose into one warp and one crop, so a three-stage pipeline gives up the
   same 20% of the picture's high-frequency energy as a single stage and keeps
@@ -1351,7 +1455,8 @@ python -m pytest tests/test_registration_scale.py tests/test_registration_refere
                 tests/test_registration_homography_model.py \
                 tests/test_registration_reference_resample.py \
                 tests/test_registration_downscale_width.py \
-                tests/test_registration_pipeline_composition.py -v
+                tests/test_registration_pipeline_composition.py \
+                tests/test_registration_pair_gate.py -v
 ```
 
 The first two would not catch item 4 - `test_registration_scale.py` asserts
@@ -1405,3 +1510,14 @@ the raw frames, which would be faster and would look like the same idea - fails
 output bit for bit. It also holds that a single stage is byte-identical to what
 it was, that each stage runs exactly once, and that the anchor frame's composed
 map is the identity. It needs no samples and skips nowhere.
+
+The eighth arrived with item 8's fix and is the only one that has to prove a
+*negative* as well as a positive, because an acceptance gate can fail by letting
+everything through or by letting nothing through. It reads the verdict directly
+for the cases no sample scene produces - a reflection, a 35% magnification, a
+keystoned frame, an estimator that returns no mask - and end to end for the ones
+handheld_drift does: the six-match pair is not chained, and a frame degraded in
+the middle of the stack stops costing the nine frames after it. The other half
+holds every pair of the two clean scenes exactly where it was. Reverting the
+thresholds fails 10 of its 21 tests, tightening them until they bite fails 17.
+The scene half skips where `samples/` has not been generated.
