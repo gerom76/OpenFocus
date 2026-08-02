@@ -293,10 +293,8 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None, downsc
     H_matrices = _rereference_transforms(H_matrices, reference_index)
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
 
-    do_crop = True
     if top >= bottom or left >= right:
         print("Warning: Invalid crop region, skipping crop.")
-        do_crop = False
         target_w, target_h = w_orig, h_orig
         offset_x, offset_y = 0, 0
     else:
@@ -305,14 +303,16 @@ def _align_scale_impl(input_source, output_path=None, img_filenames=None, downsc
         offset_x = -left
         offset_y = -top
 
-    # Build the crop translation and fold it into each warp.
-    T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
+    # Build the crop translation and fold it into each warp. It carries the
+    # sub-pixel offset that keeps the reference frame from being copied through
+    # unresampled, so it is applied whether or not the crop is real.
+    T_crop = _build_crop_transform(offset_x, offset_y)
 
     cp, cp_ndimage = _init_gpu_warp()
 
     def warp_task(args):
         img, H = args
-        H_final = T_crop @ H if do_crop else H
+        H_final = T_crop @ H
         if cp is not None:
             return _warp_perspective_gpu(cp, cp_ndimage, img, H_final, target_w, target_h)
         return cv2.warpPerspective(img, H_final, (target_w, target_h),
@@ -462,6 +462,56 @@ def _rereference_transforms(H_matrices, reference_index):
         return H_matrices
 
     return [ref_inv @ H if H is not None else None for H in H_matrices]
+
+
+# --- Reference-frame resampling (docs/REGISTRATION_IMPROVEMENTS.md item 3) ---
+#
+# After _rereference_transforms the reference frame's transform is exactly the
+# identity, and the crop translation folded in behind it is an integer offset.
+# A warp by an integer translation is a copy - every interpolation weight
+# collapses to 1 - so the reference frame alone left registration unresampled
+# while every other frame was softened once. Selection-based fusion decides
+# everything by asking which frame is locally sharpest, and it read that
+# artificial advantage as focus: on a defocused strip of handheld_drift the
+# anchor frame measured 25% sharper than the rest on the CPU warp path and 187%
+# sharper on the GPU one, and up to two thirds of the output was sourced from
+# it on a scene where it is genuinely sharpest nowhere.
+#
+# Folding a common sub-pixel offset into the crop translation puts the
+# reference through the same interpolator as everything else. The offset is
+# shared by every frame, so relative alignment - the thing registration is
+# actually measured on - is untouched, and it costs no extra warp: the same
+# single warpPerspective per frame simply receives a matrix whose translation
+# is no longer integral.
+#
+# A quarter pixel, not a half. Interpolation loss is worst at the half-pixel
+# phase and zero on the grid, so half a pixel does not equalise the anchor, it
+# over-corrects: measured on a stack whose frames carry identical content, half
+# a pixel leaves the anchor 22% softer than the frames it anchors on the Lanczos
+# path and 72% softer on the bilinear one, which merely inverts the bias the
+# fix exists to remove. A quarter pixel is where the anchor's sharpness matches
+# the stack mean to within a few percent on both interpolators and wherever the
+# anchor sits - close to the 0.211 phase at which bilinear attenuation equals
+# its average over a uniformly distributed sub-pixel offset, which is the
+# treatment an arbitrary frame's residual translation actually gets.
+_REFERENCE_RESAMPLE_OFFSET = 0.25
+
+
+def _build_crop_transform(offset_x, offset_y):
+    """Crop translation, shifted so that no frame escapes being resampled.
+
+    Args:
+        offset_x, offset_y: integer crop offsets (-left, -top), or 0 when the
+            valid region is degenerate and the crop is skipped.
+
+    Returns:
+        3x3 forward translation to post-multiply onto each frame's transform.
+    """
+    return np.array([
+        [1, 0, offset_x + _REFERENCE_RESAMPLE_OFFSET],
+        [0, 1, offset_y + _REFERENCE_RESAMPLE_OFFSET],
+        [0, 0, 1],
+    ], dtype=np.float32)
 
 
 def _crop_with_transforms(images, H_matrices):
@@ -795,10 +845,8 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
     # Precompute the crop region and warp directly into the target region, avoiding the waste of warping first and cropping later
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
 
-    do_crop = True
     if top >= bottom or left >= right:
         print("Warning: Invalid crop region, skipping crop.")
-        do_crop = False
         target_w, target_h = w_orig, h_orig
         offset_x, offset_y = 0, 0
     else:
@@ -808,18 +856,17 @@ def _align_homography_impl(input_source, output_path=None, img_filenames=None, d
         offset_y = -top
         print(f"    Optimized: Warping directly to cropped region ({target_w}x{target_h})...")
 
-    # Build the crop translation matrix
-    T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
+    # Build the crop translation matrix. Its sub-pixel offset is what stops the
+    # reference frame from passing through as an unresampled copy, so it applies
+    # whether or not there is a crop to fold in.
+    T_crop = _build_crop_transform(offset_x, offset_y)
 
     def warp_task(args):
         img, H = args
         # Merge the crop transform
-        if do_crop:
-            H_final = T_crop @ H
-        else:
-            H_final = H
-            
-        return cv2.warpPerspective(img, H_final, (target_w, target_h), 
+        H_final = T_crop @ H
+
+        return cv2.warpPerspective(img, H_final, (target_w, target_h),
                                  flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT)
 
     # Prepare the parameters
@@ -1012,10 +1059,8 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
     # Compute the common valid region
     top, bottom, left, right = _compute_valid_region_from_transforms(H_matrices, (h_orig, w_orig))
     
-    do_crop = True
     if top >= bottom or left >= right:
         print("Warning: Invalid crop region, skipping crop.")
-        do_crop = False
         target_w, target_h = w_orig, h_orig
         offset_x, offset_y = 0, 0
     else:
@@ -1025,8 +1070,10 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         offset_y = -top
         # print(f"    Optimized: Warping directly to cropped region ({target_w}x{target_h})...")
 
-    # Build the crop translation matrix
-    T_crop = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float32)
+    # Build the crop translation matrix. Its sub-pixel offset is what stops the
+    # reference frame from passing through as an unresampled copy, so it applies
+    # whether or not there is a crop to fold in.
+    T_crop = _build_crop_transform(offset_x, offset_y)
 
     cp, cp_ndimage = _init_gpu_warp()
 
@@ -1034,10 +1081,7 @@ def _align_ecc_impl(input_source, output_path=None, img_filenames=None, downscal
         idx, img, H = args
 
         # Merge the crop transform: first apply H, then translate by T_crop
-        if do_crop:
-            H_final = T_crop @ H
-        else:
-            H_final = H
+        H_final = T_crop @ H
 
         # H_final is the forward (source -> destination) map, which is what
         # cv2.warpPerspective expects; _warp_perspective_gpu inverts it itself,

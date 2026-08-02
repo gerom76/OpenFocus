@@ -37,7 +37,7 @@ Ranked by expected value: **impact** is how much it changes a real render,
 |---|-------|----------|-------|--------|--------|-------|
 | 1 | ECC | Correctness | The GPU warp applies the inverse of the transform ECC measured, so on any CUDA machine ECC roughly *doubles* misalignment - 11.4 dB off the fused result | Critical | Trivial | **100%** |
 | 2 | Homography | Quality | The 8-DOF fit is less accurate than not registering at all on both handheld samples; the two extra degrees of freedom fit nothing but noise - *fixed in 1.30.3* | High | Medium | **100%** |
-| 3 | all | Quality | The reference frame is the only frame never resampled, so the focus measure sources 4-21x more of the picture from it than it should | High | Low | 0% |
+| 3 | all | Quality | The reference frame is the only frame never resampled, so the focus measure sources 4-21x more of the picture from it than it should - *fixed in 1.30.4* | High | Low | **100%** |
 | 4 | scale, ECC | Quality | GPU warping is bilinear where CPU warping is Lanczos4: 44% of the high-frequency energy lost, for almost no speed | High | Low | 0% |
 | 5 | all | Robustness | `downscale_width` is silently overridden to 1024 for any frame >= 2048 px, i.e. for every real camera file - the exposed setting does nothing | Medium | Trivial | 0% |
 | 6 | all | Quality | The reference frame defaults to `first`, though `middle` is better on every pipeline and every scene measured, and keeps more pixels | Medium | Trivial | 0% |
@@ -48,9 +48,9 @@ Ranked by expected value: **impact** is how much it changes a real render,
 | 11 | - | Maintenance | `_stabilisation_impl` is 117 lines of unreachable code | Low | Trivial | 0% |
 | 12 | all | Robustness | Three copy-pasted folder loaders that disagree with each other | Low | Low | 0% |
 
-**Overall: 2 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3. Items 3
-and 4 are the other two GPU-path defects and both are cheap; between them they
-account for most of the quality gap this document still measures.
+**Overall: 3 of 12 done.** Item 1 is fixed in 1.30.2, item 2 in 1.30.3, item 3
+in 1.30.4. Item 4 is the last of the GPU-path defects and is the cheapest of
+them; it accounts for most of the quality gap this document still measures.
 
 ### The measurement everything else follows from
 
@@ -65,10 +65,15 @@ not registering at all; below 1.00x means the stage made the stack *worse*. The
 | **scale** | **2.22** | 1.78x | 2.22 | **2.57** | 2.65x | 2.57 |
 | homography | 2.22 | 1.78x | **5.00** | 2.57 | 2.65x | **7.71** |
 | **ecc** | **1.67** | **2.36x** | 1.67 | 6.40 | 1.06x | 6.40 |
-| both (hom+ecc) | 1.69 | 2.34x | 1.57 | 6.49 | 1.05x | 7.07 |
-| **scale+hom** (app default) | 2.31 | 1.71x | **3.98** | **1.50** | **4.53x** | 3.37 |
-| scale+ecc | 1.69 | 2.34x | 1.69 | 6.49 | 1.05x | 6.49 |
-| scale+hom+ecc | 1.66 | 2.38x | 1.58 | 6.60 | 1.03x | 6.77 |
+| both (hom+ecc) | 1.69 | 2.34x | 1.57 | 6.50 | 1.05x | 7.07 |
+| **scale+hom** (app default) | 2.23 | 1.77x | **3.98** | **2.06** | **3.30x** | 3.37 |
+| scale+ecc | 1.69 | 2.34x | 1.69 | 6.50 | 1.05x | 6.49 |
+| scale+hom+ecc | 1.63 | 2.42x | 1.58 | 6.63 | 1.03x | 6.77 |
+
+Item 3 (1.30.4) left every single-stage row of this table bit-identical, and
+moves only the two-stage `scale+hom`: 2.31 -> 2.23 px and 1.50 -> 2.06 px, since
+the second stage now detects its features on a resampled anchor frame. That is
+the only accuracy this document trades for item 3, and it is discussed there.
 
 No pipeline is now worse than doing nothing on either scene. The two stages that
 fit a constrained model where the motion is constrained - `scale`, and
@@ -344,7 +349,7 @@ always fit a similarity.
 
 ## 3. The reference frame is the only frame never resampled
 
-**Category: quality. Impact: high. Effort: low.**
+**Category: quality. Impact: high. Effort: low. Fixed in 1.30.4.**
 
 After `_rereference_transforms`, the reference frame's transform is exactly the
 identity, and the crop translation folded in afterwards is an integer offset. A
@@ -387,6 +392,9 @@ resamples the non-reference frames again while the reference stays untouched, so
 the bias grows with pipeline length (23.6% for `both`, 34.9% for
 `scale+hom+ecc`, CPU).
 
+Everything above this line is the pre-1.30.4 measurement, kept as the statement
+of the defect; the fix and its numbers follow.
+
 **The fix is to give the reference frame the same treatment as everything else**
 - put it through one identical resample rather than special-casing it into a
 copy. It costs one warp. Simulated by pushing frame 0 through a half-pixel warp
@@ -399,6 +407,91 @@ with the same kernel:
 
 That is the bias essentially gone on the GPU path and materially reduced on the
 CPU one, for the cost of a single extra warp per render.
+
+### Fixed in 1.30.4 - and the half pixel the simulation used is the wrong size
+
+The three stages all end the same way: compute the common valid region, build an
+integer crop translation `T_crop`, and warp each frame by `T_crop . H_i`. So the
+place to put the missing resample is `T_crop`, which every frame shares. Giving
+it a sub-pixel offset takes the reference off the pixel grid, and because the
+offset is common to all frames it cannot move them relative to each other - the
+same single `warpPerspective` per frame simply receives a matrix whose
+translation is no longer integral. The three copies became one
+`_build_crop_transform` helper, applied whether or not the crop is degenerate.
+
+That leaves one number to choose, and the half pixel the simulation above used
+is not it. Interpolation loss is worst at the half-pixel phase and zero on the
+grid, so half a pixel does not equalise the anchor, it **over-corrects**:
+measured on a stack whose frames carry identical content, so that the honest
+answer is "no frame is sharper than any other",
+
+| offset | anchor vs the frames it anchors, Lanczos4 | bilinear |
+|---|---|---|
+| 0 (the defect) | **+22.8%** | **+85.9%** |
+| 0.15 px | +13.4% | +49.2% |
+| **0.25 px** | **+1.1%** | **+3.4%** |
+| 0.30 px | -7.6% | -20.2% |
+| 0.40 px | -18.1% | -55.7% |
+| 0.5 px (the simulation) | **-22.5%** | **-72.3%** |
+
+Half a pixel leaves the anchor 22% softer than the stack on the Lanczos path and
+72% softer on the bilinear one, which inverts the bias rather than removing it -
+a frame that is never selected is as wrong as one that is always selected. A
+quarter pixel is where the anchor's sharpness matches the stack mean on both
+interpolators and wherever the anchor sits in the stack. It is close to the
+0.211 phase at which bilinear attenuation equals its average over a uniformly
+distributed sub-pixel offset, which is the treatment an arbitrary frame's
+residual translation actually gets. Two independent criteria pick it: on the
+real scenes the selection share falls steeply up to 0.25 px and then plateaus
+near ground truth out to 0.5 px, so 0.25 is the near edge of that plateau rather
+than a point on a slope, and the sharpness balance above is what selects 0.25
+from within it.
+
+**The measurement item 3 is stated in**, re-run before and after in one process
+so the "before" column reproduces the tables above:
+
+| scene | pipeline | CPU before | CPU after | GPU before | GPU after | truth |
+|---|---|---|---|---|---|---|
+| handheld_drift | scale | 11.7% | **4.3%** | 53.6% | **3.2%** | 2.9% |
+| handheld_drift | ecc | 11.4% | **4.3%** | 51.4% | **3.3%** | 2.9% |
+| handheld_drift | **scale+hom** (default) | 22.3% | **4.7%** | 61.2% | **3.4%** | 2.9% |
+| handheld_drift | scale+hom+ecc | 33.8% | **5.1%** | 68.0% | **3.6%** | 2.9% |
+| flower01_handheld | scale | 14.7% | **3.0%** | 57.2% | **0.1%** | 0.0% |
+| flower01_handheld | **scale+hom** (default) | 29.2% | **3.3%** | 68.3% | **0.2%** | 0.0% |
+| flower01_handheld | scale+hom+ecc | 43.3% | **4.5%** | 82.4% | **0.3%** | 0.0% |
+
+Two thirds of the picture coming from the anchor frame becomes three percent of
+it, against a truth of 2.9%. The compounding with pipeline length that this item
+shared with item 7 goes with it: the CPU spread across one, two and three stages
+was 11.7% -> 22.3% -> 33.8% and is now 4.3% -> 4.7% -> 5.1%.
+
+**What it costs, stated plainly.** The anchor loses a free ride it should never
+have had, so the fused picture is a little softer where it used to source that
+frame. Against each scene's all-in-focus ground truth the change runs from
+-0.70 dB to +0.18 dB, most rows landing between -0.24 and -0.14 dB; the worst
+case is `scale+hom+ecc` on handheld_drift (30.79 -> 30.08 dB GPU, 30.70 -> 30.03
+CPU), and `ecc` on flower01_handheld actually gains 0.11 dB on both devices.
+That is the real price of the trade, and it is worth taking: the dB it gives up
+is dB that was earned by sourcing the picture from a frame which is out of focus
+there, and item 4 is where the sharpness properly comes back.
+
+**Geometric accuracy is untouched**, which is the claim the shared offset has to
+support. Every single-stage pipeline is bit-identical before and after on both
+scenes and both devices - 2.22, 1.67, 2.57, 6.40 px to the last digit - as is
+the kept-frame share, since the crop region is computed before the offset is
+folded in. Only `scale+hom` moves, in both directions (handheld_drift 2.31 ->
+2.23 px CPU and 2.68 -> 2.04 px GPU; flower01_handheld 1.50 -> 2.06 px CPU and
+1.95 -> 2.32 px GPU), because it is the one pipeline whose second stage detects
+SIFT features on pixels the first stage resampled, and the anchor's pixels have
+now changed. This is item 7 showing through: composing the stages into a single
+warp would remove the sensitivity along with the double interpolation.
+
+**Guarded by** `tests/test_registration_reference_resample.py`, which fails in
+both directions. Its sharpness assertion is two-sided on purpose - reverting to
+an integer crop fails 9 of its 14 tests, and setting the offset to the half
+pixel the simulation used fails 4 - so neither the defect nor its over-correction
+can come back quietly. The frame-share half runs against the real scenes and
+skips where `samples/` has not been generated.
 
 ---
 
@@ -423,6 +516,10 @@ spline order on `handheld_drift`:
 | order=3 (cubic spline) | 0.74s | 44.4 | 16.3% |
 | order=5 (quintic) | 0.85s | 49.5 | 11.0% |
 | **CPU `cv2.INTER_LANCZOS4`** | **0.27s** | **48.9** | **11.7%** |
+
+The last column is a pre-1.30.4 reading and item 3 has since collapsed it to
+3.2-4.3% for every row - it was measuring the two defects together. The
+sharpness column is unaffected and is the one this item rests on.
 
 Bilinear discards **44%** of the high-frequency energy Lanczos keeps
 (27.2 vs 48.9), and the GPU warp that costs that is *not faster than the CPU
@@ -559,10 +656,10 @@ typically applies - and reading the high-frequency energy that survives:
 | `INTER_LANCZOS4` | 30.0 | 23.9 (79.7%) | 23.8 (79.4%) | 20.7 (68.9%) |
 | bilinear (the GPU path) | 30.0 | 9.3 (31.2%) | 6.8 (22.7%) | 4.7 (15.7%) |
 
-Because the reference frame is exempt (item 3), that loss lands on every frame
-*except* one, so the artificial advantage compounds with pipeline length. On
-flower01_handheld, CPU path, comparing the reference frame against the mean of
-the rest:
+Before 1.30.4 the reference frame was exempt (item 3), so that loss landed on
+every frame *except* one and the artificial advantage compounded with pipeline
+length. On flower01_handheld, CPU path, comparing the reference frame against
+the mean of the rest:
 
 | pipeline | reference | others | reference advantage |
 |---|---|---|---|
@@ -574,6 +671,11 @@ the rest:
 The reference frame begins 12% *less* sharp than the average frame and ends 48%
 sharper than it, without a single photon changing. Three stages is enough to
 invert the picture's own focus ordering.
+
+Item 3 removed the *inequality* here - the reference is now resampled with the
+rest at every stage - but not the loss itself: the table's second row is still
+paid, once per stage, by every frame including the anchor. That is this item,
+and it is why the loss column above is unchanged by 1.30.4.
 
 **Pixels are paid per stage too.** Every crop takes the intersection of the valid
 regions, and the intersections compose:
@@ -784,7 +886,7 @@ not read as uniformly negative.
 
 ## What to run today
 
-Until items 3 and 4 land, on a machine with CuPy and a CUDA device:
+Until item 4 lands, on a machine with CuPy and a CUDA device:
 
 - **`ecc` is now the most accurate stage on both devices** (2.36x on
   handheld_drift). Item 1 was the only reason to avoid it on GPU, and as of
@@ -798,6 +900,10 @@ Until items 3 and 4 land, on a machine with CuPy and a CUDA device:
   same constrained model `scale` fits wherever the perspective is not real
   (item 2). It is still not worth stacking on top of `scale` for its own sake.
 - Ignore the `downscale_width` setting; it does nothing on real files (item 5).
+- **Nothing needs doing about the anchor frame** as of 1.30.4: every frame is
+  now resampled once, so the focus measure no longer prefers whichever frame the
+  alignment happened to be anchored on (item 3). This applies on both devices,
+  and it is what made the GPU path usable for selection-based fusion at all.
 
 GPU output is still softer than CPU output at equal alignment (item 4), so on a
 CPU-only machine `ecc` or `scale`+`ecc` remains the best-looking pipeline, not
@@ -842,12 +948,13 @@ The existing contract tests remain the guard against regression:
 ```bash
 python -m pytest tests/test_registration_scale.py tests/test_registration_reference.py \
                 tests/test_registration_gpu_warp.py \
-                tests/test_registration_homography_model.py -v
+                tests/test_registration_homography_model.py \
+                tests/test_registration_reference_resample.py -v
 ```
 
-The first two would not catch items 3 or 4 - `test_registration_scale.py`
-asserts convergence thresholds loose enough to pass on both interpolators. The
-third arrived with item 1's fix and is where a device-dependent regression gets
+The first two would not catch item 4 - `test_registration_scale.py` asserts
+convergence thresholds loose enough to pass on both interpolators. The third
+arrived with item 1's fix and is where a device-dependent regression gets
 caught: it lifts the `without_cupy` helper out of the benchmark, runs a stage
 with the CuPy path forced on and off, and asserts the two agree to within a
 fraction of a pixel. It skips where there is no CUDA device, so it is only load-
@@ -860,3 +967,14 @@ ground-truth scenes (it does not, on the pre-1.30.3 estimator) and that a stack
 carrying a real camera tilt still comes back sub-pixel (it does not, if the
 stage is changed to always fit a similarity). The scene half skips where
 `samples/` has not been generated.
+
+The fifth arrived with item 3's fix and is the one guard here that fails in
+*both* directions by construction. It registers a stack whose frames carry
+identical content, so the honest answer is that no frame is sharper than any
+other, and asserts two-sidedly that the anchor comes out neither sharper nor
+softer than the frames it anchors: restoring the integer crop fails 9 of its 14
+tests, and moving the offset to half a pixel fails 4. It also checks the frame
+share on the real scenes against `focus_index.png`, skipping where `samples/`
+has not been generated, and that registering with and without the offset crops
+identically and aligns equally well - which is what makes the shared offset a
+resample rather than a misalignment.
