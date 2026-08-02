@@ -208,3 +208,5 @@ class TransformManager:
 
         if clear_output_view:
             window.lbl_result_img.clear()
+            if hasattr(window, "output_manager"):
+                window.output_manager.update_result_resolution(None)

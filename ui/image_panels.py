@@ -33,6 +33,7 @@ class ResultPanel:
     control_bar: QWidget
     slider: QSlider
     info_label: QLabel
+    resolution_label: QLabel
     zoom_100_btn: QPushButton
     zoom_fit_btn: QPushButton
 
@@ -119,6 +120,12 @@ def create_result_panel() -> ResultPanel:
     title.setStyleSheet("color: #aaa; background: transparent; border: none;")
     title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
+    # Pixel size of whatever the panel is currently showing, kept next to the
+    # title so it always describes the image on screen.
+    resolution_label = QLabel("")
+    resolution_label.setStyleSheet("color: #777; background: transparent; border: none;")
+    resolution_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
     zoom_btn_style = (
         "QPushButton { background-color: #3a3a3a; color: #aaa; border: 1px solid #555; "
         "border-radius: 2px; padding: 0 6px; } "
@@ -135,7 +142,8 @@ def create_result_panel() -> ResultPanel:
     zoom_100_btn.setFixedHeight(19)
     zoom_100_btn.setStyleSheet(zoom_btn_style)
 
-    title_bar_layout.addWidget(title, 1)
+    title_bar_layout.addWidget(title)
+    title_bar_layout.addWidget(resolution_label, 1)
     title_bar_layout.addWidget(zoom_100_btn)
     title_bar_layout.addWidget(zoom_fit_btn)
 
@@ -175,6 +183,7 @@ def create_result_panel() -> ResultPanel:
         control_bar=control_bar,
         slider=slider,
         info_label=info_label,
+        resolution_label=resolution_label,
         zoom_100_btn=zoom_100_btn,
         zoom_fit_btn=zoom_fit_btn,
     )

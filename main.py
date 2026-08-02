@@ -254,6 +254,7 @@ class OpenFocus(QMainWindow):
         # Connect the right panel's ROI-mode exit-request signal
         self.lbl_result_img.roiModeExitRequested.connect(self._on_roi_mode_exit_requested)
         self.lbl_result_info = result_panel.info_label
+        self.lbl_result_resolution = result_panel.resolution_label
         self.result_slider.valueChanged.connect(self.update_result_view)
         # Double-clicking the output gives it the whole view area
         self.lbl_result_img.doubleClicked.connect(self.toggle_source_panel)
@@ -883,6 +884,7 @@ class OpenFocus(QMainWindow):
             else:
                 self.lbl_result_img.clear()
                 self.lbl_result_img.setText(trans.t("result_hint"))
+                self.output_manager.update_result_resolution(None)
             # Clear the ROI aligned images
             self.roi_aligned_images = []
 
@@ -956,6 +958,7 @@ class OpenFocus(QMainWindow):
             
             self.lbl_result_img.set_display_pixmap(pixmap)
             self.lbl_result_info.setText(f"{index + 1} / {len(self.roi_aligned_images)}")
+            self.output_manager.update_result_resolution(image)
             # Keep the control bar visible in ROI mode so the user can switch images
             self.result_control_bar.setVisible(True)
             

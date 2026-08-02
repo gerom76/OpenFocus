@@ -27,6 +27,24 @@ class OutputManager:
         count = self.window.output_list.count()
         self.window.output_label.setText(f"Output: {count}")
 
+    def update_result_resolution(self, image: Any = None) -> None:
+        """Show the pixel size of the image in the result panel, or clear it.
+
+        The size is read off the array that is about to be displayed, so it is
+        the final resolution after registration cropping and any resize - not
+        whatever the sources happened to be.
+        """
+        label = getattr(self.window, "lbl_result_resolution", None)
+        if label is None:
+            return
+
+        if image is None or getattr(image, "ndim", 0) < 2:
+            label.setText("")
+            return
+
+        height, width = image.shape[:2]
+        label.setText(f"{width} × {height} px")
+
     def update_output_list_for_fusion(self) -> None:
         window = self.window
 
@@ -137,6 +155,7 @@ class OutputManager:
             window.fusion_result_metadata = None
             window.lbl_result_img.clear()
             window.result_control_bar.setVisible(False)
+            self.update_result_resolution(None)
 
     def save_output_image_as(self, item: QListWidgetItem | None) -> None:
         window = self.window
@@ -269,6 +288,7 @@ class OutputManager:
             window.fusion_result_metadata = None
             window.lbl_result_img.clear()
             window.result_control_bar.setVisible(False)
+            self.update_result_resolution(None)
 
     # ------------------------------------------------------------------
     # Display helpers
@@ -292,6 +312,9 @@ class OutputManager:
             window.lbl_result_img.set_display_pixmap(pixmap)
             window.result_control_bar.setVisible(False)
             window.lbl_result_info.setText("-- / --")
+            # display_image goes through the same preparation as the saved file,
+            # so its size is the resolution the export will have.
+            self.update_result_resolution(display_image)
         except Exception as exc:  # pylint: disable=broad-except
             show_message_box(
                 window,
@@ -339,6 +362,7 @@ class OutputManager:
 
             window.lbl_result_img.set_display_pixmap(pixmap)
             window.lbl_result_info.setText(f"{index + 1} / {len(window.registration_results)}")
+            self.update_result_resolution(image)
         except Exception as exc:  # pylint: disable=broad-except
             show_message_box(
                 window,
