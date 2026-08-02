@@ -68,6 +68,7 @@ class OpenFocusApplication(QApplication):
         self.main_window = None
         self._pending: List[str] = []
         self._ready = False
+        print(f"OpenFocus v{self.version}")
 
     def set_main_window(self, window):
         self.main_window = window
