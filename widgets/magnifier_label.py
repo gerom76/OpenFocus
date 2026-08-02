@@ -188,6 +188,26 @@ class MagnifierLabel(QLabel):
             return
         self._update_scaled_pixmap()
 
+    def zoom_to_100(self):
+        """Set zoom so one image pixel maps to one screen pixel, centered in the view."""
+        if self._base_pixmap is None or self._base_pixmap.isNull():
+            return
+        pix_w = self._base_pixmap.width()
+        pix_h = self._base_pixmap.height()
+        if pix_w <= 0 or pix_h <= 0:
+            return
+        label_width = max(1, self.width())
+        label_height = max(1, self.height())
+        # At zoom_factor 1.0 the image is fit to the label at ratio `fit_ratio`;
+        # to reach actual-pixel scale (ratio == 1) we need to divide it out.
+        fit_ratio = min(label_width / pix_w, label_height / pix_h)
+        zoom_100 = 1.0 / fit_ratio if fit_ratio > 0 else 1.0
+        self._zoom_factor = max(self._min_zoom, min(zoom_100, self._max_zoom))
+        self._pan_offset = QPointF(0, 0)
+        self._cached_scaled_pixmap = None
+        self._update_scaled_pixmap()
+        self._show_zoom_indicator()
+
     def clear(self):
         self._base_pixmap = None
         self._zoom_factor = 1.0

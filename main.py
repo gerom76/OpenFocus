@@ -257,6 +257,8 @@ class OpenFocus(QMainWindow):
         self.result_slider.valueChanged.connect(self.update_result_view)
         # Double-clicking the output gives it the whole view area
         self.lbl_result_img.doubleClicked.connect(self.toggle_source_panel)
+        self.btn_zoom_100 = result_panel.zoom_100_btn
+        self.btn_zoom_100.clicked.connect(self.lbl_result_img.zoom_to_100)
 
         self.lbl_source_img.enterPreview.connect(self._on_enter_source_preview)
         self.lbl_source_img.leavePreview.connect(self._on_leave_source_preview)

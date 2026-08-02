@@ -158,6 +158,8 @@ class TranslationManager(QObject):
                 'tip_select_nth': 'Check every N-th image starting with the first',
                 'label_output': 'Output: {}',
                 'btn_roi': 'ROI',
+                'btn_zoom_100': '100%',
+                'tip_zoom_100': 'Zoom to 100% (actual size)',
                 'btn_render_processing': '⏳ Processing...',
                 'btn_render_stopping': '⏳ Stopping...',
                 
@@ -752,6 +754,8 @@ class TranslationManager(QObject):
                 'tip_select_nth': '从第一张开始每隔 N 张勾选一次',
                 'label_output': '输出: {}',
                 'btn_roi': '选择感兴趣区域',
+                'btn_zoom_100': '100%',
+                'tip_zoom_100': '缩放至 100%（实际大小）',
                 'btn_render_processing': '⏳ 处理中...',
                 'btn_render_stopping': '⏳ 正在停止...',
                 
