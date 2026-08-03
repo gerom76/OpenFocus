@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenFocus — How It Works</title>
+<style>
+@page { size: A4 portrait; margin: 0; }
+
+:root{
+  --surface:#fcfcfb;
+  --plane:#f9f9f7;
+  --ink:#0b0b0b;
+  --ink-2:#52514e;
+  --muted:#898781;
+  --grid:#e1e0d9;
+  --rule:#c3c2b7;
+  --hair:rgba(11,11,11,0.10);
+
+  --in:#1baf7a;      /* input / load        */
+  --reg:#2a78d6;     /* registration        */
+  --fuse:#eb6834;    /* fusion              */
+  --post:#4a3aa7;    /* refine / enhance    */
+  --out:#eda100;     /* export              */
+
+  --in-ink:#0f6f4d;
+  --reg-ink:#1c5cab;
+  --fuse-ink:#b8420f;
+  --post-ink:#4a3aa7;
+  --out-ink:#8a5f00;
+}
+
+*{ box-sizing:border-box; margin:0; padding:0; }
+
+html{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+
+body{
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background:var(--plane);
+  color:var(--ink);
+  font-size:8.1pt;
+  line-height:1.42;
+}
+
+.page{
+  width:210mm; height:297mm;
+  padding:11mm 12mm 6mm;
+  background:var(--surface);
+  page-break-after:always;
+  position:relative;
+  display:flex; flex-direction:column;
+}
+.page:last-child{ page-break-after:auto; }
+
+/* ---------- page furniture ---------- */
+.folio{
+  margin-top:auto;
+  display:flex; justify-content:space-between;
+  font-size:6.6pt; color:var(--muted);
+  border-top:1px solid var(--grid); padding-top:1.8mm; margin-bottom:0;
+  letter-spacing:.04em; flex:none;
+}
+.folio b{ color:var(--ink-2); font-weight:600; }
+
+.phead{
+  display:flex; align-items:baseline; gap:3mm;
+  border-bottom:2px solid var(--ink); padding-bottom:2mm; margin-bottom:4mm;
+}
+.phead .n{
+  font-size:8pt; font-weight:700; color:#fff; background:var(--ink);
+  width:5.4mm; height:5.4mm; border-radius:1mm;
+  display:flex; align-items:center; justify-content:center;
+  align-self:center; flex:none;
+}
+.phead h2{ font-size:15pt; font-weight:700; letter-spacing:-.015em; }
+.phead .sub{ font-size:7.6pt; color:var(--ink-2); margin-left:auto; text-align:right; max-width:88mm; }
+
+h3{
+  font-size:8.6pt; font-weight:700; letter-spacing:.055em; text-transform:uppercase;
+  color:var(--ink); margin-bottom:2mm;
+  display:flex; align-items:center; gap:2mm;
+}
+h3::after{ content:""; flex:1; height:1px; background:var(--grid); }
+h3 .chip{ width:2.6mm; height:2.6mm; border-radius:.6mm; flex:none; }
+
+h4{ font-size:7.8pt; font-weight:700; margin-bottom:1mm; }
+
+p{ color:var(--ink-2); }
+.lede{ font-size:8.6pt; color:var(--ink-2); }
+.note{ font-size:7.1pt; color:var(--muted); line-height:1.4; }
+b,strong{ color:var(--ink); font-weight:600; }
+code{
+  font-family:ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size:.92em; background:var(--plane); border:1px solid var(--grid);
+  border-radius:.7mm; padding:0 .8mm; color:var(--ink-2);
+}
+
+.rows{ display:flex; flex-direction:column; gap:3.5mm; flex:1; }
+.grid2{ display:grid; grid-template-columns:1fr 1fr; gap:4mm; }
+.grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:3mm; }
+.spread{ display:grid; grid-template-columns:1fr 1fr; gap:4mm; align-items:start; }
+
+/* ---------- cover ---------- */
+.cover{
+  border:1px solid var(--hair); border-left:3.5mm solid var(--fuse);
+  border-radius:1.5mm; padding:6mm 7mm; background:var(--plane);
+  margin-bottom:4.5mm;
+}
+.cover .kicker{
+  font-size:7pt; letter-spacing:.22em; text-transform:uppercase;
+  color:var(--muted); font-weight:600;
+}
+.cover h1{
+  font-size:30pt; font-weight:700; letter-spacing:-.03em; line-height:1.02;
+  margin:1.5mm 0 1mm;
+}
+.cover h1 span{ color:var(--fuse-ink); }
+.cover .tag{ font-size:10.5pt; color:var(--ink-2); font-weight:400; }
+.cover .meta{
+  margin-top:3mm; padding-top:2.5mm; border-top:1px solid var(--rule);
+  display:flex; gap:5mm; flex-wrap:wrap; font-size:7.2pt; color:var(--ink-2);
+}
+.cover .meta b{ font-weight:600; }
+
+.stats{ display:grid; grid-template-columns:repeat(4,1fr); gap:3mm; margin-bottom:4.5mm; }
+.stat{
+  border:1px solid var(--hair); border-radius:1.5mm; padding:3mm 3.5mm;
+  background:var(--surface);
+}
+.stat .v{ font-size:20pt; font-weight:700; letter-spacing:-.03em; line-height:1; }
+.stat .l{ font-size:6.9pt; color:var(--ink-2); margin-top:1.2mm; line-height:1.3; }
+
+/* ---------- pipeline ---------- */
+.pipe{ display:flex; flex-direction:column; gap:0; }
+.stage{
+  display:grid; grid-template-columns:26mm 1fr; gap:4mm;
+  border:1px solid var(--hair); border-radius:1.5mm;
+  padding:2.6mm 3.5mm; background:var(--surface);
+  position:relative;
+}
+.stage.opt{ border-style:dashed; background:var(--plane); }
+.stage .lab{ display:flex; align-items:flex-start; gap:2mm; }
+.stage .bar{ width:1.6mm; border-radius:.8mm; align-self:stretch; flex:none; }
+.stage .nm{ font-size:8.2pt; font-weight:700; letter-spacing:.03em; line-height:1.25; }
+.stage .sm{ font-size:6.6pt; color:var(--muted); margin-top:.4mm; }
+.stage .body{ font-size:7.3pt; color:var(--ink-2); }
+.stage .body em{ font-style:normal; color:var(--ink); font-weight:600; }
+.arrow{
+  height:3.2mm; display:flex; align-items:center; justify-content:center;
+  color:var(--rule); font-size:7pt; line-height:1;
+}
+.arrow::before{ content:"▼"; }
+
+.badge{
+  display:inline-block; font-size:6.2pt; font-weight:700; letter-spacing:.06em;
+  text-transform:uppercase; padding:.3mm 1.2mm; border-radius:.7mm;
+  border:1px solid var(--rule); color:var(--ink-2); background:var(--surface);
+  vertical-align:.3mm;
+}
+.badge.opt{ border-color:var(--post); color:var(--post-ink); }
+.badge.gpu{ border-color:var(--reg); color:var(--reg-ink); }
+.badge.cpu{ border-color:var(--rule); color:var(--muted); }
+.badge.dep{ border-color:var(--out); color:var(--out-ink); }
+
+/* ---------- tables ---------- */
+table{ width:100%; border-collapse:collapse; font-size:7.15pt; }
+th{
+  text-align:left; font-size:6.6pt; font-weight:700; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--muted);
+  border-bottom:1px solid var(--rule); padding:1.4mm 2mm 1.4mm 0;
+  vertical-align:bottom;
+}
+td{
+  padding:1.5mm 2mm 1.5mm 0; border-bottom:1px solid var(--grid);
+  color:var(--ink-2); vertical-align:top;
+}
+td:first-child, th:first-child{ padding-left:0; }
+td.k{ color:var(--ink); font-weight:600; white-space:nowrap; }
+td.num{ font-variant-numeric:tabular-nums; white-space:nowrap; }
+tr:last-child td{ border-bottom:none; }
+table.tight td, table.tight th{ padding-top:1.1mm; padding-bottom:1.1mm; }
+
+/* ---------- cards ---------- */
+.card{
+  border:1px solid var(--hair); border-radius:1.5mm; padding:3mm 3.5mm;
+  background:var(--surface); break-inside:avoid;
+}
+.card.tinted{ background:var(--plane); }
+.card > h4{ display:flex; align-items:center; gap:1.6mm; }
+.card .dot{ width:2.4mm; height:2.4mm; border-radius:50%; flex:none; }
+
+.algo{
+  border:1px solid var(--hair); border-radius:1.5mm; overflow:hidden;
+  background:var(--surface); break-inside:avoid;
+  display:flex; flex-direction:column;
+}
+.algo .top{
+  padding:2.2mm 3mm 2mm; border-bottom:1px solid var(--grid);
+  border-left:1.6mm solid var(--fuse); background:var(--plane);
+}
+.algo .top .nm{ font-size:8.4pt; font-weight:700; letter-spacing:-.01em; }
+.algo .top .fam{ font-size:6.5pt; color:var(--muted); margin-top:.3mm; }
+.algo .mid{ padding:2.2mm 3mm; font-size:7pt; color:var(--ink-2); flex:1; }
+.algo .foot{
+  padding:1.8mm 3mm 2.2mm; border-top:1px solid var(--grid);
+  display:flex; flex-direction:column; gap:1.2mm;
+}
+
+/* meters */
+.meter{ display:flex; align-items:center; gap:1.6mm; font-size:6.6pt; }
+.meter .ml{ width:11mm; color:var(--muted); flex:none; letter-spacing:.04em; }
+.meter .seg{ display:flex; gap:.7mm; flex:none; }
+.meter .seg i{
+  width:3.2mm; height:1.6mm; border-radius:.8mm;
+  background:var(--grid); display:block;
+}
+.meter .seg i.on{ background:var(--reg); }
+.meter .mv{ color:var(--ink); font-weight:600; }
+
+/* param list */
+.plist{ display:flex; flex-direction:column; gap:.6mm; font-size:6.8pt; }
+.plist .row{ display:flex; gap:1.5mm; }
+.plist .row .pk{ color:var(--muted); width:13mm; flex:none; }
+.plist .row .pv{ color:var(--ink-2); }
+
+/* ---------- misc blocks ---------- */
+.callout{
+  border:1px solid var(--hair); border-left:2mm solid var(--reg);
+  border-radius:1.2mm; padding:2.6mm 3.5mm; background:var(--plane);
+  font-size:7.2pt; color:var(--ink-2);
+}
+.callout.warn{ border-left-color:var(--out); }
+.callout.fuse{ border-left-color:var(--fuse); }
+.callout h4{ margin-bottom:.8mm; }
+
+.chain{
+  display:flex; align-items:stretch; gap:0; margin:1mm 0 2mm;
+}
+.chain .lnk{
+  border:1px solid var(--hair); border-radius:1.2mm; padding:1.8mm 2.5mm;
+  background:var(--surface); flex:1; text-align:center;
+}
+.chain .lnk .t{ font-size:7.4pt; font-weight:700; }
+.chain .lnk .d{ font-size:6.4pt; color:var(--muted); margin-top:.3mm; }
+.chain .sep{
+  display:flex; align-items:center; padding:0 1.6mm;
+  color:var(--rule); font-size:8pt;
+}
+.chain .sep::before{ content:"▶"; }
+
+.kv{ display:flex; flex-wrap:wrap; gap:1.2mm; }
+.kv span{
+  font-size:6.7pt; border:1px solid var(--grid); border-radius:.8mm;
+  padding:.5mm 1.4mm; color:var(--ink-2); background:var(--surface);
+}
+.kv span b{ color:var(--ink); }
+
+.refbar{
+  display:flex; gap:.8mm; align-items:flex-end; height:11mm; margin:1.5mm 0 1mm;
+}
+.refbar .f{
+  flex:1; background:var(--grid); border-radius:.6mm .6mm 0 0;
+  position:relative;
+}
+.refbar .f.anchor{ background:var(--ink); }
+.refcap{ display:flex; justify-content:space-between; font-size:6.3pt; color:var(--muted); }
+
+.legend{ display:flex; flex-wrap:wrap; gap:3.5mm; font-size:6.8pt; color:var(--ink-2); }
+.legend .li{ display:flex; align-items:center; gap:1.2mm; }
+.legend .sw{ width:2.6mm; height:2.6mm; border-radius:.6mm; flex:none; }
+
+ul.tick{ list-style:none; display:flex; flex-direction:column; gap:.9mm; font-size:7.2pt; color:var(--ink-2); }
+ul.tick li{ padding-left:3.4mm; position:relative; }
+ul.tick li::before{
+  content:"—"; position:absolute; left:0; color:var(--rule); font-weight:700;
+}
+ul.tick li b{ color:var(--ink); }
+
+.two-col{ column-count:2; column-gap:5mm; }
+.two-col > *{ break-inside:avoid; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════ PAGE 1 ══════════════════════════ -->
+<section class="page">
+
+  <div class="cover">
+    <div class="kicker">Open source focus stacking · MIT License</div>
+    <h1>Open<span>Focus</span></h1>
+    <div class="tag">A multi-focus registration &amp; fusion workstation — how it works, end to end.</div>
+    <div class="meta">
+      <div><b>Version</b> 1.30.11</div>
+      <div><b>Stack</b> Python 3.10+ · PyQt6 · OpenCV · NumPy</div>
+      <div><b>Compute</b> CPU by default · optional CUDA / Apple MPS</div>
+      <div><b>Languages</b> English · 简体中文</div>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v">8</div><div class="l">Fusion algorithms, from classical signal processing to a pretrained neural model</div></div>
+    <div class="stat"><div class="v">3</div><div class="l">Registration stages that compose into a single resample of each frame</div></div>
+    <div class="stat"><div class="v">16<span style="font-size:11pt">-bit</span></div><div class="l">End to end — load, align, fuse and save without narrowing depth</div></div>
+    <div class="stat"><div class="v">9</div><div class="l">Output formats, all lossless by default, with EXIF and XMP carried across</div></div>
+  </div>
+
+  <h3><span class="chip" style="background:var(--fuse)"></span>The render pipeline</h3>
+  <p class="note" style="margin-bottom:2.5mm">Every stage below is optional except loading and export. A run can be <b>fusion only</b>, <b>registration only</b>, or both; the same pipeline serves the interactive window and the batch worker, so a batch job reproduces exactly what the main window is set to.</p>
+
+  <div class="pipe">
+
+    <div class="stage">
+      <div class="lab"><div class="bar" style="background:var(--in)"></div>
+        <div><div class="nm">1 · IMPORT</div><div class="sm">source</div></div></div>
+      <div class="body">A folder of numbered frames, individual files, a video, or a drag-and-drop onto the window, the executable or the dock. Images <em>JPG PNG BMP TIFF WebP</em>; <em>JXL</em> with <code>imagecodecs</code>; RAW <em>NEF NRW DNG</em> with <code>rawpy</code>; video <em>MP4 AVI MOV MKV WMV FLV WebM</em>, decoded into frames.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="stage">
+      <div class="lab"><div class="bar" style="background:var(--in)"></div>
+        <div><div class="nm">2 · LOAD</div><div class="sm">decode &amp; normalise</div></div></div>
+      <div class="body">Frames decode in parallel across cores. JPEG can decode on the GPU via nvJPEG; RAW is developed by LibRaw; JPEG XL gets the whole machine, split between decode workers and libjxl's own pool. The stack is <em>sized before it is read</em>, so the thread count is bounded by free memory. Optional downsample on the way in — by percentage or by target long edge.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="stage opt">
+      <div class="lab"><div class="bar" style="background:var(--reg)"></div>
+        <div><div class="nm">3 · REGISTER</div><div class="sm">optional</div></div></div>
+      <div class="body"><em>Scale → Homography → ECC</em>, independent stages that run in pipeline order. Each measures its transform, all of them compose, and the frames are <em>resampled once</em> onto a single shared canvas — one Lanczos4 warp, one crop. Anchored to a selectable reference frame.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="stage opt">
+      <div class="lab"><div class="bar" style="background:var(--post)"></div>
+        <div><div class="nm">4 · REGION</div><div class="sm">optional</div></div></div>
+      <div class="body">Full frame, or a selected region of interest. <em>Crop</em> saves the region alone; <em>Paste</em> fuses the region and blends it back onto a chosen base frame.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="stage">
+      <div class="lab"><div class="bar" style="background:var(--fuse)"></div>
+        <div><div class="nm">5 · FUSE</div><div class="sm">the core</div></div></div>
+      <div class="body">One of eight algorithms decides, per pixel or per band, which frames carry the detail. Frames wider than the tile threshold are processed in overlapping tiles so memory stays bounded; five of the eight methods have a GPU path with automatic CPU fallback.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="stage opt">
+      <div class="lab"><div class="bar" style="background:var(--post)"></div>
+        <div><div class="nm">6 · REFINE</div><div class="sm">optional</div></div></div>
+      <div class="body"><em>IFCNN</em> passes the fused result and the original stack through a convolutional fusion network to recover detail the blending stage missed. Needs PyTorch and the IFCNN checkpoint on disk.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="stage opt">
+      <div class="lab"><div class="bar" style="background:var(--post)"></div>
+        <div><div class="nm">7 · ENHANCE</div><div class="sm">optional · non-destructive</div></div></div>
+      <div class="body"><em>Auto</em> (colour-safe global tone curve) or <em>Local</em> (CLAHE), with a strength slider. Applied when the result is previewed and when it is saved — never to the stored render, so it can be changed or removed without fusing again.</div>
+    </div>
+    <div class="arrow"></div>
+
+    <div class="stage">
+      <div class="lab"><div class="bar" style="background:var(--out)"></div>
+        <div><div class="nm">8 · EXPORT</div><div class="sm">result</div></div></div>
+      <div class="body">A single image, the aligned stack as a folder or GIF, or a drag straight out of the app. The source frame's <em>EXIF</em> is carried across and an <em>XMP</em> packet records the version, render date, duration and every option the render used — spliced in without recompressing the pixels.</div>
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>Pipeline overview</span><span>1 / 8</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 2 ══════════════════════════ -->
+<section class="page">
+  <div class="phead"><div class="n">2</div><h2>Input, loading &amp; the working stack</h2>
+    <div class="sub">What OpenFocus reads, how fast it reads it, and what it does to the frames before anything is aligned or fused.</div></div>
+
+  <div class="rows">
+
+    <div>
+      <h3><span class="chip" style="background:var(--in)"></span>Supported sources</h3>
+      <table class="tight">
+        <tr><th style="width:24mm">Family</th><th style="width:52mm">Extensions</th><th style="width:26mm">Requires</th><th>Notes</th></tr>
+        <tr><td class="k">Standard images</td><td><code>.jpg .jpeg .png .bmp .tiff .tif .webp</code></td><td>—</td><td>16-bit TIFF and PNG enter the pipeline at full depth</td></tr>
+        <tr><td class="k">JPEG XL</td><td><code>.jxl</code></td><td><code>imagecodecs</code></td><td>16-bit in, EXIF read from the container's Exif box. Without the package, simply not a supported input</td></tr>
+        <tr><td class="k">RAW</td><td><code>.nef .nrw .dng</code></td><td><code>rawpy</code> (LibRaw)</td><td>Camera and Adobe DNG both develop. A DNG that OpenFocus wrote is read verbatim, not developed twice</td></tr>
+        <tr><td class="k">Video</td><td><code>.mp4 .avi .mov .mkv .wmv .flv .webm</code></td><td>—</td><td>Decoded into an image sequence; every frame becomes a stack entry</td></tr>
+        <tr><td class="k">Containers</td><td>Folders · multi-folder selection</td><td>—</td><td>Sorted numerically by filename; multiple folders route to batch processing</td></tr>
+      </table>
+      <p class="note" style="margin-top:1.5mm">Entry points: <b>File → Open Folder</b> (<code>Ctrl+O</code>) · <b>Open Video</b> (<code>Ctrl+Shift+O</code>) · drag onto the window · drag onto the executable, Dock or <code>.desktop</code> launcher · command-line arguments.</p>
+    </div>
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--in)"></span>The loading engine</h3>
+        <ul class="tick">
+          <li><b>Parallel decode.</b> Frames load across CPU cores rather than one at a time — roughly 4× on RAW and large stacks.</li>
+          <li><b>GPU decode.</b> JPEG can be decoded on the GPU through nvJPEG, and RAW developed there too. Toggled under <b>Settings → GPU Image Loading</b>. JPEG XL has no GPU path and cannot have one — no GPU JXL decoder exists.</li>
+          <li><b>Sized before read.</b> RAW and JXL stacks are measured from their headers first, so the app can state the memory the stack will occupy, warn when it is too much, and bound the worker count accordingly.</li>
+          <li><b>Interruptible.</b> A load reports progress and stops at its next checkpoint when asked.</li>
+        </ul>
+      </div>
+      <div>
+        <h3><span class="chip" style="background:var(--in)"></span>Downsample on import</h3>
+        <p style="margin-bottom:1.5mm">A dialog appears on every folder open, offering two ways to shrink the stack:</p>
+        <table class="tight">
+          <tr><td class="k">Scale factor</td><td>A percentage applied to every frame</td></tr>
+          <tr><td class="k">Long edge</td><td>A target in pixels for the longer edge, applied per image — so a mixed-size stack ends on one common long edge</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">Frames already at or below the target are left alone. Downsampling never enlarges.</p>
+      </div>
+    </div>
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--in)"></span>Bit depth</h3>
+        <p style="margin-bottom:1.5mm">Set under <b>Settings → Bit Depth</b>. The chosen depth holds from load through alignment and fusion to export.</p>
+        <table class="tight">
+          <tr><td class="k">Auto</td><td>Follows the source — engages 16-bit whenever any frame carries more than 8 bits <span class="badge">default</span></td></tr>
+          <tr><td class="k">8-bit</td><td>Forces the narrow path; smallest memory footprint</td></tr>
+          <tr><td class="k">16-bit</td><td>Forces full depth even from 8-bit sources, leaving headroom for blending</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">A 16-bit run means no banding in smooth gradients and no quantisation loss where frames are averaged together.</p>
+      </div>
+      <div>
+        <h3><span class="chip" style="background:var(--in)"></span>Stack transformations</h3>
+        <p style="margin-bottom:1.5mm">Applied to every frame at once, from the <b>Edit</b> menu, so alignment between frames is preserved.</p>
+        <div class="kv">
+          <span><b>Rotate</b> 90° CW</span><span><b>Rotate</b> 90° CCW</span><span><b>Rotate</b> 180°</span>
+          <span><b>Flip</b> horizontal</span><span><b>Flip</b> vertical</span><span><b>Resize</b> stack</span>
+        </div>
+        <h4 style="margin-top:3mm">Labels &amp; annotation</h4>
+        <p class="note">Text labels can be overlaid on the input stack and on the registered stack independently, and removed from either. Overlay colours are authored in 8-bit units and scaled to the working depth, so a label looks the same at either depth.</p>
+      </div>
+    </div>
+
+    <div>
+      <h3><span class="chip" style="background:var(--in)"></span>Viewing &amp; navigation</h3>
+      <div class="grid3">
+        <div class="card tinted">
+          <h4>Split view</h4>
+          <p class="note">Source frames above, result below, with a draggable splitter. Navigating the source panel moves the result panel to the matching frame where one exists.</p>
+        </div>
+        <div class="card tinted">
+          <h4>Inspection</h4>
+          <p class="note">Mouse-wheel zoom, <code>Ctrl</code>+wheel for fine steps, double-click to toggle fit / 100 %, click-drag to pan, and a press-and-hold magnifier for pixel-level checks.</p>
+        </div>
+        <div class="card tinted">
+          <h4>Frame selection</h4>
+          <p class="note">Tick frames in the source list to render a subset — every <em>n</em>-th frame, or an arbitrary selection. The saved metadata records "<em>k</em> of <em>n</em> frames" when a subset was used.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>Input &amp; loading</span><span>2 / 8</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 3 ══════════════════════════ -->
+<section class="page">
+  <div class="phead"><div class="n">3</div><h2>Registration</h2>
+    <div class="sub">Correcting the geometry between frames before they are blended. Three independent stages, one resample.</div></div>
+
+  <div class="rows">
+
+    <div>
+      <h3><span class="chip" style="background:var(--reg)"></span>The three stages, in pipeline order</h3>
+      <div class="chain">
+        <div class="lnk"><div class="t">Scale</div><div class="d">focus breathing</div></div>
+        <div class="sep"></div>
+        <div class="lnk"><div class="t">Homography</div><div class="d">feature-based, projective</div></div>
+        <div class="sep"></div>
+        <div class="lnk"><div class="t">ECC</div><div class="d">intensity-based, sub-pixel</div></div>
+        <div class="sep"></div>
+        <div class="lnk" style="background:var(--plane);border-color:var(--reg)"><div class="t">One warp</div><div class="d">Lanczos4 + single crop</div></div>
+      </div>
+      <table class="tight">
+        <tr><th style="width:30mm">Stage</th><th style="width:44mm">What it corrects</th><th style="width:44mm">How it fits</th><th>When to reach for it</th></tr>
+        <tr>
+          <td class="k">Scale <span class="badge">off by default</span></td>
+          <td>The magnification change a lens introduces as the focus plane moves through the stack — <em>focus breathing</em></td>
+          <td>A constrained similarity — uniform scale, rotation, translation — via <code>estimateAffinePartial2D</code> with RANSAC on keypoint matches</td>
+          <td>When the subject visibly grows or shrinks between the first and last shot. Cancels size drift without the overfitting a full homography risks on blurred frames</td>
+        </tr>
+        <tr>
+          <td class="k">Homography</td>
+          <td>Global perspective change and larger geometric shifts</td>
+          <td>SIFT/ORB keypoints and RANSAC. Fits <em>both</em> a perspective transform and a constrained similarity per pair, and keeps the perspective one only where it predicts matches it was not fitted to</td>
+          <td>Handheld captures, or scenes with real perspective change. The model gate means a stack shot on a rail is not bent to fit feature-matching noise</td>
+        </tr>
+        <tr>
+          <td class="k">ECC</td>
+          <td>Residual sub-pixel misalignment</td>
+          <td>Intensity-based optimisation maximising the enhanced correlation coefficient — no features required</td>
+          <td>Subtle drift, and as a finishing pass after Homography. Slower but more precise; low-texture frames it can still handle where feature matching cannot</td>
+        </tr>
+      </table>
+      <p class="note" style="margin-top:1.5mm">Stages are independent checkboxes. Any combination is valid, and when several are on they always run <b>Scale → Homography → ECC</b> regardless of the order you tick them.</p>
+    </div>
+
+    <div class="callout">
+      <h4>Why one warp matters</h4>
+      Each stage measures its own transform on downsampled frames, but the transforms are <b>composed into a single matrix per frame</b> before any pixel moves. The stack is then resampled once, with Lanczos4, onto one shared canvas and cropped once to the region every frame covers. A three-stage pipeline that resampled per stage would interpolate three times — softening the frame — and crop three times, throwing away roughly a further tenth of it.
+    </div>
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--reg)"></span>Reference frame</h3>
+        <p style="margin-bottom:1mm">Transforms are measured between neighbours and chained back to one fixed frame. Alignment error accumulates with distance from that anchor, so which frame anchors the chain decides where the residual drift ends up. The reference is only cropped, never warped.</p>
+
+        <div style="margin-top:2mm">
+          <div class="refcap"><span><b style="color:var(--ink)">First</b> — default, error grows toward the end</span><span>frame 1 → n</span></div>
+          <div class="refbar">
+            <div class="f anchor" style="height:8%"></div><div class="f" style="height:20%"></div><div class="f" style="height:33%"></div>
+            <div class="f" style="height:46%"></div><div class="f" style="height:59%"></div><div class="f" style="height:72%"></div>
+            <div class="f" style="height:85%"></div><div class="f" style="height:100%"></div>
+          </div>
+          <div class="refcap" style="margin-top:2mm"><span><b style="color:var(--ink)">Middle</b> — halves the longest chain, drift spread symmetrically</span><span>frame 1 → n</span></div>
+          <div class="refbar">
+            <div class="f" style="height:52%"></div><div class="f" style="height:39%"></div><div class="f" style="height:26%"></div>
+            <div class="f anchor" style="height:8%"></div><div class="f anchor" style="height:8%"></div><div class="f" style="height:26%"></div>
+            <div class="f" style="height:39%"></div><div class="f" style="height:52%"></div>
+          </div>
+          <div class="refcap" style="margin-top:2mm"><span><b style="color:var(--ink)">Last</b> — the mirror of First</span><span>frame 1 → n</span></div>
+          <div class="refbar">
+            <div class="f" style="height:100%"></div><div class="f" style="height:85%"></div><div class="f" style="height:72%"></div>
+            <div class="f" style="height:59%"></div><div class="f" style="height:46%"></div><div class="f" style="height:33%"></div>
+            <div class="f" style="height:20%"></div><div class="f anchor" style="height:8%"></div>
+          </div>
+          <div class="legend" style="margin-top:2mm">
+            <div class="li"><span class="sw" style="background:var(--ink)"></span>Anchor — held fixed</div>
+            <div class="li"><span class="sw" style="background:var(--grid)"></span>Accumulated chain distance (bar height)</div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:1.5mm">Choose <b>Middle</b> for long stacks where the far end drifts or ghosts; <b>Last</b> when the most important detail sits at the end of the stack.</p>
+      </div>
+
+      <div>
+        <h3><span class="chip" style="background:var(--reg)"></span>Registration settings</h3>
+        <table class="tight">
+          <tr><th style="width:32mm">Setting</th><th style="width:18mm">Default</th><th>What it does</th></tr>
+          <tr><td class="k">Downscale width</td><td class="num">1024 px</td><td>The width frames are resampled to <em>for measuring</em> the transform — never for the output. Lower is faster; setting it to the full frame width aligns at full resolution</td></tr>
+          <tr><td class="k">Reference frame</td><td>First</td><td>First · Middle · Last, as shown at left</td></tr>
+          <tr><td class="k">ECC parallel</td><td>On</td><td>Computes the ECC pair matrices concurrently. Results are identical either way</td></tr>
+          <tr><td class="k">Thread count</td><td class="num">4</td><td>Workers for detection and warping, shared with the rest of the pipeline</td></tr>
+        </table>
+
+        <h4 style="margin-top:3mm">When registration is worth running</h4>
+        <ul class="tick">
+          <li>Frames were captured handheld, or the rig moved</li>
+          <li>The subject changes size across the stack — <b>enable Scale</b></li>
+          <li>The scene has parallax, so nearer objects shift between frames</li>
+          <li>Results show <b>ghosting or doubling</b> — almost always a registration problem, not a fusion one</li>
+        </ul>
+
+        <div class="callout warn" style="margin-top:2.5mm">
+          <h4>If registration fails</h4>
+          Try one stage at a time, lower the downscale width, and check the frames have enough contrast and texture for features to be found. Single-channel (greyscale) stacks are handled by all three stages.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>Registration</span><span>3 / 8</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 4 ══════════════════════════ -->
+<section class="page">
+  <div class="phead"><div class="n">4</div><h2>Fusion algorithms</h2>
+    <div class="sub">Eight ways to decide which frame owns which detail. All eight take the same stack and produce one all-in-focus render.</div></div>
+
+  <div class="rows">
+
+    <div class="grid2" style="gap:1.8mm">
+
+      <div class="algo">
+        <div class="top" style="border-left-color:var(--fuse)">
+          <div class="nm">Guided Filter <span class="badge gpu">GPU</span></div>
+          <div class="fam">Spatial domain · edge-preserving weight maps · Li, Kang &amp; Hu 2013</div>
+        </div>
+        <div class="mid">Builds a per-frame weight map from local saliency and refines it with a guided filter, so weights follow real edges instead of blurring across them. Fast, balanced, and forgiving — the historical default.</div>
+        <div class="foot">
+          <div class="plist"><div class="row"><span class="pk">Kernel</span><span class="pv">3–51 px, odd · default <b>31</b></span></div></div>
+          <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Fast</span></div>
+          <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="mv">Good</span></div>
+        </div>
+      </div>
+
+      <div class="algo">
+        <div class="top" style="border-left-color:var(--fuse)">
+          <div class="nm">DCT <span class="badge gpu">GPU</span></div>
+          <div class="fam">Frequency domain · block-wise · Haghighat et al. 2011</div>
+        </div>
+        <div class="mid">Measures each block's detail energy in the DCT domain and picks the frame that holds it. The focal-plane map is median-filtered to remove isolated blocks, and neighbouring frames are blended across the block lattice so the grid does not show.</div>
+        <div class="foot">
+          <div class="plist">
+            <div class="row"><span class="pk">Kernel</span><span class="pv">3–151 px · default <b>31</b> (filters the block map, not pixels)</span></div>
+            <div class="row"><span class="pk">Block</span><span class="pv">4 · 8 · 16 · 32 px · default <b>8</b></span></div>
+            <div class="row"><span class="pk">Plateau</span><span class="pv">Crisp · Balanced · Smooth</span></div>
+            <div class="row"><span class="pk">Blend</span><span class="pv">On / off across the lattice</span></div>
+          </div>
+          <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="mv">Medium</span></div>
+          <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="mv">Good</span></div>
+        </div>
+      </div>
+
+      <div class="algo">
+        <div class="top" style="border-left-color:var(--fuse)">
+          <div class="nm">DTCWT <span class="badge gpu">GPU</span></div>
+          <div class="fam">Dual-tree complex wavelets · multi-scale, multi-directional · Lewis et al. 2007</div>
+        </div>
+        <div class="mid">Decomposes each frame into shift-invariant complex wavelet subbands at several scales and six orientations, fuses the coefficients by activity, and reconstructs. Strong on scenes with detail at many different scales.</div>
+        <div class="foot">
+          <div class="plist"><div class="row"><span class="pk">Kernel</span><span class="pv">Not used — the decomposition sets the scale</span></div>
+            <div class="row"><span class="pk">Needs</span><span class="pv"><code>dtcwt</code>; GPU path via <code>pytorch_wavelets</code></span></div></div>
+          <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="mv">Medium</span></div>
+          <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Very good</span></div>
+        </div>
+      </div>
+
+      <div class="algo">
+        <div class="top" style="border-left-color:var(--fuse)">
+          <div class="nm">GFG-FGF <span class="badge gpu">GPU</span></div>
+          <div class="fam">Gradient focus measure + fast guided filter · Fu et al. 2024</div>
+        </div>
+        <div class="mid">A generalized four-neighbourhood Gaussian gradient operator scores focus, and a fast guided filter refines the resulting weight maps. Cheap to compute and decisive where focus regions are clearly separated.</div>
+        <div class="foot">
+          <div class="plist"><div class="row"><span class="pk">Kernel</span><span class="pv">3–51 px, odd · default <b>7</b></span></div></div>
+          <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Fast</span></div>
+          <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="mv">Good</span></div>
+        </div>
+      </div>
+
+      <div class="algo" style="grid-column:1 / -1">
+        <div class="top" style="border-left-color:var(--fuse); background:#fff6f1">
+          <div class="nm">Pyramid <span class="badge">recommended default</span> <span class="badge gpu">GPU</span></div>
+          <div class="fam">Laplacian pyramid, weighted rather than choose-max · after Burt &amp; Adelson 1983</div>
+        </div>
+        <div class="mid">
+          Each frame is split into band-pass detail levels plus a smooth base. Every detail band becomes a weighted mean across the stack, each frame weighted by how far its pooled local energy falls behind the best on offer — a frame twice behind the winner contributes well under a percent, so a genuine focus decision is still a decision, while frames that <em>tie</em> (a background no frame resolves) are averaged instead of picked between. Energies are compared in units of each frame's own grain, so a bright noisy frame cannot win the areas holding no detail. The base band follows the frames that won the detail. Collapsing the pyramid reconstructs the image, and every pixel is finally held inside the range its own frames span, so bands taken from different frames cannot add up to a value no frame had.
+          <div style="margin-top:1.5mm" class="note"><b>Six controls</b>, all exposed and all defaulted to their measured best — see page 5. The textbook choose-max rule remains available as <em>Selectivity → Winner takes all</em>.</div>
+        </div>
+        <div class="foot" style="flex-direction:row; gap:8mm; align-items:center">
+          <div class="plist" style="flex:1"><div class="row"><span class="pk">Kernel</span><span class="pv">Energy pooling window · default <b>5</b> px (small by design — the pyramid pools again at every level)</span></div></div>
+          <div style="display:flex;flex-direction:column;gap:1.2mm">
+            <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Fast</span></div>
+            <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Very good</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="algo">
+        <div class="top" style="border-left-color:var(--fuse)">
+          <div class="nm">Depth Map — Max <span class="badge cpu">CPU only</span></div>
+          <div class="fam">Per-pixel select from a local Laplacian focus measure</div>
+        </div>
+        <div class="mid">Each pixel is taken whole from the frame whose focus measure is highest there — the classic hard depth map, and an order-independent argmax. Colour and noise never blend across a slice boundary. The family behind Zerene DMap and Helicon methods A/B.</div>
+        <div class="foot">
+          <div class="plist">
+            <div class="row"><span class="pk">Kernel</span><span class="pv">Focus-measure window · default <b>9</b> px</span></div>
+            <div class="row"><span class="pk">Halo</span><span class="pv">Suppression radius in px · <b>0 = off</b></span></div>
+          </div>
+          <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Fast</span></div>
+          <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Very good</span></div>
+        </div>
+      </div>
+
+      <div class="algo">
+        <div class="top" style="border-left-color:var(--fuse)">
+          <div class="nm">Depth Map — Average <span class="badge cpu">CPU only</span></div>
+          <div class="fam">Contrast-weighted blend from the same focus measure</div>
+        </div>
+        <div class="mid">Frames are blended in proportion to their focus measure, with a small baseline weight. A flat region — where every frame is equally defocused — collapses to the plain mean and recovers the stack's multi-frame SNR, a free √N noise reduction, while textured regions still follow the frame that holds the detail.</div>
+        <div class="foot">
+          <div class="plist">
+            <div class="row"><span class="pk">Kernel</span><span class="pv">Focus-measure window · default <b>9</b> px</span></div>
+            <div class="row"><span class="pk">Halo</span><span class="pv">Suppression radius in px · <b>0 = off</b></span></div>
+          </div>
+          <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="mv">Fast</span></div>
+          <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span><span class="mv">Good</span></div>
+        </div>
+      </div>
+
+      <div class="algo" style="grid-column:1 / -1">
+        <div class="top" style="border-left-color:var(--post); background:#f4f2fb">
+          <div class="nm">StackMFF-V4 <span class="badge dep">needs PyTorch</span></div>
+          <div class="fam">Pretrained deep model · the AI path</div>
+        </div>
+        <div class="mid">
+          A neural network trained on large multi-focus datasets learns the fusion rule rather than being given one. Highest quality of the eight when the hardware is there. It runs on CUDA or Apple MPS and falls back to CPU automatically; on a card that runs out of memory, the inference batch halves itself and retries, and the size it actually ran at is written into the result's metadata. Inputs are resized to a multiple of 32 for the network's pooling depth, and a preview too small to pool is refused with an explanation rather than producing something wrong.
+        </div>
+        <div class="foot" style="flex-direction:row; gap:8mm; align-items:center">
+          <div class="plist" style="flex:1">
+            <div class="row"><span class="pk">Batch</span><span class="pv">1–16 tiles per inference · default <b>2</b>, halves itself under VRAM pressure</span></div>
+            <div class="row"><span class="pk">Kernel</span><span class="pv">Not used — the network decides</span></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:1.2mm">
+            <div class="meter"><span class="ml">Speed</span><span class="seg"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="mv">Slow</span></div>
+            <div class="meter"><span class="ml">Quality</span><span class="seg"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><span class="mv">Excellent</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>Fusion algorithms</span><span>4 / 8</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 5 ══════════════════════════ -->
+<section class="page">
+  <div class="phead"><div class="n">5</div><h2>Refinement, compute &amp; tuning</h2>
+    <div class="sub">Every control here is a trade rather than a right answer — which is why it is exposed. The defaults are what measured best on the project's test stacks.</div></div>
+
+  <div class="rows">
+
+    <div class="spread" style="gap:4mm">
+      <div class="callout fuse">
+        <h4>+ IFCNN refinement — a stage, not a method</h4>
+        A separate checkbox that runs <em>after</em> whichever method you chose. The fused result and the original stack go through a fully convolutional fusion network that recovers detail the blending stage missed. It refines a fused image, so it cannot run on its own; it needs PyTorch and the IFCNN checkpoint on disk, and the checkbox greys out with the expected path in its tooltip when either is missing. Results are labelled <code>&lt;method&gt; + IFCNN</code>.
+      </div>
+      <div>
+        <h3><span class="chip" style="background:var(--reg)"></span>Compute paths</h3>
+        <p class="note" style="margin-bottom:1.5mm">GPU work goes through PyTorch — CUDA on NVIDIA, MPS on Apple Silicon. Every GPU path falls back to CPU automatically if the device, the library or the memory is not there, and says so in the status console. The status bar shows <code>CUDA</code>, <code>MPS</code>, <code>N/A</code> or <code>Err</code>; <b>Help → Environment Info</b> reports what was actually detected.</p>
+        <div class="kv">
+          <span><b>GPU:</b> Guided Filter</span><span><b>GPU:</b> DCT</span><span><b>GPU:</b> DTCWT</span>
+          <span><b>GPU:</b> GFG-FGF</span><span><b>GPU:</b> Pyramid</span><span><b>GPU:</b> StackMFF-V4</span>
+          <span><b>GPU:</b> IFCNN</span><span><b>CPU only:</b> Depth Map</span>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3><span class="chip" style="background:var(--fuse)"></span>Pyramid — the six controls</h3>
+      <table class="tight">
+        <tr><th style="width:36mm">Control</th><th style="width:24mm">Options</th><th style="width:17mm">Default</th><th>What it does</th></tr>
+        <tr>
+          <td class="k">Kernel slider</td><td>3–51 px, odd</td><td class="num"><b>5</b></td>
+          <td>The window each band's focus energy is pooled over before frames are compared. Small follows fine detail and can chase grain; large decides region by region and rounds off narrow in-focus structures. Small by design — the pyramid pools again at every level, so this window covers twice as much picture at each one</td>
+        </tr>
+        <tr>
+          <td class="k">Pyramid levels</td><td>Auto, 2–8</td><td>Auto</td>
+          <td>How many band-pass levels each frame is split into. Auto is five, clamped to what the image size can carry. Fewer decide focus on coarser structure; more separate scales finely and cost time</td>
+        </tr>
+        <tr>
+          <td class="k">Selectivity</td><td>Average · Soft · Balanced · Strict · Winner takes all</td><td>Balanced</td>
+          <td>How sharply each band favours the sharpest frame. <b>Balanced</b> and <b>Strict</b> let a genuinely sharp frame win outright while frames that tie are averaged. <b>Average</b> and <b>Soft</b> blend more of the stack in — smoother backgrounds, softer detail. <b>Winner takes all</b> is the textbook choose-max rule: it takes the single best coefficient everywhere, including in defocused areas where "best" is decided by grain</td>
+        </tr>
+        <tr>
+          <td class="k">Scale coherence</td><td>Off · Light · Medium · Strong</td><td>Off</td>
+          <td>Makes the coarse levels guide the fine ones, so a pixel cannot take its fine detail from one frame and its coarse structure from another. Reach for it when detail looks like it is sitting on the wrong background. Off by default because it costs sharpness where near meets far</td>
+        </tr>
+        <tr>
+          <td class="k">Base band</td><td>Mean · Gentle · Balanced · Strong</td><td>Balanced</td>
+          <td>How hard the smooth low-frequency layer follows the frames that won the detail bands. <b>Mean</b> averages every frame and hazes the result when most of the stack is defocused; <b>Strong</b> follows the sharp frames hardest</td>
+        </tr>
+        <tr>
+          <td class="k">Ignore grain when nothing is sharp</td><td>On / Off</td><td>On</td>
+          <td>Compares frames in units of their own noise, so a bright, grainy, completely defocused frame cannot win the areas where nothing is in focus and stamp its flat tone over them</td>
+        </tr>
+        <tr>
+          <td class="k">Keep pixels within the source range</td><td>On / Off</td><td>On</td>
+          <td>Holds every pixel between the darkest and brightest value its own frames actually have there. Rebuilding an image from bands taken out of different frames can otherwise produce values no frame had</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <h4>If a smooth, defocused area comes out crossed by thin dark strokes</h4>
+      The two switches at the bottom of the list are what remove them, and both are <b>on</b> by default — check they have not been turned off. Keep Selectivity at <em>Balanced</em> or lower rather than <em>Winner takes all</em>. If the strokes survive that, try Scale coherence at <em>Light</em> or <em>Medium</em>.
+    </div>
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--fuse)"></span>DCT — the three controls</h3>
+        <table class="tight">
+          <tr><th style="width:22mm">Control</th><th style="width:16mm">Default</th><th>Effect</th></tr>
+          <tr><td class="k">Block size</td><td class="num">8 px</td><td>The grid every DCT decision is made over — 4, 8, 16 or 32. Smaller follows fine detail and is noisier; larger is steadier but steps harder where near meets far</td></tr>
+          <tr><td class="k">Plateau</td><td>Balanced</td><td>How far below the peak energy a frame still counts as in focus on a block. <b>Crisp</b> (0.85) keeps a never-sharp background closer to its sharpest frame; <b>Smooth</b> (0.70) averages more frames there, coming out flatter. Presets rather than a slider — above 0.85 detail-free regions go back to being decided by grain</td></tr>
+          <tr><td class="k">Blend</td><td>On</td><td>Blends neighbouring frames across the block lattice. Turning it off copies each block verbatim from a single frame — true source pixels, at the cost of the lattice showing again</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">DCT's kernel slider median-filters the <em>focal-plane map</em>, which holds one entry per block rather than per pixel — so each step reaches eight times further than it does for the pixel-domain methods. That is why its ceiling is 151 rather than 51.</p>
+      </div>
+
+      <div>
+        <h3><span class="chip" style="background:var(--fuse)"></span>Depth Map — halo suppression</h3>
+        <p style="margin-bottom:1.5mm">A defocused foreground edge casts a bright glow over the background in exactly the frames where that background is sharp. Plain per-pixel selection copies the glow straight into the result — the classic focus-stacking halo.</p>
+        <p style="margin-bottom:1.5mm">With a radius set, a sharply focused region also claims the surrounding band its glow contaminates, so the ring comes out as natural defocused background instead.</p>
+        <table class="tight">
+          <tr><td class="k">Radius 0</td><td>Off — bit-identical to not passing the option at all</td></tr>
+          <tr><td class="k">Set it to</td><td>Roughly the visible halo width, in pixels</td></tr>
+          <tr><td class="k">Cost</td><td>Larger values round off genuine detail near depth edges — the same trade the Radius dial has in Helicon Focus and Zerene Stacker</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">Use the smallest value that clears the glow. Both Max and Average accept it; Average halos less to begin with, because its blend weights spread.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>Refinement &amp; tuning</span><span>5 / 8</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 6 ══════════════════════════ -->
+<section class="page">
+  <div class="phead"><div class="n">6</div><h2>Kernel, tone &amp; memory</h2>
+    <div class="sub">The one slider shared across the methods, the enhancement applied after fusion, and how large stacks are kept inside available memory.</div></div>
+
+  <div class="rows">
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--fuse)"></span>Kernel size at a glance</h3>
+        <table class="tight">
+          <tr><th style="width:34mm">Method</th><th style="width:15mm">Default</th><th style="width:17mm">Range</th><th>What the slider drives</th></tr>
+          <tr><td class="k">Guided Filter</td><td class="num">31</td><td class="num">3–51</td><td>Filter window</td></tr>
+          <tr><td class="k">DCT</td><td class="num">31</td><td class="num">3–151</td><td>Median filter on the block map</td></tr>
+          <tr><td class="k">GFG-FGF</td><td class="num">7</td><td class="num">3–51</td><td>Gradient / guided-filter window</td></tr>
+          <tr><td class="k">Pyramid</td><td class="num">5</td><td class="num">3–51</td><td>Band energy pooling window</td></tr>
+          <tr><td class="k">Depth Map (both)</td><td class="num">9</td><td class="num">3–51</td><td>Focus measure pooling window</td></tr>
+          <tr><td class="k">DTCWT · StackMFF-V4</td><td>—</td><td>—</td><td>Not used by these methods</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">Values are always odd. Broadly: smaller keeps local detail and more noise; larger is smoother and better at suppressing noise.</p>
+      </div>
+      <div>
+        <h3><span class="chip" style="background:var(--post)"></span>Contrast enhancement</h3>
+        <p style="margin-bottom:1.5mm">A post-fusion stage, off by default. It is applied when the result is displayed and again when it is saved — never to the stored render — so it previews live and can be changed or removed without fusing again.</p>
+        <table class="tight">
+          <tr><td class="k">Auto</td><td>A colour-safe global tone curve. Brightness moves through a luminance gain, so hue is untouched</td></tr>
+          <tr><td class="k">Local</td><td>CLAHE — contrast limited adaptive histogram equalisation, working region by region</td></tr>
+          <tr><td class="k">Strength</td><td>0–100 %. At 0, or with the method off, the input is returned unchanged</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">Depth-aware: a 16-bit result stays real 16-bit data, not 8-bit values widened into a bigger type. The setting in force at save time is what gets written into the result's metadata.</p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <h4>Tuning is recorded, not lost</h4>
+      Any control moved off its default is written into the output filename, so two renders that differ only in tuning cannot overwrite each other — and the full set lands in the file's XMP either way. Batch jobs inherit whatever the main window is set to.
+    </div>
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--reg)"></span>Tiling — the memory strategy</h3>
+        <p style="margin-bottom:1.5mm">Large frames are fused in overlapping tiles rather than whole, because GPU memory demand scales with tile <em>area</em> and with the square of the stack size. The overlap is what keeps the seams invisible.</p>
+        <table class="tight">
+          <tr><th style="width:24mm">Setting</th><th style="width:18mm">Default</th><th style="width:24mm">Range</th><th>Effect</th></tr>
+          <tr><td class="k">Block size</td><td class="num">1024 px</td><td class="num">64 – 16384</td><td>Smaller = less memory, slower</td></tr>
+          <tr><td class="k">Overlap</td><td class="num">256 px</td><td class="num">up to 4096</td><td>Raise it if seams show</td></tr>
+          <tr><td class="k">Threshold</td><td class="num">2048 px</td><td class="num">256 – 131072</td><td>Frame size above which tiling engages at all</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">How many tiles run at once is derived from free memory at render time, not from the thread count — and forced to one for the GPU methods, which are already parallel inside a tile. A render that tiled records both facts in its metadata.</p>
+      </div>
+      <div>
+        <h3><span class="chip" style="background:var(--reg)"></span>Performance settings</h3>
+        <table class="tight">
+          <tr><th style="width:32mm">Setting</th><th style="width:15mm">Default</th><th>What it controls</th></tr>
+          <tr><td class="k">Thread count</td><td class="num">4</td><td>Workers for loading, detection, warping and CPU fusion. 1–256; match your core count</td></tr>
+          <tr><td class="k">GPU image loading</td><td>On</td><td>nvJPEG decode and GPU RAW develop on import</td></tr>
+          <tr><td class="k">StackMFF batch</td><td class="num">2</td><td>Tiles per inference, 1–16; halves itself under VRAM pressure</td></tr>
+          <tr><td class="k">ECC parallel</td><td>On</td><td>Concurrent ECC pair matrices; identical results</td></tr>
+        </table>
+        <div class="callout warn" style="margin-top:2.5mm">
+          <h4>Out of memory?</h4>
+          Enable or tighten tiling, reduce the block size, use a smaller kernel, or downsample the stack on import. For CUDA specifically, lower the StackMFF batch size — though it already halves itself and retries on an allocator failure.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>Kernel, tone &amp; memory</span><span>6 / 8</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 7 ══════════════════════════ -->
+<section class="page">
+  <div class="phead"><div class="n">7</div><h2>Working modes, batch &amp; output</h2>
+    <div class="sub">What a single run can be asked to do, how to queue many of them, and the nine ways a result leaves the application.</div></div>
+
+  <div class="rows">
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--fuse)"></span>Three ways to run a job</h3>
+        <p style="margin-bottom:1.5mm">Registration and fusion are independent selections, so a run is whichever of them you tick:</p>
+        <table class="tight">
+          <tr><td class="k">Fusion only</td><td>No registration stage selected. The frames are taken as they are — correct for a stack shot on a rigid rail or a microscope stage</td></tr>
+          <tr><td class="k">Registration only</td><td>No fusion method selected. The output is the <em>aligned stack</em>, savable as a folder or a GIF. Recorded in metadata as "None (registration only)"</td></tr>
+          <tr><td class="k">Both</td><td>The frames are aligned, then fused. The aligned stack is cached and reused if you re-render with the same registration settings, so only the fusion runs again</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">Changing any registration setting invalidates that cache — the alignment is only reused on an exact match of stages and reference frame.</p>
+      </div>
+      <div>
+        <h3><span class="chip" style="background:var(--post)"></span>Region of interest</h3>
+        <p style="margin-bottom:1.5mm">Fuse a part of the frame instead of all of it — much faster when you are comparing settings, and the only way to treat one subject differently from its surroundings.</p>
+        <table class="tight">
+          <tr><td class="k">1 · Enable</td><td>The <b>ROI</b> button. Needs at least two frames loaded; the stack is aligned with <b>ECC</b> first, automatically, so the region means the same thing in every frame</td></tr>
+          <tr><td class="k">2 · Draw</td><td>Drag a rectangle on the result panel</td></tr>
+          <tr><td class="k">3 · Render</td><td>A dialog asks how to output it</td></tr>
+        </table>
+        <table class="tight" style="margin-top:1.5mm">
+          <tr><td class="k">Crop</td><td>The result is a small image containing only the selected region</td></tr>
+          <tr><td class="k">Overlay</td><td>The result is a full-size image — a chosen <b>base frame</b> with the fused region pasted onto it</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--out)"></span>Batch processing</h3>
+        <p style="margin-bottom:1.5mm">Queue any number of folders and leave it running. Each folder is processed independently, with live progress and cancellation at any point.</p>
+        <table class="tight">
+          <tr><td class="k">Settings</td><td>Inherited from the main window — the same fusion method, kernel, tuning, registration stages, contrast, bit depth and tiling</td></tr>
+          <tr><td class="k">Output</td><td>Into a subfolder of each input, alongside the input, or into one custom folder</td></tr>
+          <tr><td class="k">Format</td><td>Chosen per batch from the same list as the save dialogs; the choice is remembered</td></tr>
+          <tr><td class="k">Naming</td><td>Timestamp plus the parameters that were used, so runs never collide</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">Dropping several folders onto the window asks whether they are one stack or many, and routes to batch when they are many.</p>
+      </div>
+      <div>
+        <h3><span class="chip" style="background:var(--out)"></span>Ways out of the app</h3>
+        <ul class="tick">
+          <li><b>Save result</b> (<code>Ctrl+S</code>) — one fused image, format from the dialog</li>
+          <li><b>Save stack</b> (<code>Ctrl+Shift+S</code>) — the registered or the input stack, as a folder of images or as an animated GIF</li>
+          <li><b>Drag out</b> — drag a result from the output list straight into another application</li>
+          <li><b>Batch output</b> — written automatically, one result per input folder</li>
+        </ul>
+        <div class="callout" style="margin-top:2.5mm">
+          <h4>Interrupting a render</h4>
+          The <b>Stop</b> button activates for the duration of a render. It unwinds at the next safe checkpoint — between pipeline stages, or between tiles on large images — the controls unlock and no result is produced. On a heavily tiled image this takes a moment while tiles already in flight finish.
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3><span class="chip" style="background:var(--out)"></span>Output formats</h3>
+      <table class="tight">
+        <tr><th style="width:20mm">Format</th><th style="width:14mm">Depth</th><th style="width:22mm">Compression</th><th style="width:22mm">Metadata</th><th>Notes</th></tr>
+        <tr><td class="k">PNG</td><td>8 / 16-bit</td><td>Lossless</td><td>EXIF + XMP</td><td>16-bit stays 16-bit — the metadata is spliced in without recompressing</td></tr>
+        <tr><td class="k">JPEG XL</td><td>8 / 16-bit</td><td>Lossless</td><td>EXIF + XMP</td><td>Typically half the size of the equivalent PNG. Needs <code>imagecodecs</code>; not offered without it</td></tr>
+        <tr><td class="k">TIFF</td><td>8 / 16-bit</td><td>Lossless</td><td>EXIF</td><td>Widest compatibility for a high-depth deliverable</td></tr>
+        <tr><td class="k">DNG</td><td>16-bit</td><td>None · lossless · lossy</td><td>EXIF + camera tags</td><td>Linear demosaiced DNG for raw-converter workflows — see page 8</td></tr>
+        <tr><td class="k">WebP</td><td>8-bit</td><td>Lossless</td><td>—</td><td>A 16-bit render is narrowed on the way out. Hard limit of 16383 px per side, reported as itself</td></tr>
+        <tr><td class="k">JPG</td><td>8-bit</td><td>Lossy</td><td>EXIF + XMP</td><td>Good quality-to-size ratio; the default for drag-out</td></tr>
+        <tr><td class="k">BMP</td><td>8-bit</td><td>None</td><td>—</td><td>Uncompressed, maximum compatibility</td></tr>
+        <tr><td class="k">GIF</td><td>8-bit</td><td>Lossy palette</td><td>—</td><td>Animation of an input or registered stack, not a fused result</td></tr>
+        <tr><td class="k">Folder</td><td>as chosen</td><td>as chosen</td><td>as chosen</td><td>A whole stack written out frame by frame under its own filenames</td></tr>
+      </table>
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>Working modes, batch &amp; output</span><span>7 / 8</span></div>
+</section>
+
+<!-- ══════════════════════════ PAGE 8 ══════════════════════════ -->
+<section class="page">
+  <div class="phead"><div class="n">8</div><h2>DNG, metadata &amp; quick reference</h2>
+    <div class="sub">What the raw-converter path does, what a saved file remembers about its own render, and where to look when something is wrong.</div></div>
+
+  <div class="rows">
+
+    <div class="spread">
+      <div>
+        <h3><span class="chip" style="background:var(--out)"></span>DNG output settings</h3>
+        <p style="margin-bottom:1.5mm">An uncompressed <em>linear</em> (already demosaiced) DNG at full 16-bit, tagged with an already-neutral white balance and the transfer curve the develop actually applies — so Lightroom or RawTherapee renders the result you saw, not a second tone curve on top of it. Reloading one into OpenFocus returns the exact pixels.</p>
+        <table class="tight">
+          <tr><td class="k">Compression</td><td><b>None</b> (default) · <b>Lossless</b> Huffman JPEG — identical pixels at about half the size · <b>Lossy</b> baseline JPEG with a quality setting, 8-bit only, meant for proxies</td></tr>
+          <tr><td class="k">Fast-load preview</td><td>Embeds a half-resolution JPEG in a SubIFD, so browsers and raw converters draw a thumbnail from a few hundred kilobytes instead of decoding the full linear raw</td></tr>
+          <tr><td class="k">Colour space</td><td>sRGB primaries, or the source camera's own colorimetry where the file can supply it</td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">The lossless mode is only offered where <code>imagecodecs</code> can read it back — a result that cannot be reopened is not a result. <code>Make</code> and <code>Model</code> stay OpenFocus's own, because those are what a converter reads to pick a camera profile.</p>
+      </div>
+
+      <div>
+        <h3><span class="chip" style="background:var(--post)"></span>What a saved result remembers</h3>
+        <p style="margin-bottom:1.5mm">Two metadata groups are written into every JPG, PNG and JXL result, without recompressing the image:</p>
+        <table class="tight">
+          <tr><td class="k">EXIF</td><td>The block from the first source frame of the render — camera, lens and exposure survive the stack</td></tr>
+          <tr><td class="k">XMP · <code>Camera</code></td><td>Every camera tag of the source, cloned as plain text, so the shot's settings read without an EXIF parser</td></tr>
+          <tr><td class="k">XMP · <code>OpenFocus</code></td><td>Program version, render date, render duration, and <b>every option the render ran with</b></td></tr>
+        </table>
+        <p class="note" style="margin-top:1.5mm">The <code>OpenFocus</code> group is written from one shared vocabulary, so two files are directly comparable. It records: source frame count (and whether a subset), registration stages and reference frame, downscale width, fusion method, kernel and halo size, the full pyramid tuning, StackMFF batch size, IFCNN, contrast, region, tiling and tile workers, bit depth, processing unit and thread count. A stage that did not run says so rather than being absent — enough to reproduce the render months later.</p>
+      </div>
+    </div>
+
+    <div>
+      <h3><span class="chip" style="background:var(--reg)"></span>Troubleshooting — symptom to setting</h3>
+      <table class="tight">
+        <tr><th style="width:52mm">Symptom</th><th>What to change</th></tr>
+        <tr><td class="k">Result is blurry, ghosted or doubled</td><td>A registration problem, not a fusion one. Enable <b>Homography</b> and/or <b>ECC</b>; if the subject changes size across the stack, add <b>Scale</b>. On a long stack, set the reference frame to <b>Middle</b></td></tr>
+        <tr><td class="k">Bright halo around the subject</td><td>Switch to a <b>Depth Map</b> method and raise <b>Halo suppression</b> to roughly the halo's width in pixels. Use the smallest value that clears it</td></tr>
+        <tr><td class="k">Thin dark strokes over a smooth background</td><td>A Pyramid symptom. Confirm both bottom switches are <b>on</b>, keep Selectivity at <b>Balanced</b> or lower, then try Scale coherence at <b>Light</b> or <b>Medium</b></td></tr>
+        <tr><td class="k">Visible seams or a block lattice</td><td>Raise the tile <b>overlap</b>. On DCT specifically, leave <b>Blend</b> on and raise the kernel to filter the block map harder</td></tr>
+        <tr><td class="k">Out of memory</td><td>Enable or tighten tiling, reduce the block size, downsample on import, or lower the StackMFF batch size</td></tr>
+        <tr><td class="k">Registration fails or drifts</td><td>Run one stage at a time, lower the <b>downscale width</b>, and check the frames carry enough contrast and texture for features to be found</td></tr>
+        <tr><td class="k">StackMFF-V4 greyed out</td><td><code>pip install torch torchvision</code>; for GPU, a CUDA-enabled build. Confirm with <b>Help → Environment Info</b></td></tr>
+        <tr><td class="k">JXL or RAW not offered</td><td><code>pip install imagecodecs</code> for JPEG XL, <code>pip install rawpy</code> for NEF/NRW/DNG. Without them those formats are simply not supported inputs</td></tr>
+        <tr><td class="k">Processing is slow</td><td>Raise the thread count, enable GPU loading, pick a cheaper method (Guided Filter or Pyramid over StackMFF-V4), or downsample on import. <b>Stop</b> interrupts a run at its next checkpoint</td></tr>
+      </table>
+    </div>
+
+    <div>
+      <h3><span class="chip" style="background:var(--reg)"></span>Keyboard</h3>
+      <div class="grid3">
+        <div class="card tinted"><h4>Files</h4>
+          <table class="tight" style="font-size:6.9pt">
+            <tr><td class="k"><code>Ctrl+O</code></td><td>Open folder</td></tr>
+            <tr><td class="k"><code>Ctrl+Shift+O</code></td><td>Open video</td></tr>
+            <tr><td class="k"><code>Ctrl+S</code></td><td>Save result</td></tr>
+            <tr><td class="k"><code>Ctrl+Shift+S</code></td><td>Save registered stack</td></tr>
+            <tr><td class="k"><code>Ctrl+W</code></td><td>Clear stack</td></tr>
+            <tr><td class="k"><code>Ctrl+Q</code></td><td>Exit</td></tr>
+          </table>
+        </div>
+        <div class="card tinted"><h4>Navigation</h4>
+          <table class="tight" style="font-size:6.9pt">
+            <tr><td class="k"><code>←</code> <code>→</code></td><td>Previous / next frame</td></tr>
+            <tr><td class="k">Wheel</td><td>Zoom</td></tr>
+            <tr><td class="k"><code>Ctrl</code>+wheel</td><td>Fine zoom</td></tr>
+            <tr><td class="k">Double-click</td><td>Fit ↔ 100 %</td></tr>
+            <tr><td class="k"><code>Space</code></td><td>Pan mode</td></tr>
+            <tr><td class="k"><code>Delete</code></td><td>Delete selected</td></tr>
+          </table>
+        </div>
+        <div class="card tinted"><h4>Where settings live</h4>
+          <p class="note">All of it persists to <code>openfocus.cfg.json</code> beside the application — including the fusion method and its tuning, registration stages, tiling, threads, bit depth, DNG options, contrast, language, recent folders and the last output format. <b>File → Save All Settings</b> writes it on demand.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="folio"><span><b>OpenFocus 1.30.11</b> · How it works</span><span>DNG, metadata &amp; reference · MIT License</span><span>8 / 8</span></div>
+</section>
+
+</body>
+</html>
