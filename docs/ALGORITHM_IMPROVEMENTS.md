@@ -33,7 +33,7 @@ mitigation shipped but the underlying issue remains.
 | 1 | GFG-FGF | Quality | Focus measured on one colour channel; fails outright when detail is not in it - *fixed in 1.5.7* | High | Low | 100% |
 | 2 | GFG-FGF | Quality | Whole frames discarded by a global 15% sharpness threshold - *fixed in 1.5.7* | High | Low | 100% |
 | 3 | DTCWT | Performance | 30% of runtime in two scipy calls that OpenCV does 2-4.5x faster, bit-identically - *fixed in 1.11.1* | High | Low | 100% |
-| 4 | DCT | Quality | Result depends on the order frames are passed in | Medium | Low | 0% |
+| 4 | DCT | Quality | Result depends on the order frames are passed in - *fixed in 1.30.12* | Medium | Low | 100% |
 | 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial | 100% |
 | 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip - *fixed in 1.5.5* | Medium | Medium | 100% |
 | 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent | Medium | Medium | 0% |
@@ -50,8 +50,8 @@ mitigation shipped but the underlying issue remains.
 | 18 | DCT | Quality | Per-block winner never clears its margin in a deep stack, so 91% of blocks fell to a fallback that tore the background - *fixed in 1.17.1* | High | Medium | 100% |
 | 19 | Pyramid | Quality | Choose-max stitches defocused regions out of frames that disagree, reconstructing filaments no frame had, and loses them to grain - *fixed in 1.19.0* | High | Medium | 100% |
 
-**Overall: 63% done** - 12 of 19 items fully fixed, item 8 partially (the GPU
-default shipped; the CPU cost itself is untouched), 6 untouched. Since 1.17.1 a
+**Overall: 70% done** - 13 of 19 items fully fixed, item 8 partially (the GPU
+default shipped; the CPU cost itself is untouched), 5 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
 guards every method against silent regressions of the kind items 17, 18 and 19
 were.
@@ -198,7 +198,7 @@ packaging is a separate decision.)
 
 ## 4. DCT's result depends on the order frames are given in
 
-**Category: quality. Impact: medium. Effort: low.**
+**Category: quality. Impact: medium. Effort: low. Fixed in 1.30.12.**
 
 Passing the same stack in a different order should give the same picture. It does
 not:
@@ -230,6 +230,133 @@ to a running maximum (`var_map > max_variance_map`), which keeps the identical
 lowest-index tie bias, and the GPU twin reproduces it deliberately
 (`dct_torch.py`: "preserves first-max-wins tie behavior of the CPU path"). Any
 fix must land in both paths together to keep `test_gpu_matches_cpu` green.
+
+### The question changed at 1.17.1
+
+Item 18 replaced "which frame wins this block" with "where along the stack is
+this block's focal plane". The plane is a *position in the input order*, so
+after that rewrite the order stopped being an accident the method should be
+insensitive to and became part of what it models - and the numbers went the
+wrong way, 28.1 dB at the audit and 25.1 dB on `deep_stack` by 1.30.11.
+
+Full invariance and item 17's fix cannot both be had. In a region no frame
+resolves, every frame is equally poor; deciding by intrinsic energy is exactly
+the noise contest item 17 removed, and averaging all of them is a blur. Item 18
+answered "mid-stack", which is stable, uniform and unavoidably a statement about
+the order. So the requirement had to be restated as two that can be met:
+
+- **Reversing the stack must render the identical picture.** Back-to-front is
+  still the same sweep, so this one is an equality, not a tolerance.
+- **The plane must lie in the run of frames the block is actually in focus at.**
+  This is what was broken, independently of any re-ordering.
+
+**The plane was a mean over frames with nothing to do with each other.** It was
+the mean index of *every* frame clearing the plateau bar, wherever in the stack
+they sat. Two frames at opposite ends both clearing it - one because it resolves
+the block, one on grain - put the plane halfway between, on a frame that
+resolves nothing. Measured on `deep_stack`, 43% of blocks had an in-focus set
+that was not one run. Restricted to blocks where a frame genuinely is in focus
+(peak at least twice the block's median energy), 0.13% of them were given a
+plane more than half a frame from any in-focus frame, the worst 4.5 frames away;
+on the veil fixture 0.46% and 4.5. Small shares, but each one is a block
+rendered from a frame that is blurred there.
+
+**Fixed in 1.30.12,** in two parts, and they turn out to fix different things.
+
+- **Read the in-focus set as a run** (`_focal_plane` in `dct.py`). The plane is
+  the middle of the run containing the peak, so frames elsewhere in the stack
+  cannot enter the average at all. A run ends where a frame falls to `_RUN_EXIT`
+  (0.75) of the in-focus bar rather than at the first frame below the bar
+  itself: where nothing is in focus every frame sits within a few percent of
+  every other, so a run that ends at the first dip collapses onto whichever
+  frame grain favoured - which is item 17's veil artefact, 71% of the veil
+  fixture's smooth body. Hysteresis is the right shape because it asks how deep
+  a dip is, not how long: grain moves a defocused frame a few percent, leaving
+  the depth of field costs it most of its energy. Only frames above the upper
+  bar extend the run's ends, so the lower bar lengthens no plateau.
+- **Carry the plane at half-frame resolution** (`_SUBFRAME`). Item 18 estimates
+  the plane to sub-frame accuracy and 1.30.11 then rounded it to a whole frame
+  before the median filter, throwing that away. The map is now held in halves
+  of a frame - the exact resolution a run's midpoint needs - through the filter
+  and into compositing.
+
+Measured on every fixture the project has:
+
+| scenario | PSNR before | after | shuffle before | after | reversed before | after |
+|---|---|---|---|---|---|---|
+| fine_texture | 33.59 | 33.89 | 45.63 | 47.97 | exact | exact |
+| sensor_noise | 38.18 | 41.77 | 38.75 | 45.96 | exact | exact |
+| depth_edge | 34.39 | 35.27 | 40.93 | **exact** | 40.93 | **exact** |
+| long_stack | 28.32 | **30.54** | 25.39 | **30.48** | 26.49 | **exact** |
+| low_contrast | 61.00 | 63.15 | 63.49 | 66.76 | exact | exact |
+| saturated_colour | 29.92 | 29.74 | 34.20 | 37.05 | exact | 43.48 |
+| deep_stack | 32.61 | 32.17 | 25.12 | **34.35** | 47.49 | **exact** |
+| wash | 29.79 | 30.27 | 40.49 | **exact** | 40.49 | **exact** |
+| veil | 34.56 | 34.71 | 21.98 | **29.36** | 44.20 | **exact** |
+
+"Shuffle" is the mean agreement of four random orderings with the stack as
+given; "reversed" is the reversed stack against it, where *exact* means
+byte-for-byte. Reversal is now exact on eight of the nine. `saturated_colour` is
+the exception and the reason is a genuine ambiguity rather than a rounding one:
+102 of its 1600 blocks are rendered identically by frames 0 and 2 with frame 1
+blank between them, so the block holds two disjoint runs whose peaks are equal
+to the last float bit and the first to arrive wins. Merging tied runs would put
+the plane on the blank frame between them, which is worse than either answer.
+
+**The two parts fix different halves, which is worth stating separately** since
+either could be mistaken for the other's work:
+
+| | 1.30.11 | + half-frame plane | + run rule |
+|---|---|---|---|
+| PSNR, sensor_noise | 38.18 | **41.77** | 41.77 |
+| PSNR, long_stack | 28.32 | **30.54** | 30.54 |
+| shuffle, deep_stack | 25.12 | 25.76 | **34.35** |
+| shuffle, veil | 21.98 | 24.02 | **29.36** |
+
+Every PSNR gain is the half-frame plane; every order-agreement gain is the run
+rule. On blocks where a frame is genuinely in focus the plane is now within half
+a frame of one on all nine fixtures - 0.00%, against the 0.13% and 0.46% above.
+
+**What it costs.** `deep_stack` loses 0.43 dB and `saturated_colour` 0.19. The
+first is the run rule reaching further into a background no frame resolves,
+which renders it from nearer mid-stack: the softness half of the trade item 18
+describes, on the fixture whose reference declares the least-blurred rendering
+correct. Two ratchet metrics moved past tolerance and were re-recorded
+deliberately - `long_stack/defocus_seam_excess` 10.79 to 11.22, on a fixture
+where DCT still leads the pyramid's 13.62 and DTCWT's 13.39, and
+`deep_stack/block_speckle` by 0.156, which is one 8x8 cell out of 640, the
+metric's own quantum.
+
+**`sensor_noise` gained 3.59 dB and it is not a sharper measure.** Compositing
+two neighbouring frames averages their independent grain, which is worth about
+3 dB, and that is enough to carry DCT past the guided filter (41.6) and GFG-FGF
+(40.8) on that fixture. With compositing off the measure alone scores 36.7,
+below all three. `test_dct_struggles_most_with_noise` now asserts the two
+separately, because "DCT is the weakest of the classical methods on a noisy
+stack" is only still true of its selection, not of what it renders.
+
+**Cost: none measurable.** The run tracking is a handful of operations on the
+block lattice, and both passes over the frames were already there: 64 frames of
+1024x1024 run 838 ms before and 820 ms after, 24 frames of 2048x2048 1387 ms
+and 1391 ms.
+
+Both paths landed together, as item 11 requires - `dct_torch.py` mirrors the run
+tracking on the device and the plane still crosses to the host for the median.
+CPU/GPU agreement on the veil fixture *improved*, from the 41.5 dB item 17
+recorded to 66.2 dB: the two paths estimate their noise floors slightly
+differently, and a run is less sensitive to that than a single winner is.
+
+**Guarded by** `tests/test_dct_frame_order.py`, which drives `_focal_plane`
+directly for each situation it has to get right and asserts the reversal
+equality end to end. Every one of its checks fails on the 1.30.11 rule.
+
+**What is still order-dependent, and stays that way.** A shuffled stack is not a
+sweep, so the plane cannot mean what it normally does and the pictures still
+differ - most in regions no frame resolves, which is where "mid-stack" is the
+only answer and mid-stack is a different frame once the order changes. Closing
+that would need the sweep order recovered from the images themselves, which is a
+different piece of work; the method now states the assumption in its docstring
+instead of leaving it implicit.
 
 ---
 
@@ -848,6 +975,12 @@ GFG-FGF.
   lowest index, and propagated blocks are decided by position rather than by
   which frame arrived first. What remains order-dependent is the near-tie that
   clears the 10% margin, so the item stays open.
+
+  **Overtaken by item 18, then closed by item 4 itself (1.30.12).** The margin
+  rule this describes was removed a version later, and what replaced it made the
+  order load-bearing rather than incidental - agreement fell back to 25.1 dB on
+  `deep_stack` before the run rule took it to 34.3. See item 4 above for where
+  that ended up and why full invariance is not the goal any more.
 - **`kernel_size` no longer does anything on these fixtures.** The decision map
   now reaches the median filter already regionally coherent, so the consistency
   step has nothing left to remove: across kernels 3 to 31 the result is
@@ -962,6 +1095,13 @@ contract that holds: every pixel stays inside the envelope its sources span.
 
 **Guarded by** `tests/test_fusion_regression.py` - see below. Both halves of
 this fix trip it when removed.
+
+**Refined by item 4 (1.30.12)** in two places this section describes. "The
+middle of that set" is now the middle of the *run* containing the peak, because
+a set gathered from the whole stack can include a frame that clears the bar on
+grain a hundred frames away. And "to sub-frame accuracy" was true of the
+estimate but not of the output: the map was rounded to a whole frame before the
+median filter, and is now carried in halves the rest of the way.
 
 ---
 
@@ -1186,9 +1326,14 @@ behaviour of copying each block from a single frame, so every output pixel is
 exactly some input pixel, at the cost of the lattice showing again
 (`seam_excess` 0.683 -> 1.153 on `deep_stack`).
 
-**`_POOL_WINDOW`, `_NOISE_PERCENTILE` and `_HIGHPASS_SCALE` stay internal.**
-All three are load-bearing for items 17 and 18 and none has a meaning a user
-could act on.
+**`_POOL_WINDOW`, `_NOISE_PERCENTILE`, `_HIGHPASS_SCALE`, `_RUN_EXIT` and
+`_SUBFRAME` stay internal.** All five are load-bearing for items 17, 18 and 4,
+and none has a meaning a user could act on. The last two are the ones a reader
+of item 4 will look for: `_RUN_EXIT` is where a run of in-focus frames is taken
+to have ended, and its working range is bounded on one side by the veil artefact
+and on the other by the defect it fixes; `_SUBFRAME` is the resolution the
+focal-plane map is carried at, and halves are exactly what a run's midpoint
+needs, so there is nothing to tune.
 
 The three exposed controls are inherited by batch jobs from the main window, the
 way the kernel and the registration checkboxes already are, and any that is not

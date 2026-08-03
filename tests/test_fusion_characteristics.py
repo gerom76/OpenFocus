@@ -167,16 +167,36 @@ def test_dct_is_weakest_at_boundaries(results):
 
 def test_dct_struggles_most_with_noise(results):
     """
-    Variance-based focus measures cannot tell grain from detail, so DCT is the
-    weakest of the classical methods on a noisy stack.
+    Variance-based focus measures cannot tell grain from detail, so DCT's
+    *selection* is the weakest of the classical methods on a noisy stack.
+
+    What it renders is no longer the weakest, and the two halves of that are
+    worth keeping apart. Since 1.30.12 the focal plane is carried to half a
+    frame, so a block whose plane sits between two frames is composited from
+    both - and averaging two frames' independent grain is worth about 3 dB,
+    which on this fixture carries DCT past the guided filter and GFG-FGF
+    (41.8 dB against 41.6 and 40.8). Turn the compositing off and the measure
+    alone scores 36.7, below all three, which is the characteristic this test
+    is named for.
     """
     _require("dct")
     scores = _scores(results, "psnr", "sensor_noise")
-    for rival in ("guided_filter", "gfgfgf", "dtcwt"):
-        if rival in scores:
-            assert scores["dct"] < scores[rival], (
-                f"DCT {scores['dct']:.2f} dB was not below {rival} "
-                f"{scores[rival]:.2f} dB on a noisy stack")
+    rivals = [r for r in ("guided_filter", "gfgfgf", "dtcwt") if r in scores]
+
+    from fusion_methods.dct import dct_focus_stack_fusion
+    stack, reference, _ = sc.build("sensor_noise")
+    verbatim = fm.psnr(dct_focus_stack_fusion(list(stack), blend=False), reference)
+    for rival in rivals:
+        assert verbatim < scores[rival], (
+            f"DCT's block selection {verbatim:.2f} dB was not below {rival} "
+            f"{scores[rival]:.2f} dB on a noisy stack")
+
+    # The grain averaging is a real gain, but it is not a sharper measure: DCT
+    # still trails the wavelet method, which suppresses grain and keeps edges.
+    if "dtcwt" in scores:
+        assert scores["dct"] < scores["dtcwt"], (
+            f"DCT {scores['dct']:.2f} dB was not below dtcwt "
+            f"{scores['dtcwt']:.2f} dB on a noisy stack")
 
 
 # ---------------------------------------------------------------------------

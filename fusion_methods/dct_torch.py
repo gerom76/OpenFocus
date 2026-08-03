@@ -29,9 +29,11 @@ from fusion_methods.dct import (
     _NOISE_PERCENTILE,
     _PLATEAU,
     _POOL_WINDOW,
+    _RUN_EXIT,
+    _SUBFRAME,
     _collect_images_from_folder,
     _compose,
-    _median_filter_index_map,
+    _median_filter_map,
     _normalize_image_stack,
     _odd,
 )
@@ -169,23 +171,44 @@ def dct_torch_impl(
         for start in range(0, n, CHUNK_SIZE):
             peak = torch.maximum(peak, chunk_energy(start).amax(dim=0))
 
-        # Pass 2: the middle of the frames that clear it - the focal plane.
+        # Pass 2: the middle of the in-focus run containing the peak - the focal
+        # plane. Mirrors dct._focal_plane, which carries the reasoning; the
+        # frames arrive here in chunks but are still folded in one at a time and
+        # in order, which is what the run tracking needs.
         threshold = peak * plateau
-        in_focus_count = torch.zeros((map_h, map_w), device=dev)
-        index_total = torch.zeros((map_h, map_w), device=dev)
+        exit_bar = threshold * _RUN_EXIT
+        lo = torch.zeros((map_h, map_w), device=dev)
+        hi = torch.zeros((map_h, map_w), device=dev)
+        best = torch.full((map_h, map_w), -float('inf'), device=dev)
+        run_start = torch.zeros((map_h, map_w), device=dev)
+        inside = torch.zeros((map_h, map_w), dtype=torch.bool, device=dev)
+        alive = torch.zeros((map_h, map_w), dtype=torch.bool, device=dev)
         for start in range(0, n, CHUNK_SIZE):
             pooled = chunk_energy(start)
             for j in range(pooled.shape[0]):
-                hit = (pooled[j] >= threshold).to(torch.float32)
-                in_focus_count += hit
-                index_total += hit * float(start + j)
-        field = index_total / torch.clamp(in_focus_count, min=1.0)
+                energy, index = pooled[j], torch.full_like(lo, float(start + j))
+                in_focus = energy >= threshold
+                was_inside = inside
+                inside = (inside & (energy >= exit_bar)) | in_focus
+                run_start = torch.where(inside & ~was_inside, index, run_start)
+                alive = alive & inside
+
+                peak_here = energy > best
+                best = torch.where(peak_here, energy, best)
+                lo = torch.where(peak_here, run_start, lo)
+                hi = torch.where(peak_here | (alive & in_focus), index, hi)
+                alive = alive | peak_here
+        field = (lo + hi) * 0.5
 
         # Consistency verification: double median filter on the tiny focal-plane
-        # map (CPU/cv2). uint16 end to end so indices never wrap at 256 frames.
-        index_np = torch.clamp(torch.round(field), 0, n - 1).cpu().numpy().astype(np.uint16)
-        index_np = _median_filter_index_map(index_np, kernel_size)
-        index_np = _median_filter_index_map(index_np, kernel_size)
+        # map (CPU/cv2). Carried in units of 1/_SUBFRAME of a frame so a plane
+        # between two frames survives the filter, and uint16 so it never wraps
+        # at 256 frames.
+        plane_np = torch.clamp(torch.round(field * _SUBFRAME), 0,
+                               (n - 1) * _SUBFRAME).cpu().numpy().astype(np.uint16)
+        plane_np = _median_filter_map(plane_np, kernel_size)
+        plane_np = _median_filter_map(plane_np, kernel_size)
+        field_np = plane_np.astype(np.float32) / _SUBFRAME
 
         # Reconstruction. Compositing is a weighted sum over a handful of full
         # frames, which is memory-bound rather than arithmetic-bound, so it runs
@@ -193,10 +216,10 @@ def dct_torch_impl(
         # implementations from drifting and keeps peak device memory to the
         # measurement pass.
         if blend:
-            return _compose(normalized_images, index_np, block_size, (h, w),
+            return _compose(normalized_images, field_np, block_size, (h, w),
                             out_dtype)
 
-        final_index = torch.from_numpy(index_np.astype(np.int64)).to(dev)
+        final_index = torch.from_numpy(np.rint(field_np).astype(np.int64)).to(dev)
         full_index = final_index.repeat_interleave(block_size, dim=0).repeat_interleave(block_size, dim=1)
 
         # The block grid only covers a multiple of block_size. Extend the last
