@@ -41,10 +41,12 @@ order-independent per-pixel argmax on a pooled Laplacian focus measure. The othe
 methods still compute internal decision maps that are discarded
 (`fusion_methods/gff.py:133`, `gfg_fgf.py:241`, `dct.py:107`), and no method yet
 *exports* the depth map as a file — see §6.
-² Applied recursively pairwise, so the result is order-dependent
+² Applied recursively pairwise until 1.30.13, which made it a single decision
+over all frames' coefficients and with it order-independent
 ([ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §7).
-³ Added in 1.7.0. A single decision over all frames' Laplacian bands, so —
-unlike DTCWT — it is order-independent (`fusion_methods/pyramid.py`). Since
+³ Added in 1.7.0. A single decision over all frames' Laplacian bands, so
+order-independent (`fusion_methods/pyramid.py`) — which DTCWT was not until
+1.30.13. Since
 1.19.0 that decision is a peak-relative weighting rather than a choose-max, for
 the reasons in [ALGORITHM_IMPROVEMENTS.md](ALGORITHM_IMPROVEMENTS.md) §19; the
 published rule remains selectable.
@@ -62,9 +64,8 @@ open competitor makes a pyramid or a closely-related multiscale transform a
 headline method — Helicon's Method C, Zerene's PMax, Shine Stacker's
 `PyramidStack`, and focus-stack's complex wavelet is the same idea in a different
 basis — and pairs it with a depth map. OpenFocus now has both, plus DTCWT as a
-second multiscale transform; unlike DTCWT, which fuses recursively pairwise and is
-order-dependent, both the pyramid and the depth map decide across all frames at
-once and are order-independent.
+second multiscale transform; all three decide across all frames at once and are
+order-independent, DTCWT since 1.30.13.
 
 Conversely, **OpenFocus is the only tool with a block-DCT method and the only one
 with neural fusion.** Those are genuine differentiators, and breadth is now well

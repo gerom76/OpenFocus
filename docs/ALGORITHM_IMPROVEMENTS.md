@@ -36,22 +36,23 @@ mitigation shipped but the underlying issue remains.
 | 4 | DCT | Quality | Result depends on the order frames are passed in - *fixed in 1.30.12* | Medium | Low | 100% |
 | 5 | IFCNN | Quality | Systematic darkening from truncation instead of rounding - *fixed in 1.5.4* | Medium | Trivial | 100% |
 | 6 | IFCNN | Quality | Colour drifts through the encode/decode round trip - *fixed in 1.5.5* | Medium | Medium | 100% |
-| 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent | Medium | Medium | 0% |
+| 7 | DTCWT | Quality | Frames fused pairwise and recursively, so the result is order-dependent - *fixed in 1.30.13* | Medium | Medium | 100% |
 | 8 | DTCWT | Performance | CPU cost grows faster than image area | Medium | Medium | 25% |
 | 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything - *investigated and closed in 1.5.6* | Low | Low | 100% |
 | 10 | Guided Filter | Performance | Dead code; per-frame float32 copies dominate memory - *fixed in 1.5.6* | Low | Low | 100% |
 | 11 | DCT | Quality | Crashes (default kernel) or corrupts indices on stacks of 256+ frames - *fixed in 1.11.2* | High | Low | 100% |
 | 12 | DTCWT | Quality | Each colour channel picks its own source frame, so colour splits at depth edges | Medium | Low | 0% |
 | 13 | DTCWT, Pyramid, Depth Map | Robustness | Folder loader copy-pasted four ways; mixed filenames crash the sort | Low | Low | 0% |
-| 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders | Low | Trivial | 0% |
+| 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders - *dissolved with the vote in 1.30.13* | Low | Trivial | 100% |
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
 | 16 | DTCWT, Pyramid | Quality | Lowpass/base band fused by plain mean; ghosts under exposure drift - *fixed in 1.11.3* | Low | Medium | 100% |
 | 17 | DCT | Quality | Focus measured as total block contrast, and grain deciding the rest, so blurred frames blank whole regions - *fixed in 1.15.1 and 1.15.2* | High | Low | 100% |
 | 18 | DCT | Quality | Per-block winner never clears its margin in a deep stack, so 91% of blocks fell to a fallback that tore the background - *fixed in 1.17.1* | High | Medium | 100% |
 | 19 | Pyramid | Quality | Choose-max stitches defocused regions out of frames that disagree, reconstructing filaments no frame had, and loses them to grain - *fixed in 1.19.0* | High | Medium | 100% |
 
-**Overall: 70% done** - 13 of 19 items fully fixed, item 8 partially (the GPU
-default shipped; the CPU cost itself is untouched), 5 untouched. Since 1.17.1 a
+**Overall: 80% done** - 15 of 19 items fully fixed, item 8 partially (the GPU
+default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
+pairwise fold was not what made it grow), 3 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
 guards every method against silent regressions of the kind items 17, 18 and 19
 were.
@@ -512,7 +513,7 @@ stage exists to improve - in exchange for two tuned constants. Not taken.
 
 ## 7. DTCWT fuses frames pairwise, so order matters
 
-**Category: quality. Impact: medium. Effort: medium.**
+**Category: quality. Impact: medium. Effort: medium. Fixed in 1.30.13.**
 
 With more than two frames, `fuse_highfreq_vectorized` folds them together two at
 a time:
@@ -536,6 +537,164 @@ That is also faster: one pass instead of N-1.
 **Status at 1.11.0: open.** `dtcwt_torch.py` replicates the pairwise order
 deliberately ("matches the sequential pairwise fusion order exactly"), so the
 joint-selection rewrite must change both paths in the same commit.
+
+### Fixed in 1.30.13 - and the consistency vote had to go with the chain
+
+The selection is now the one this item asks for. Every frame's coefficients are
+scored once, on their own, and each coefficient goes to whichever frame carries
+the most activity around it (`_coefficient_activity` and `_keep_stronger` in
+`dtcwt.py`, mirrored in `dtcwt_torch.py`). The pass still streams a frame at a
+time, so memory is still bounded by the running winner rather than by stack
+depth, but the fold is a running maximum instead of a chain: no frame passes
+through more rounds of anything than any other.
+
+**The consistency vote could not come along, and that is the whole of the
+design decision here.** It is binary by construction - count how many of a
+coefficient's neighbours preferred source 1, compare against half the window -
+and there is no first source to count when the comparison is against the whole
+stack. Two ways out were measured:
+
+- **Generalise it to a mode filter.** Keep the winning *index* per coefficient,
+  take the majority index over each 3x3 window, then gather. It is the faithful
+  N-ary reading of the vote, and it costs a second pass over the frames -
+  a streaming pass holds the winner, not the stack, so the coefficients a
+  corrected index points at are no longer in memory and every frame has to be
+  transformed again. Measured on the fixtures: 1.7-1.8x the CPU time of the
+  rule that shipped, for **worse** order agreement than it (56.2 dB on `deep_stack`
+  and 57.0 on the veil fixture, against byte-exact), because a mode filter has
+  ties of its own and the only thing left to break them with is the frame
+  index.
+- **Pool the activity before comparing, and drop the vote.** The vote existed
+  to stop a lone coefficient deciding for itself; pooling the activity over the
+  same window it used to count over does that in the same pass, one filter per
+  frame. This is what `pyramid.py` (`_band_energy`) and `dct.py` since item 17
+  already do, and it is what shipped.
+
+So a frame's claim on a coefficient is now Lewis's activity - the maximum
+filter over a 3x3 window of the strongest channel's magnitude, unchanged -
+pooled over the same window, and the frames are compared on that. Item 12's
+shared decision survives it: the channels are still reduced with a maximum
+before scoring, so one decision selects all three and a pixel's colour cannot
+split across frames.
+
+**Ties are settled on the coefficient rather than on arrival.** Exact ties are
+not rare here: a strong structure two frames share fills the maximum filter for
+every coefficient around it, so their pooled scores come out equal where their
+own coefficients are not - 1.55% of `long_stack`'s finest level, with the tied
+frames disagreeing by up to 94% of the level's peak magnitude. Taking the
+larger magnitude at the coefficient itself settles those; taking whichever
+frame arrived first would have put the order dependence straight back (55.3 dB
+against 64.2 on `long_stack`).
+
+**What it is worth.** Every fixture the project has, CPU path, PSNR against
+each fixture's own reference:
+
+| scenario | before | after | delta |
+|---|---|---|---|
+| fine_texture | 37.66 | **38.79** | +1.13 |
+| sensor_noise | 44.20 | **45.14** | +0.94 |
+| depth_edge | 37.42 | 37.31 | -0.11 |
+| long_stack | 32.65 | **35.46** | **+2.81** |
+| low_contrast | 64.42 | **65.00** | +0.58 |
+| saturated_colour | 33.49 | **33.65** | +0.16 |
+| deep_stack | 26.01 | 26.02 | +0.01 |
+| wash | 31.71 | 31.80 | +0.09 |
+| veil | 15.24 | 15.24 | 0.00 |
+
+The gain is largest where the chain was longest, which is the shape the defect
+predicts: `long_stack` is twelve frames, and its first frame used to pass
+through eleven consistency filters while its last passed through one. It is
+enough to move the method past StackMFF-V4 on that scenario (34.06 dB), which
+`tests/test_fusion_characteristics.py` had recorded as the neural model's.
+
+**And the order dependence it was written for.** "Reversed" is the reversed
+stack against the stack as given, "shuffles" four random orderings against it;
+*exact* means byte for byte:
+
+| scenario | reversed, before | after | shuffles, before | after |
+|---|---|---|---|---|
+| fine_texture | 42.28 | **exact** | 42.3-47.8 | **exact** |
+| sensor_noise | 53.85 | **exact** | 53.9-59.0 | **exact** |
+| depth_edge | 71.26 | 103.01 | 71.3-exact | 103.0-exact |
+| long_stack | 44.22 | **64.20** | 45.1-48.6 | **64.2-exact** |
+| low_contrast | 73.01 | **exact** | 73.0-79.3 | **exact** |
+| saturated_colour | 44.48 | **exact** | 44.5-50.5 | **exact** |
+| deep_stack | 46.49 | **exact** | 47.5-47.8 | **exact** |
+| wash | 59.61 | **exact** | 59.6-exact | **exact** |
+| veil | 46.35 | **exact** | 46.8-48.6 | **exact** |
+
+Seven of the nine are now byte-identical however the stack is handed over, and
+the GPU path lands the same way. What is left is the tie above where the
+magnitudes tie as well: `long_stack` moves 334 pixels of 102,400 by up to 18
+levels and `depth_edge` one pixel by one. Both are coefficients where two
+frames agree on their neighbourhood and on their own strength and differ only
+in phase, and the next tie-break after that would be an arbitrary rule about
+complex numbers rather than a statement about focus, so they stay.
+
+**One line of it is not the selection at all.** The lowpass band is an
+activity-weighted mean (item 16), and a float sum has a value that depends on
+the order it is accumulated in. Left in float32 it costs the exactness above on
+four fixtures - 4 to 7 pixels by one level, 96-103 dB - so the two running sums
+are now carried in float64 and converted back once at the end. The band is
+1/256 of the pixels at the default four levels, so this is free; the GPU path
+does the same wherever the device has float64, which is everywhere except MPS.
+
+**Item 14 is dissolved by this, not fixed.** Its border bias was the fixed
+`window^2 / 2` threshold meeting a zero-padded neighbour count, and there is no
+threshold and no count any more; both filters that remain treat the frame edge
+the same way for every frame. Measured on pairs of frames with identical
+statistics and no real difference in sharpness, where the honest answer is half
+each - the share of coefficients taken from the first frame:
+
+| | border ring | interior |
+|---|---|---|
+| the pairwise vote | 27.0-29.0% | 49.2-50.5% |
+| now | 49.6-52.5% | 49.2-50.3% |
+
+**Cost: it is slightly cheaper, as predicted, and it does not touch item 8.**
+One scored pass over the stack replaces N-1 pairwise fusions, which is two
+filters per frame instead of three per pair. Old against new on the same
+machine in one process, order-balanced so neither implementation gains from
+running first, best of six:
+
+| stack | before | after |
+|---|---|---|
+| 6x 768x768 | 2.23 s | 2.04 s |
+| 12x 768x768 | 4.14 s | 3.87 s |
+| 24x 512x512 | 3.85 s | 3.26 s |
+| 6x 1024x1024 | 4.61 s | 4.15 s |
+
+6 to 15% off the whole method, and the GPU path is unchanged (0.96-1.00x over
+6 to 64 frames). Item 8 guessed that the pairwise recursion was behind the CPU
+cost growing faster than area; it is not. Quadrupling the pixels at 6 frames
+multiplies the time by 5.5x then 5.3x before and 5.7x then 5.4x after, so the
+growth is in the transform and its memory traffic, and item 8 keeps its 25%.
+
+**What was measured and not taken.** Dropping the maximum filter - comparing
+the pooled magnitude directly, without Lewis's activity step - scored better on
+five fixtures (up to +0.45 dB on `sensor_noise`) and worse on two (-0.19 dB on
+`depth_edge`), and agreed with itself slightly better on `long_stack`. That is
+a change to the *measure*, where this item is about the *selection*, and it is
+not a clear enough win to make both in one commit and be unable to say which
+did what. It is worth its own item.
+
+**Guarded by** `tests/test_dtcwt_frame_order.py`, which pins the rule at the
+level of its two helpers - including what a tie does, and that folding the same
+frames in any order lands in the same place - and then asserts the reversal
+equality end to end on both paths. On the pairwise rule, reversing a 5-frame
+photographic stack moves 24,081 of its 36,864 pixels by up to 153 levels, and
+the 60 dB floor the scenario tests use fails on four of the six.
+
+**The ratchet was re-recorded** (`tests/fusion_quality_baseline.json`), and the
+diff is DTCWT's alone. One metric moved past its tolerance the wrong way:
+`long_stack/seam_excess`, 11.06 -> 11.39 against a tolerance of 0.25. It is the
+sharper picture rather than a lattice - the same fixture gained 2.82 dB of PSNR,
+0.009 of SSIM and 0.52 of spatial frequency, and the two metrics that measure
+steps in *flat* areas both improved there (`defocus_seam_excess` 13.39 -> 13.08,
+`defocus_seam_visible` 20.2% -> 19.7%). `deep_stack` moves the other way by a
+third of a tolerance on its two seam severities (+0.026 and +0.035) and improves
+on speckle (2.03% -> 1.88%) and on visible seams (2.52% -> 1.43%); everything
+else in the diff is a fraction of a tolerance.
 
 ---
 
@@ -565,6 +724,15 @@ pipeline now requests the GPU by default (`core/workers.py` constructs
 `MultiFocusFusion(..., use_gpu=True)`, with automatic CPU fallback when torch
 or a device is missing). The CPU scaling itself is unchanged, pending items 3
 and 7.
+
+**Both of those have landed now, and neither is the cause.** Item 3 took 24.5%
+off the CPU time in 1.11.1 and item 7 a further 6-15% in 1.30.13, but the
+growth itself did not move: 6 frames at 512, 1024 and 2048 px multiply by 5.5x
+then 5.3x on the pairwise code and 5.7x then 5.4x on the joint selection, so
+the superlinearity is in the transform and its memory traffic rather than in
+the fusion this document has been changing. The `dtcwt` package's NumPy
+transform is what is left to look at, and that is a different piece of work
+from anything in this file. The item stays at 25%.
 
 ---
 
@@ -733,6 +901,13 @@ the maximum across the three channels' coefficient magnitudes - and select all
 three channels with the same mask. Mask construction drops from three passes
 to one, and the change folds naturally into item 7's joint-selection rewrite.
 
+**The code has taken the second of those since 1.14.0**, in both paths: the
+channels are reduced with a maximum before anything is compared, so one
+decision selects all three (`_coefficient_activity` in `dtcwt.py`,
+`dtcwt_torch.py`), and item 7's rewrite kept it. This item is still shown as
+open because it has never been measured or written up to the standard of the
+rest of this document - what the table tracks is the audit, not the diff.
+
 ---
 
 ## 13. The folder loader is copy-pasted four ways, and two inputs crash it
@@ -771,7 +946,7 @@ rather than writing a fourth private one: `supported_input_extensions`,
 
 ## 14. DTCWT's consistency vote is biased at image borders
 
-**Category: quality. Impact: low. Effort: trivial.**
+**Category: quality. Impact: low. Effort: trivial. Dissolved in 1.30.13.**
 
 The majority filter counts each pixel's agreeing neighbours with
 `convolve(..., mode='constant', cval=0.0)` and compares against a fixed
@@ -785,6 +960,14 @@ true neighbour count. Note the interaction with item 3: its `cv2.boxFilter`
 substitution landed in 1.11.1 with parity kept deliberately
 (`borderType=BORDER_CONSTANT`), so this bias survives that swap unchanged
 and remains open to fix on its own terms.
+
+**Dissolved in 1.30.13, rather than fixed.** Item 7 replaced the vote with a
+comparison of pooled activities, so there is no count and no fixed threshold
+left to be biased - both remaining filters treat the frame edge identically for
+every frame. Measured on pairs of frames of the same statistics, where half
+each is the honest answer, the first frame's share of the border ring goes from
+27.0-29.0% to 49.6-52.5% against an interior of 49.2-50.5%. The measurement is
+in item 7; nothing was written for this item on its own.
 
 ---
 

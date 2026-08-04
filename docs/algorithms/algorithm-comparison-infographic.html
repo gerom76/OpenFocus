@@ -238,8 +238,8 @@
       <tr>
         <td class="name">DTCWT<span>Lewis 2007</span></td>
         <td>Complex wavelet</td>
-        <td>Pairwise choose-max + majority vote</td>
-        <td><span class="chip crit">no</span></td>
+        <td>Choose-max across all frames, activity pooled</td>
+        <td><span class="chip on">yes</span></td>
         <td><span class="chip on">CUDA/MPS</span></td>
         <td>levels N</td>
         <td><b>One decision mask for all three channels</b>; activity-weighted lowpass</td>
@@ -502,7 +502,7 @@
         <span class="idx">04</span>
         <h3>DTCWT — dual-tree complex wavelet</h3>
         <span class="ref">Lewis, O'Callaghan, Nikolov et al., <i>Pixel- and region-based image fusion with complex wavelets</i>, Information Fusion 8(2), 2007 · <code>fusion_methods/dtcwt.py</code>, GPU twin <code>dtcwt_torch.py</code></span>
-        <span class="badges"><span class="chip crit">order-dependent</span><span class="chip warn">CPU cost superlinear</span></span>
+        <span class="badges"><span class="chip on">order-independent since 1.30.13</span><span class="chip warn">CPU cost superlinear</span></span>
       </header>
       <div class="cols">
         <div>
@@ -521,14 +521,14 @@
             <li><b>2 · Activity-weighted lowpass.</b> The plain mean ghosts large-scale disagreement (exposure drift, focus breathing) into the coarse band; each frame's lowpass is now weighted by its aggregate highpass activity, with an epsilon so a detail-free stack degrades gracefully to the old mean. <span class="tag">mean abs. error 12.9 → 3.9–5.5 on the drift fixture</span></li>
             <li><b>3 · scipy out, OpenCV in.</b> <code>cv2.dilate</code> and <code>cv2.boxFilter(normalize=False)</code> replace <code>maximum_filter</code> and <code>convolve</code> — verified <b>bit-identical</b>, and −24.5% CPU on a 6-frame 768² stack. Removed the last direct scipy import in the codebase.</li>
             <li><b>4 · Streaming fold</b> bounds memory at roughly two frames of coefficients; the reconstruction is cropped back to the input geometry, which dtcwt's odd-size padding otherwise grows by a pixel.</li>
+            <li><b>5 · One decision over the whole stack (1.30.13).</b> The frames were folded together two at a time, so the early ones passed through more rounds of the consistency filter than the late ones and the picture depended on the order. Each coefficient now goes to the frame with the most activity around it, in one pass; the majority vote is replaced by pooling that activity over the window it used to count over, which is what the pyramid and DCT already do. <span class="tag">order agreement 42–54 dB → byte-identical on 7 of 9 fixtures</span> <span class="tag">long_stack 32.65 → 35.46 dB</span> <span class="tag">6–15% faster</span></li>
           </ul>
         </div>
         <div>
-          <h4><i style="background:var(--s2)"></i>Still open — the largest debt in the set</h4>
+          <h4><i style="background:var(--s2)"></i>Still open</h4>
           <ul>
-            <li><b>Frames are folded pairwise and recursively</b>, so <code>(((1,2),3),4)</code> is not "best of four": early frames pass through more rounds of the consistency filter than late ones. <b>Order agreement 46.4 dB.</b> The canonical fix — measure every frame's activity, take the winner per coefficient in one pass — is also <i>faster</i> (one pass, not N−1). Blocked only by having to change <code>dtcwt_torch.py</code>, which replicates the pairwise order deliberately, in the same commit.</li>
-            <li><b>The majority vote is biased at borders.</b> The neighbour count zero-pads but is compared against a fixed <code>window²/2</code>, so border pixels systematically undercount votes for the first source. Kept deliberately through the OpenCV swap to preserve bit-parity; fix by thresholding against the true neighbour count.</li>
-            <li><b>CPU cost grows faster than area</b> — 4.6× then 5.9× per quadrupling. At 2048² the CPU path takes 29.8 s against the GPU's 0.22 s. Fixing the pairwise fold is the main lever left.</li>
+            <li><b>CPU cost grows faster than area</b> — 5.5× then 5.3× per quadrupling at 6 frames. At 2048² the CPU path takes tens of seconds against the GPU's fraction of one. The pairwise fold was the suspect and is now gone, and the growth did not move: it is the transform and its memory traffic.</li>
+            <li><b>Residual ties.</b> Where two frames agree on the pooled activity <i>and</i> on the coefficient's own magnitude and differ only in phase, the earlier frame still wins — 334 pixels of <code>long_stack</code>, one of <code>depth_edge</code>. Anything further would be an arbitrary rule about complex numbers rather than a statement about focus.</li>
             <li><b>Folder loader:</b> the type-unstable sort key crashes on a folder mixing <code>img1.png</code> with <code>cover.png</code> (item 13).</li>
           </ul>
         </div>
@@ -614,7 +614,7 @@
         <div>
           <h4><i style="background:var(--s2)"></i>Still open</h4>
           <ul>
-            <li><b>The hard-select map is never regularised.</b> MODE_MAX relies on box-filter pooling alone, where DCT median-filters its index map twice and DTCWT majority-votes. Between depth planes the two pooled energies are near-equal, the winner alternates pixel to pixel, and the seam speckles. Every tool this method descends from smooths the depth map before gathering. An optional median or guided pass over the winning-index map closes it; MODE_AVERAGE needs nothing, blending is its own smoothing.</li>
+            <li><b>The hard-select map is never regularised.</b> MODE_MAX relies on box-filter pooling alone, where DCT median-filters its index map twice and DTCWT pools its activity over the decision window. Between depth planes the two pooled energies are near-equal, the winner alternates pixel to pixel, and the seam speckles. Every tool this method descends from smooths the depth map before gathering. An optional median or guided pass over the winning-index map closes it; MODE_AVERAGE needs nothing, blending is its own smoothing.</li>
             <li><b>No GPU path.</b> The only classical method without one, and the operations involved (Laplacian, box filter, dilate, argmax) are the easiest of the set to port.</li>
             <li><b>The depth map is computed and discarded.</b> This method literally builds the artefact four of five competitors export as a file — and the substrate for 3D/anaglyph output.</li>
             <li><b>Folder loader:</b> the third copy of item 13.</li>

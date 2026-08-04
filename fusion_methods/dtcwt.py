@@ -44,6 +44,68 @@ except ImportError:
 # epsilon is negligible against real coefficient magnitudes.
 _LOWPASS_ACTIVITY_EPS = 1e-6
 
+# Window, in coefficients, that a frame's activity is measured and pooled over
+# before the frames are compared. 3x3 is the window the pairwise consistency
+# vote used to count over (item 7 in docs/ALGORITHM_IMPROVEMENTS.md).
+_WINDOW = 3
+
+
+def _coefficient_activity(coeffs, window_size=_WINDOW):
+    """How much detail one frame carries at each coefficient of one level.
+
+    ``coeffs`` is (H, W, 6, C) complex - one level, the colour channels on the
+    trailing axis. Returns two (H, W, 6) float32 maps:
+
+    * ``magnitude`` - the strongest channel's coefficient magnitude. Reducing
+      the channels here is what lets one decision serve all of them, so a
+      pixel's colour cannot split across source frames (item 12), and
+      structure that lives in a single channel still drives the choice at full
+      strength rather than being diluted by two flat channels.
+    * ``score`` - that magnitude maximum-filtered over the window, which is
+      Lewis's activity measure, then pooled over the same window. Frames are
+      compared on the pooled measure, so the decision is regional and grain
+      cannot flip a lone coefficient; that is what the pairwise consistency
+      vote was there to do, and what `pyramid.py` and `dct.py` already do.
+
+    OpenCV filters work on 2D planes, so the six orientations are looped.
+    ``cv2.dilate`` is a sliding maximum whose default border ignores
+    out-of-bounds pixels - for a maximum that is the same set of values
+    reflection gives - and the pooling reflects, so neither map is biased at
+    the frame edge.
+    """
+    magnitude = np.abs(coeffs).max(axis=-1).astype(np.float32)
+    score = np.empty_like(magnitude)
+    kernel = np.ones((window_size, window_size), dtype=np.uint8)
+    for d in range(magnitude.shape[2]):
+        plane = cv2.dilate(np.ascontiguousarray(magnitude[:, :, d]), kernel)
+        score[:, :, d] = cv2.boxFilter(plane, -1, (window_size, window_size),
+                                       normalize=True,
+                                       borderType=cv2.BORDER_REFLECT_101)
+    return score, magnitude
+
+
+def _keep_stronger(fused, best_score, best_magnitude, coeffs, score, magnitude):
+    """Fold one frame's coefficients into the running per-coefficient winner.
+
+    Everything here is one level: ``fused`` and ``coeffs`` are (H, W, 6, C)
+    complex, the three maps (H, W, 6) float32. ``fused``, ``best_score`` and
+    ``best_magnitude`` are updated in place wherever this frame wins.
+
+    A frame wins a coefficient by carrying more regional activity there, so
+    every frame is judged against every other on the same measure rather than
+    against a running fusion of the frames before it. Exact ties do occur - a
+    strong structure two frames share fills the maximum filter for several
+    coefficients around it, leaving their scores equal where their own
+    coefficients are not - and are settled on the coefficient's own magnitude
+    rather than on which frame arrived first, which is what keeps the answer
+    independent of the order the stack is passed in.
+    """
+    takes = (score > best_score) | ((score == best_score) &
+                                    (magnitude > best_magnitude))
+    np.copyto(best_score, score, where=takes)
+    np.copyto(best_magnitude, magnitude, where=takes)
+    np.copyto(fused, coeffs, where=takes[..., None])
+
 
 def _lowpass_activity(pyramid, lowpass_shape):
     """Aggregate detail activity of one frame on the lowpass grid.
@@ -95,95 +157,22 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
         for img in images
     ]
 
-    # 2. Define Optimized Fusion Function (Vectorized)
-    def fuse_highfreq_vectorized(coeffs_list, window_size=3):
-        """
-        Optimized high-frequency fusion.
-        Vectorizes operations over the 6 wavelet directions to avoid Python loops.
-
-        Each entry of coeffs_list is one frame's coefficients for a level with
-        the colour channels stacked on a trailing axis, shape (H, W, 6, C).
-        A single decision mask - built from the strongest channel's activity -
-        selects all C channels together, so a pixel's colour cannot split
-        across source frames (item 12 in docs/ALGORITHM_IMPROVEMENTS.md).
-        """
-        num_imgs = len(coeffs_list)
-        if num_imgs == 1:
-            return coeffs_list[0]
-
-        # Recursive pairwise fusion if more than 2 images
-        if num_imgs > 2:
-            fused = coeffs_list[0]
-            for i in range(1, num_imgs):
-                fused = fuse_highfreq_vectorized([fused, coeffs_list[i]], window_size)
-            return fused
-
-        # Pairwise Fusion
-        c1, c2 = coeffs_list[0], coeffs_list[1]
-
-        # c1 shape is (H, W, 6, C).
-        # We want to filter spatially (H, W) but independently for each direction (6).
-        # OpenCV filters work on 2D planes, so the 6 slices are looped.
-        dilate_kernel = np.ones((window_size, window_size), dtype=np.uint8)
-
-        # 1. Compute Magnitudes - keep the strongest channel response at each
-        # coefficient, so structure present in any channel drives the choice
-        # for all of them.
-        mag1 = np.abs(c1).max(axis=-1)
-        mag2 = np.abs(c2).max(axis=-1)
-
-        # 2. Activity Level Measurement (Max Filter)
-        # cv2.dilate is a sliding maximum; its default border ignores
-        # out-of-bounds pixels, which for a max filter is bit-identical to
-        # scipy's reflect mode (reflection only duplicates in-window values).
-        A1 = np.empty_like(mag1)
-        A2 = np.empty_like(mag2)
-        for d in range(mag1.shape[2]):
-            A1[:, :, d] = cv2.dilate(np.ascontiguousarray(mag1[:, :, d]), dilate_kernel)
-            A2[:, :, d] = cv2.dilate(np.ascontiguousarray(mag2[:, :, d]), dilate_kernel)
-
-        # 3. Initial Mask Generation
-        initial_mask = A1 > A2  # Boolean array (H, W, 6)
-
-        # 4. Consistency Verification (Majority Filter)
-        # Unnormalized box filter counts each pixel's agreeing neighbours.
-        # BORDER_CONSTANT zero-pads, keeping the border behaviour of the
-        # previous mode='constant', cval=0.0 convolution (the border bias of
-        # item 14 in docs/ALGORITHM_IMPROVEMENTS.md is preserved deliberately
-        # so this swap stays bit-identical).
-        mask_f32 = initial_mask.astype(np.float32)
-        count_map = np.empty_like(mask_f32)
-        for d in range(mask_f32.shape[2]):
-            count_map[:, :, d] = cv2.boxFilter(
-                np.ascontiguousarray(mask_f32[:, :, d]), -1,
-                (window_size, window_size),
-                normalize=False, borderType=cv2.BORDER_CONSTANT,
-            )
-
-        # Threshold: if more than half the window supports source 1, use source 1
-        threshold = (window_size * window_size) / 2.0
-        W = count_map > threshold  # Final Boolean Mask (H, W, 6)
-
-        # 5. Final Blending
-        # W is boolean: True -> c1, False -> c2; the same mask picks every
-        # channel of a coefficient.
-        fused = np.where(W[..., None], c1, c2)
-
-        return fused
-
-    # 3. Perform DTCWT and Fusion
+    # 2. Perform DTCWT and Fusion
     transform = dtcwt.Transform2d()
 
-    # The stack is folded into a running result one frame at a time - the same
-    # sequential pairwise order as before (item 7 in
-    # docs/ALGORITHM_IMPROVEMENTS.md still applies) - but all three channels of
-    # a frame travel through fusion together, so each pairwise step selects
-    # them with one shared decision mask instead of three independent ones
-    # (item 12). Streaming also bounds memory to about two frames' worth of
+    # Every frame is compared against every other on the same measure: each
+    # coefficient goes to the frame carrying the most activity around it, taken
+    # in one pass over the stack rather than by folding the frames together two
+    # at a time (item 7 in docs/ALGORITHM_IMPROVEMENTS.md). All three channels
+    # of a frame travel through the decision together, so one shared mask
+    # selects them and a pixel's colour cannot split across frames (item 12).
+    # The pass streams, so memory stays at about two frames' worth of
     # coefficients regardless of stack depth.
     lowpass_sum = None       # (h', w', 3) activity-weighted lowpass sum
     weight_sum = None        # (h', w', 3) sum of those weights
-    fused_highpasses = None  # per level: (H, W, 6, 3) complex
+    fused_highpasses = None  # per level: (H, W, 6, 3) complex - winners so far
+    best_score = None        # per level: (H, W, 6) float32 - their activity
+    best_magnitude = None    # per level: (H, W, 6) float32 - their magnitude
 
     for img in images_rgb:
         pyramids = [
@@ -202,22 +191,28 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
             np.stack([p.highpasses[level] for p in pyramids], axis=-1)
             for level in range(N)
         ]
+        activity = [_coefficient_activity(hp) for hp in highpasses]
 
         if lowpass_sum is None:
-            lowpass_sum = lowpass * weight
-            weight_sum = weight
+            # float64, because this is the one running quantity whose value
+            # depends on the order it is summed in - and a stack handed over
+            # backwards should render the identical picture.
+            lowpass_sum = (lowpass * weight).astype(np.float64)
+            weight_sum = weight.astype(np.float64)
             fused_highpasses = highpasses
+            best_score = [score for score, _ in activity]
+            best_magnitude = [magnitude for _, magnitude in activity]
         else:
             lowpass_sum += lowpass * weight
             weight_sum += weight
-            fused_highpasses = [
-                fuse_highfreq_vectorized([fused, new])
-                for fused, new in zip(fused_highpasses, highpasses)
-            ]
+            for level, (score, magnitude) in enumerate(activity):
+                _keep_stronger(fused_highpasses[level], best_score[level],
+                               best_magnitude[level], highpasses[level],
+                               score, magnitude)
 
-    fused_lowpass = lowpass_sum / weight_sum
+    fused_lowpass = (lowpass_sum / weight_sum).astype(np.float32)
 
-    # 4. Reconstruct Final Image
+    # 3. Reconstruct Final Image
     # The inverse transform runs per channel; the coupling above only decides
     # which frame each coefficient comes from.
     fused_channels = [

@@ -7,9 +7,12 @@ transform with the same default filters ('near_sym_a' / 'qshift_a') as the CPU
 dtcwt package.
 
 The stack is processed in streaming fashion — one image is transformed and
-fused into the running result at a time — which matches the CPU version's
-sequential pairwise fusion order exactly and bounds GPU memory to ~2 images'
-worth of coefficients regardless of stack size.
+folded into the running result at a time — which mirrors the CPU version's
+selection exactly and bounds GPU memory to ~2 images' worth of coefficients
+regardless of stack size. Each coefficient goes to the frame carrying the most
+activity around it, so the fold is a running maximum rather than a chain of
+pairwise fusions and the answer does not depend on the order of the stack
+(item 7 in docs/ALGORITHM_IMPROVEMENTS.md).
 
 Reference:
 Lewis J J, O'Callaghan R J, Nikolov S G, et al. Pixel- and region-based image
@@ -81,40 +84,44 @@ def _lowpass_activity(yh, lowpass_shape):
     return acc
 
 
-def _activity(mag):
-    """3x3 spatial maximum filter per direction. mag: (C, 6, h, w)."""
-    c, d, h, w = mag.shape
-    x = mag.reshape(c * d, 1, h, w)
-    x = F.pad(x, (1, 1, 1, 1), mode='reflect')
-    x = F.max_pool2d(x, kernel_size=WINDOW_SIZE, stride=1)
-    return x.reshape(c, d, h, w)
+def _window(x, pool):
+    """Slide `pool` over a 3x3 window per direction. x: (1, 6, h, w)."""
+    c, d, h, w = x.shape
+    padded = F.pad(x.reshape(c * d, 1, h, w), (1, 1, 1, 1), mode='reflect')
+    return pool(padded, kernel_size=WINDOW_SIZE, stride=1).reshape(c, d, h, w)
 
 
-def _fuse_pair(c1, c2):
-    """Fuse two coefficient tensors of shape (C, 6, h, w, 2) (real/imag pairs).
+def _coefficient_activity(coeffs):
+    """How much detail one frame carries at each coefficient of one level.
 
-    A single decision mask - built from the strongest channel's activity at
-    each coefficient - selects all C channels together, so a pixel's colour
-    cannot split across source frames (item 12 in
-    docs/ALGORITHM_IMPROVEMENTS.md). Mirrors fuse_highfreq_vectorized in
-    fusion_methods/dtcwt.py.
+    Torch mirror of _coefficient_activity in fusion_methods/dtcwt.py. coeffs:
+    (C, 6, h, w, 2) real/imag pairs; returns (score, magnitude), both
+    (1, 6, h, w). The magnitude is reduced over the colour channels with a
+    maximum, so one decision serves all of them (item 12 in
+    docs/ALGORITHM_IMPROVEMENTS.md); the score is that magnitude max-filtered
+    over the window - Lewis's activity - and pooled over the same window, so
+    frames are compared regionally (item 7).
     """
-    _, d, h, w, _ = c1.shape
+    magnitude = torch.sqrt(coeffs[..., 0] ** 2 + coeffs[..., 1] ** 2).amax(
+        dim=0, keepdim=True)
+    score = _window(_window(magnitude, F.max_pool2d), F.avg_pool2d)
+    return score, magnitude
 
-    # Activity level: 3x3 max filter of the strongest channel's magnitude
-    mag1 = torch.sqrt(c1[..., 0] ** 2 + c1[..., 1] ** 2).amax(dim=0, keepdim=True)
-    mag2 = torch.sqrt(c2[..., 0] ** 2 + c2[..., 1] ** 2).amax(dim=0, keepdim=True)
-    a1 = _activity(mag1)
-    a2 = _activity(mag2)
 
-    initial_mask = (a1 > a2).float()
+def _keep_stronger(fused, best_score, best_magnitude, coeffs, score, magnitude):
+    """Fold one frame's coefficients into the running per-coefficient winner.
 
-    # Consistency verification: majority vote in a 3x3 window (zero-padded count)
-    kernel = torch.ones(1, 1, WINDOW_SIZE, WINDOW_SIZE, device=c1.device)
-    count = F.conv2d(initial_mask.reshape(d, 1, h, w), kernel, padding=WINDOW_SIZE // 2)
-    decision = (count > (WINDOW_SIZE * WINDOW_SIZE) / 2.0).reshape(1, d, h, w)
-
-    return torch.where(decision.unsqueeze(-1), c1, c2)
+    Mirrors _keep_stronger in fusion_methods/dtcwt.py, returning the updated
+    (fused, best_score, best_magnitude) rather than writing in place. A frame
+    wins a coefficient by carrying more regional activity there; an exact tie
+    goes to the stronger coefficient rather than to whichever frame arrived
+    first, so the result does not depend on the order of the stack.
+    """
+    takes = (score > best_score) | ((score == best_score) &
+                                    (magnitude > best_magnitude))
+    return (torch.where(takes.unsqueeze(-1), coeffs, fused),
+            torch.where(takes, score, best_score),
+            torch.where(takes, magnitude, best_magnitude))
 
 
 def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
@@ -159,10 +166,17 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
     xfm = DTCWTForward(J=N, biort='near_sym_a', qshift='qshift_a').to(dev)
     ifm = DTCWTInverse(biort='near_sym_a', qshift='qshift_a').to(dev)
 
+    # The lowpass sum is the one running quantity whose value depends on the
+    # order it is accumulated in, so it is carried at double precision to keep
+    # a reordered stack rendering the identical picture. MPS has no float64.
+    accumulate = torch.float32 if dev.type == 'mps' else torch.float64
+
     with torch.no_grad():
         lowpass_sum = None
         lowpass_weight = None
         fused_highpass = None
+        best_score = None
+        best_magnitude = None
 
         # The shared decision mask reduces over channels with a max, which is
         # order-invariant, so BGR order can be kept as-is (the CPU path works
@@ -179,17 +193,27 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
             # highpass activity (item 16 in docs/ALGORITHM_IMPROVEMENTS.md);
             # the weighted sum streams just like the plain sum did.
             weight = _lowpass_activity(yh, yl.shape[-2:]) + LOWPASS_ACTIVITY_EPS
+            activity = [_coefficient_activity(level) for level in yh]
 
             if lowpass_sum is None:
-                lowpass_sum = yl * weight
-                lowpass_weight = weight
+                lowpass_sum = (yl * weight).to(accumulate)
+                lowpass_weight = weight.to(accumulate)
                 fused_highpass = yh
+                best_score = [score for score, _ in activity]
+                best_magnitude = [magnitude for _, magnitude in activity]
             else:
-                lowpass_sum = lowpass_sum + yl * weight
-                lowpass_weight = lowpass_weight + weight
-                fused_highpass = [_fuse_pair(f, y) for f, y in zip(fused_highpass, yh)]
+                lowpass_sum = lowpass_sum + (yl * weight).to(accumulate)
+                lowpass_weight = lowpass_weight + weight.to(accumulate)
+                # Every frame is judged against every other on the same
+                # measure, in one streaming pass, rather than folded together
+                # two at a time (item 7 in docs/ALGORITHM_IMPROVEMENTS.md).
+                for level, (score, magnitude) in enumerate(activity):
+                    fused_highpass[level], best_score[level], best_magnitude[level] = \
+                        _keep_stronger(fused_highpass[level], best_score[level],
+                                       best_magnitude[level], yh[level],
+                                       score, magnitude)
 
-        fused_lowpass = (lowpass_sum / lowpass_weight).unsqueeze(0)
+        fused_lowpass = (lowpass_sum / lowpass_weight).to(yl.dtype).unsqueeze(0)
         fused_highpass = [level.unsqueeze(0) for level in fused_highpass]
 
         out = ifm((fused_lowpass, fused_highpass))[0]  # (3, H, W)
