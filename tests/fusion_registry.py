@@ -140,6 +140,22 @@ def _depthmap_average(stack, kernel_size=9, halo_radius=0, img_resize=None,
                          thread_count=thread_count)
 
 
+def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
+                        device=None):
+    from fusion_methods.depthmap_torch import depthmap_torch_impl, MODE_MAX
+    return depthmap_torch_impl(stack, img_resize, mode=MODE_MAX,
+                               kernel_size=kernel_size, halo_radius=halo_radius,
+                               device=device)
+
+
+def _depthmap_average_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
+                            device=None):
+    from fusion_methods.depthmap_torch import depthmap_torch_impl, MODE_AVERAGE
+    return depthmap_torch_impl(stack, img_resize, mode=MODE_AVERAGE,
+                               kernel_size=kernel_size, halo_radius=halo_radius,
+                               device=device)
+
+
 def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
     from fusion_methods.dct import dct_focus_stack_fusion
     if img_resize is not None:
@@ -402,6 +418,26 @@ METHODS = [
         min_psnr=34.0,
     ),
     FusionMethod(
+        key="depthmap_max_gpu", label="Depth Map Max (GPU)", fuse=_depthmap_max_torch,
+        check=_needs_gpu("torch"), params={"kernel_size": 9, "halo_radius": 0},
+        gpu=True,
+        sweeps=(("kernel_size", [3, 7, 9, 15, 31],
+                 "Same dial as the CPU depth map."),
+                ("halo_radius", [0, 2, 4, 8, 12],
+                 "Same dial as the CPU depth map; the elliptical element is "
+                 "reproduced span by span, so a radius means the same thing.")),
+        min_psnr=36.0,      # matches the CPU path away from the frame border
+    ),
+    FusionMethod(
+        key="depthmap_average_gpu", label="Depth Map Average (GPU)",
+        fuse=_depthmap_average_torch,
+        check=_needs_gpu("torch"), params={"kernel_size": 9, "halo_radius": 0},
+        gpu=True,
+        sweeps=(("kernel_size", [3, 7, 9, 15, 31],
+                 "Same dial as the CPU depth map."),),
+        min_psnr=30.0,
+    ),
+    FusionMethod(
         key="pyramid_gpu", label="Pyramid (GPU)", fuse=_pyramid_torch,
         check=_needs_gpu("torch"), params={"levels": None}, gpu=True,
         sweeps=(("levels", [2, 3, 4, 5, 6], "Same dial as the CPU pyramid."),
@@ -435,4 +471,6 @@ PARITY_PAIRS = [
     ("dct", "dct_gpu"),
     ("dtcwt", "dtcwt_gpu"),
     ("pyramid", "pyramid_gpu"),
+    ("depthmap_max", "depthmap_max_gpu"),
+    ("depthmap_average", "depthmap_average_gpu"),
 ]

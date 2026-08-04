@@ -138,8 +138,7 @@ class MultiFocusFusion:
         elif self.algorithm == 'pyramid':
             self._require_torch_gpu('pyramid fusion')
         elif self.algorithm in ('depthmap_max', 'depthmap_average'):
-            # CPU-only implementation; there is no GPU path to fall back from.
-            self.use_gpu = False
+            self._require_torch_gpu('depth-map fusion')
         elif self.algorithm == 'stackmffv4':
             self._validate_ai_environment()
 
@@ -284,7 +283,21 @@ class MultiFocusFusion:
         Returns:
             Fused image
         """
-        # CPU-only; there is no GPU implementation, so use_gpu is ignored here.
+        if self.use_gpu:
+            try:
+                from fusion_methods.depthmap_torch import depthmap_torch_impl
+                return depthmap_torch_impl(input_source, img_resize, mode=mode,
+                                           kernel_size=kernel_size,
+                                           halo_radius=halo_radius)
+            except Exception as exc:
+                print(f"Warning: GPU depth-map fusion failed ({exc}); falling back to CPU.")
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
         thread_count = kwargs.get('thread_count', None)
         return depthmap_impl(input_source, img_resize, mode=mode,
                              kernel_size=kernel_size, thread_count=thread_count,
@@ -849,7 +862,8 @@ class MultiFocusFusion:
 
         # GPU fusion paths are already parallel internally; running tiles
         # concurrently would only contend for the device and multiply GPU memory use
-        if self.use_gpu and algorithm in ('guided_filter', 'dct', 'dtcwt', 'gfgfgf'):
+        if self.use_gpu and algorithm in ('guided_filter', 'dct', 'dtcwt', 'gfgfgf',
+                                          'depthmap_max', 'depthmap_average'):
             optimal_threads = 1
 
         # Neither the memory estimate above nor the GPU override is anything the

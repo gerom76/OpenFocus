@@ -291,7 +291,7 @@ OpenFocus offers eight fusion algorithms. Each has different characteristics sui
   - **Max**: takes each pixel whole from the frame with the highest focus measure — the classic hard depth map, an order-independent per-pixel select that keeps colour and noise clean within a slice
   - **Average**: blends frames in proportion to their focus measure, so flat regions collapse to the plain mean and recover the stack's multi-frame SNR (a free √N noise reduction), while sharp detail still follows the frame that holds it
 - **Best for**: *Max* — clean, artifact-free selection on well-defined subjects; *Average* — stacks with large smooth areas where a hard select would chase sensor noise
-- **Advantages**: Fully CPU-based; no colour splitting across sources; order-independent
+- **Advantages**: Runs on GPU (CUDA/MPS) with automatic CPU fallback; no colour splitting across sources; order-independent
 - **Parameter**: Kernel size sets the window the focus measure is pooled over (larger is steadier on noise, smaller follows finer detail)
 - **Parameter**: Halo suppression radius (0 = off). A defocused foreground edge casts a bright glow over the background in the frames where the background is sharp, and plain per-pixel selection copies that glow into the result — the classic focus-stacking halo. With a radius set, a sharply focused region also claims the surrounding band its glow contaminates, so the ring comes out as natural defocused background instead. Set it to roughly the visible halo width in pixels; larger values round off genuine detail near depth edges, which is the same trade-off the Radius dial has in Helicon Focus and Zerene Stacker
 

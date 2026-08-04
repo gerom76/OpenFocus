@@ -20,7 +20,9 @@ covered the two methods added since the audit - `pyramid.py` and `depthmap.py` -
 which were written to this document's standards and contribute only items 15
 and 16. Items 17-19 came from real stacks rather than from an audit, and all
 three are the same failure in three methods' clothing: a selection rule with no
-answer for the parts of a frame where nothing is in focus. The **Fixed** column
+answer for the parts of a frame where nothing is in focus. Item 20 is the one
+performance gap left by the two methods added after the original audit. The
+**Fixed** column
 tracks how much of each item has actually landed; a partial percentage means a
 mitigation shipped but the underlying issue remains.
 
@@ -49,8 +51,9 @@ mitigation shipped but the underlying issue remains.
 | 17 | DCT | Quality | Focus measured as total block contrast, and grain deciding the rest, so blurred frames blank whole regions - *fixed in 1.15.1 and 1.15.2* | High | Low | 100% |
 | 18 | DCT | Quality | Per-block winner never clears its margin in a deep stack, so 91% of blocks fell to a fallback that tore the background - *fixed in 1.17.1* | High | Medium | 100% |
 | 19 | Pyramid | Quality | Choose-max stitches defocused regions out of frames that disagree, reconstructing filaments no frame had, and loses them to grain - *fixed in 1.19.0* | High | Medium | 100% |
+| 20 | Depth Map | Performance | No device path at all, and a measurement pool bounded by thread count rather than by memory - *fixed in 1.31.0* | Medium | Medium | 100% |
 
-**Overall: 85% done** - 16 of 19 items fully fixed, item 8 partially (the GPU
+**Overall: 85% done** - 17 of 20 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
 pairwise fold was not what made it grow), 2 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
@@ -1514,6 +1517,97 @@ reference image scores 2.188 on that metric itself.
 
 **Guarded by** `tests/test_pyramid_flat_field.py`, which fails on the pre-1.19.0
 settings for both artefacts, and by the quality ratchet.
+
+---
+
+## 20. Depth Map runs on the CPU only, and sizes its pool by threads alone
+
+**Method:** Depth Map | **Category:** Performance | **Impact:** Medium |
+**Effort:** Medium | **Fixed in 1.31.0**
+
+Every other classical method here grew a device path (items 3 and 8, and the
+1.5.x-1.5.7 work behind Guided Filter, DCT and GFG-FGF). Depth Map did not, and
+`MultiFocusFusion._validate_environment` said so in a comment while forcing
+`use_gpu = False`. The method is the *cheapest* of the six per frame - one
+3x3 Laplacian, one box filter, one comparison - which is exactly what makes it
+memory-bound rather than compute-bound, and exactly the shape a GPU eats.
+
+The pool that measures the frames had a second problem. Its size came from
+`min(8, cpu_count)` or from whatever thread count the caller passed, and
+nothing else: at 60 MP a single frame is 720 MB once it is float32, so eight in
+flight reserve 5.7 GB that no part of the render had budgeted for. The sliding
+window in `_map_in_order` bounds the count of live buffers, but the *size* of
+each one is set by the image and was never consulted.
+
+**What the measurements said.** 12 frames of 4000x3000, kernel 9, on the
+machine described at the top:
+
+| | Time | Peak RSS |
+|---|---|---|
+| Max, before | 1.11 s | +3709 MB |
+| Max, after | 1.08 s | **+2624 MB** |
+| Average, before | 2.35 s | +3577 MB |
+| Average, after | **1.99 s** | **+2844 MB** |
+
+Nearly all of the 1085 MB is one change: MODE_MAX was accumulating the winning
+*pixels* in a float32 BGR buffer (12 bytes per pixel) and each measurement task
+was holding its normalised frame alive until the reduction consumed it. It now
+accumulates the winning frame *index* (one byte per pixel), and gathers the
+result from the sources afterwards at the stack's own depth. The output is
+bit-identical - the float round trip it replaces was already exact - which the
+quality ratchet confirms and a direct array comparison against the previous
+implementation verified across both modes, both depths, three kernel sizes, two
+halo radii, grayscale and mixed-depth stacks. MODE_AVERAGE gained its 0.36 s
+and 733 MB from folding the weighting
+and the final blend in place rather than through freshly allocated full frames.
+
+The pool is now capped by `WORKER_MEMORY_SHARE` (25%) of the memory psutil
+reports free, from an estimate of what one in-flight task actually holds. It
+only ever lowers the count, and says so once when it does.
+
+**The device path** (`fusion_methods/depthmap_torch.py`) mirrors the CPU one:
+
+| | CPU | GPU | |
+|---|---|---|---|
+| Max | 1.12 s | 0.14 s | **7.9x** |
+| Average | 2.03 s | 0.16 s | **12.8x** |
+| Max, halo_radius 8 | 1.34 s | 0.21 s | **6.4x** |
+
+Three things were worth care rather than speed:
+
+*The chunk size is derived, not pinned.* `gff_torch` processes four frames per
+batch because four was a number that fit. Here the batch is sized from
+`cuda.mem_get_info` against an estimate of what a frame costs on the device -
+15 frames for a 12 MP stack on a 16 GB card, 6 for a 24 MP stack with halo
+suppression on, 16 (the cap) for the 1024 px tiles that tiled fusion feeds it -
+and halves itself and retries on `OutOfMemoryError`, so being wrong is slow
+rather than fatal.
+
+*The tie-break survives batching.* The measurement is batched, but the
+reduction still walks the chunk one frame at a time, because the strict `>` in
+index order is what makes both paths pick the same frame where two tie. A
+batched `argmax` would resolve those the other way, and items 4, 7 and 12 are
+what order-dependence in a fusion method costs.
+
+*The halo element is reproduced, not approximated.* `cv2.dilate` with
+`MORPH_ELLIPSE` has no torch equivalent, and `max_pool2d` gives a square window
+- which would push the halo band out to `r * sqrt(2)` at the corners and make
+the radius mean something different on each path. The ellipse is decomposed
+into one horizontal maximum per distinct row half-width (r+1 pooling passes for
+2r+1 rows), reproducing OpenCV's `round(sqrt(r*r - dy*dy))` spans exactly;
+`tests/test_depthmap_gpu.py` asserts bitwise equality with `cv2.dilate` for
+radii 1, 2, 4 and 8.
+
+Two departures from the CPU path remain, both at the frame border and both
+deliberate: cv2 pools the energy with `BORDER_REFLECT` where torch's reflect
+padding is `BORDER_REFLECT_101`, and MODE_AVERAGE sums a chunk's contributions
+as a batch rather than one frame at a time. Inside the frame the two agree to
+better than 55 dB.
+
+**Guarded by** `tests/test_depthmap_gpu.py` - which runs the whole device path
+on a `cpu` torch device, so the batching, the chunk loop and the dilation are
+exercised without a card - and by the CPU/GPU parity pairs in
+`tests/test_fusion_quality.py`.
 
 ---
 
