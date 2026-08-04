@@ -41,7 +41,7 @@ mitigation shipped but the underlying issue remains.
 | 9 | Guided Filter | Quality | The exposed kernel parameter barely changes anything - *investigated and closed in 1.5.6* | Low | Low | 100% |
 | 10 | Guided Filter | Performance | Dead code; per-frame float32 copies dominate memory - *fixed in 1.5.6* | Low | Low | 100% |
 | 11 | DCT | Quality | Crashes (default kernel) or corrupts indices on stacks of 256+ frames - *fixed in 1.11.2* | High | Low | 100% |
-| 12 | DTCWT | Quality | Each colour channel picks its own source frame, so colour splits at depth edges | Medium | Low | 0% |
+| 12 | DTCWT | Quality | Each colour channel picks its own source frame, so colour splits at depth edges - *fixed in 1.14.0 and 1.30.14* | Medium | Low | 100% |
 | 13 | DTCWT, Pyramid, Depth Map | Robustness | Folder loader copy-pasted four ways; mixed filenames crash the sort | Low | Low | 0% |
 | 14 | DTCWT | Quality | Consistency vote biased toward the later frame at image borders - *dissolved with the vote in 1.30.13* | Low | Trivial | 100% |
 | 15 | Depth Map | Quality | MODE_MAX decision map has no regularisation, so near-tie seams can speckle | Low | Low | 0% |
@@ -50,9 +50,9 @@ mitigation shipped but the underlying issue remains.
 | 18 | DCT | Quality | Per-block winner never clears its margin in a deep stack, so 91% of blocks fell to a fallback that tore the background - *fixed in 1.17.1* | High | Medium | 100% |
 | 19 | Pyramid | Quality | Choose-max stitches defocused regions out of frames that disagree, reconstructing filaments no frame had, and loses them to grain - *fixed in 1.19.0* | High | Medium | 100% |
 
-**Overall: 80% done** - 15 of 19 items fully fixed, item 8 partially (the GPU
+**Overall: 85% done** - 16 of 19 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
-pairwise fold was not what made it grow), 3 untouched. Since 1.17.1 a
+pairwise fold was not what made it grow), 2 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
 guards every method against silent regressions of the kind items 17, 18 and 19
 were.
@@ -885,7 +885,7 @@ still pass.
 
 ## 12. DTCWT lets a pixel's colour channels come from different frames
 
-**Category: quality. Impact: medium. Effort: low.**
+**Category: quality. Impact: medium. Effort: low. Fixed in 1.14.0 and 1.30.14.**
 
 The R, G and B channels are transformed and fused in three independent passes,
 each with its own activity masks; nothing ties a pixel's channels to the same
@@ -901,12 +901,133 @@ the maximum across the three channels' coefficient magnitudes - and select all
 three channels with the same mask. Mask construction drops from three passes
 to one, and the change folds naturally into item 7's joint-selection rewrite.
 
-**The code has taken the second of those since 1.14.0**, in both paths: the
-channels are reduced with a maximum before anything is compared, so one
-decision selects all three (`_coefficient_activity` in `dtcwt.py`,
-`dtcwt_torch.py`), and item 7's rewrite kept it. This item is still shown as
-open because it has never been measured or written up to the standard of the
-rest of this document - what the table tracks is the audit, not the diff.
+**The detail bands have taken the second of those since 1.14.0**, in both
+paths: the channels are reduced with a maximum before anything is compared, so
+one decision selects all three (`_coefficient_activity` in `dtcwt.py`,
+`dtcwt_torch.py`), and item 7's rewrite kept it. That is the half of the method
+this item was written about, and it is pinned by
+`test_dtcwt_frame_order.py::TestFold::test_all_channels_of_a_coefficient_follow_one_decision`.
+
+### The coarse band had it back, and nobody had looked
+
+Item 16 replaced the lowpass band's plain mean with an activity-weighted one in
+1.11.3, and built **one weight map per colour channel** - `_lowpass_activity`
+was called once per channel and the results stacked. So each channel mixed the
+stack in its own proportions, which is this item's defect at large scale: the
+detail bands could no longer split a pixel's colour, but the band underneath
+them could. `pyramid.py` never had this - `_band_energy` sums the squared
+responses across channels into one grey map, and its base weight is that map -
+so DTCWT was the only method left doing it.
+
+How far apart the channels' mixes actually were, over every fixture the project
+has. "Channels disagree" is the share of coarse-band pixels where the three
+channels' dominant frame is not the same frame; the distance is the largest
+total-variation distance between two channels' mixes over the stack, where 0 is
+one shared mix and 1 is no overlap at all:
+
+| scenario | frames | channels disagree | distance mean | p99 | max |
+|---|---|---|---|---|---|
+| fine_texture | 3 | 0.12% | 0.073 | 0.190 | 0.228 |
+| sensor_noise | 3 | 1.94% | 0.070 | 0.224 | 0.272 |
+| depth_edge | 2 | 17.00% | 0.035 | 0.192 | 0.238 |
+| long_stack | 12 | 2.19% | 0.076 | 0.287 | 0.338 |
+| low_contrast | 3 | 1.38% | 0.048 | 0.165 | 0.198 |
+| saturated_colour | 3 | 40.69% | 0.078 | 0.384 | 0.430 |
+| deep_stack | 64 | 55.69% | 0.074 | 0.304 | 0.387 |
+| photographic | 5 | 5.21% | 0.040 | 0.127 | 0.178 |
+
+**What that is worth in colour.** Mixing two frames in one proportion traces the
+straight line between their colours; mixing each channel in its own proportion
+leaves that line, and the distance from it is colour the fusion invented. On
+the two-frame fixtures, reconstructing the coarse band alone (the highpasses
+zeroed, so nothing but the mix is in the picture) and measuring that distance
+in levels:
+
+| fixture | mean before | after | p99 before | after | max before | after | >1 level before | after |
+|---|---|---|---|---|---|---|---|---|
+| depth_edge | 0.073 | 0.009 | 0.889 | 0.104 | 1.206 | 0.337 | 0.41% | 0.00% |
+| chromatic detail | 0.006 | 0.004 | 0.068 | 0.044 | 0.258 | 0.163 | 0.00% | 0.00% |
+| + 22% exposure drift | **3.432** | **0.035** | 5.193 | 0.193 | 5.986 | 0.413 | **98.86%** | **0.00%** |
+
+The third row is the fixture that actually exercises the defect, and it is item
+16's own caveat: the synthetic scenarios hold brightness constant across frames,
+so the frames barely disagree at coarse scale and there is little for a split
+mix to get wrong. Darken one frame by 22% and 98.86% of the coarse band is more
+than a level off any colour the two frames carry, by up to 6 levels. What is
+left after the fix is float residue - a fifth of a level at the 99th percentile.
+
+**Fixed in 1.30.14**, in both paths: `_lowpass_weight` sums the three channels'
+aggregate activity into one map, and that map weights all three channels
+(`dtcwt.py`, `dtcwt_torch.py`). The detail bands' rule is unchanged.
+
+**Why a sum here when the detail bands use a maximum.** The detail bands
+*select* - the question is which frame owns a coefficient, and a maximum keeps a
+structure living in one channel from being diluted by two flat ones (item 1's
+lesson). The coarse band *weighs*, and there the sum is the aggregate the
+question actually asks for; it is also what `pyramid.py` and `depthmap.py`
+already use. Both were measured, along with a luminance weighting. They are
+level to two decimal places on eight of the nine fixtures; `deep_stack`
+separates them, and the maximum is the worst of the three:
+
+| reduction | deep_stack PSNR | colour error |
+|---|---|---|
+| maximum, per level | 25.80 | 7.85 |
+| maximum, of the totals | 25.88 | 7.78 |
+| **sum** | **25.94** | **7.74** |
+| luminance | 26.01 | 7.69 |
+
+Luminance edges it, and is rejected anyway: weighting blue at 0.114 is the
+dilution item 1 exists to prevent, and it would have this method answering a
+question about *detail* with a measure of *brightness*. The sum also commutes
+with the area resampling that follows it, so unlike the maximum it cannot
+matter whether the channels are reduced before or after the resize - the two
+readings of the same sentence are the same computation.
+
+**What it costs.** PSNR against each fixture's own reference, CPU path:
+
+| scenario | before | after | delta |
+|---|---|---|---|
+| fine_texture | 38.79 | 38.79 | 0.00 |
+| sensor_noise | 45.14 | 45.16 | +0.02 |
+| depth_edge | 37.31 | 37.32 | +0.01 |
+| long_stack | 35.46 | 35.47 | +0.01 |
+| low_contrast | 65.00 | 65.00 | 0.00 |
+| saturated_colour | 33.65 | 33.67 | +0.02 |
+| deep_stack | 26.02 | **25.94** | **-0.08** |
+| photographic | 37.66 | 37.66 | 0.00 |
+
+`deep_stack` is the only fixture that pays, and it is the one where the coarse
+band carries the most: 64 frames, a background no frame resolves, and a
+reference that declares the least-blurred rendering correct. 0.08 dB is a ninth
+of the ratchet's tolerance. Everything else is level or fractionally better, and
+the colour error over the flattest half of each frame - where the coarse band is
+what is being looked at - moves by less than 0.01 everywhere except `deep_stack`
+(+0.072) and the exposure-drift fixture (**-0.490**). The quality ratchet needed
+no re-recording: one metric of the 56 moved by more than a fifth of its
+tolerance, `deep_stack/block_speckle`, and it improved (1.875 -> 1.719, which is
+one 8x8 cell). Runtime is unchanged - 0.996 to 1.017x over four stacks from 6
+frames at 768x768 to 24 at 512x512, which is noise.
+
+**Guarded by** `tests/test_dtcwt_colour_channels.py`. The unit tests pin
+`_lowpass_weight` - one map rather than three, blind to *which* channel carries
+a structure but not to how many do. The render test builds a stack whose middle
+is a smooth field with no detail in it at all, so what is rendered there is the
+coarse band alone, and asserts the fused colour lies on the line between the two
+frames' own colours: 0.40 levels off on average and 1.09 at worst, against 2.76
+and 8.09 on the per-channel weight. All seven fail on the 1.30.13 code.
+
+**One pixel of `saturated_colour` is the price, and it is a quantiser, not a
+rule.** That fixture used to render byte for byte however the stack was ordered,
+and now one pixel of its 102,400 moves by one level. The cause is not this
+change: 571 of its coefficients are won on a tie in *both* the regional activity
+and the coefficient magnitude, by frames that differ only in phase - item 7's
+documented residual, which it declines to break with an arbitrary rule about
+complex numbers - and those ties already made the float picture depend on the
+order by 1.7e-7. Moving the coarse band by that much put one pixel on exactly
+21.5. The GPU path is still byte-exact there.
+`tests/test_dtcwt_frame_order.py` now asserts what the fixture can carry: a
+reordering may round at most a handful of pixels by at most one level, and
+nothing else may move.
 
 ---
 
@@ -1013,6 +1134,12 @@ down by `pyrDown` to the base grid; in `dtcwt.py` (and its GPU twin
 `dtcwt_torch.py`, where the weighted sum streams frame by frame like the plain
 sum did) it is the highpass magnitudes summed over the six orientations and
 all levels, area-resampled to the lowpass grid.
+
+**One detail of this was wrong until 1.30.14.** DTCWT built the weight once per
+colour channel, so each channel mixed the stack in its own proportions - item
+12's defect, reintroduced in the band item 12 had not been looked at in. The
+channels are now summed into one weight map before it is applied, which is
+what `pyramid.py` had been doing here all along; the measurement is in item 12.
 
 Measured on the caveat's own failure case - a two-frame stack, each half sharp
 in a different frame, the second frame 20% darker: mean absolute error against

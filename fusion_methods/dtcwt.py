@@ -107,18 +107,31 @@ def _keep_stronger(fused, best_score, best_magnitude, coeffs, score, magnitude):
     np.copyto(fused, coeffs, where=takes[..., None])
 
 
-def _lowpass_activity(pyramid, lowpass_shape):
+def _lowpass_weight(pyramids, lowpass_shape):
     """Aggregate detail activity of one frame on the lowpass grid.
 
-    Sums the complex magnitudes of every highpass level over the six
-    orientations, area-resampling each level's map to the lowpass resolution so
-    all scales contribute. Used to weight the frame's lowpass band so the
-    frames that win the detail bands also dominate the coarse band (item 16 in
+    ``pyramids`` is the frame's three per-channel transforms. Sums the complex
+    magnitudes of every highpass level over the six orientations,
+    area-resampling each level's map to the lowpass resolution so all scales
+    contribute. Used to weight the frame's lowpass band so the frames that win
+    the detail bands also dominate the coarse band (item 16 in
     docs/ALGORITHM_IMPROVEMENTS.md).
+
+    The channels are summed into one grey map before the weight is formed, so
+    all three channels of a pixel are mixed over the stack in the same
+    proportions and no colour can appear in the coarse band that no frame
+    carried (item 12). That is the reduction `pyramid.py` and `depthmap.py`
+    already use for the same reason; a maximum, which is what
+    `_coefficient_activity` uses to *select* a coefficient, was measured here
+    too and is 0.06-0.14 dB worse on `deep_stack` and level everywhere else -
+    selecting wants the strongest channel, weighing wants all of them. Summing
+    also commutes with the area resampling below, so unlike a maximum it cannot
+    matter whether the channels are reduced before or after the resize.
     """
     acc = np.zeros(lowpass_shape, dtype=np.float32)
-    for hp in pyramid.highpasses:
-        mag = np.abs(hp).sum(axis=2).astype(np.float32)
+    for level in range(len(pyramids[0].highpasses)):
+        mag = sum(np.abs(p.highpasses[level]).sum(axis=2).astype(np.float32)
+                  for p in pyramids)
         acc += cv2.resize(mag, (lowpass_shape[1], lowpass_shape[0]),
                           interpolation=cv2.INTER_AREA)
     return acc
@@ -169,7 +182,7 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
     # The pass streams, so memory stays at about two frames' worth of
     # coefficients regardless of stack depth.
     lowpass_sum = None       # (h', w', 3) activity-weighted lowpass sum
-    weight_sum = None        # (h', w', 3) sum of those weights
+    weight_sum = None        # (h', w') sum of those weights, shared by channels
     fused_highpasses = None  # per level: (H, W, 6, 3) complex - winners so far
     best_score = None        # per level: (H, W, 6) float32 - their activity
     best_magnitude = None    # per level: (H, W, 6) float32 - their magnitude
@@ -182,11 +195,12 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
         # The lowpass band is averaged with each frame weighted by its
         # aggregate highpass activity so the sharpest frames dominate the
         # coarse band too, instead of a plain mean ghosting in frames that
-        # disagree at large scale (exposure drift, focus breathing).
+        # disagree at large scale (exposure drift, focus breathing). One weight
+        # per pixel serves all three channels, so the coarse band mixes the
+        # stack in the same proportions in each of them (item 12).
         lowpass = np.stack([p.lowpass for p in pyramids], axis=-1)
-        weight = np.stack(
-            [_lowpass_activity(p, lowpass.shape[:2]) for p in pyramids],
-            axis=-1) + _LOWPASS_ACTIVITY_EPS
+        weight = (_lowpass_weight(pyramids, lowpass.shape[:2])
+                  + _LOWPASS_ACTIVITY_EPS)
         highpasses = [
             np.stack([p.highpasses[level] for p in pyramids], axis=-1)
             for level in range(N)
@@ -197,20 +211,20 @@ def _dtcwt_impl(input_source, img_resize, N, use_gpu):
             # float64, because this is the one running quantity whose value
             # depends on the order it is summed in - and a stack handed over
             # backwards should render the identical picture.
-            lowpass_sum = (lowpass * weight).astype(np.float64)
+            lowpass_sum = (lowpass * weight[..., None]).astype(np.float64)
             weight_sum = weight.astype(np.float64)
             fused_highpasses = highpasses
             best_score = [score for score, _ in activity]
             best_magnitude = [magnitude for _, magnitude in activity]
         else:
-            lowpass_sum += lowpass * weight
+            lowpass_sum += lowpass * weight[..., None]
             weight_sum += weight
             for level, (score, magnitude) in enumerate(activity):
                 _keep_stronger(fused_highpasses[level], best_score[level],
                                best_magnitude[level], highpasses[level],
                                score, magnitude)
 
-    fused_lowpass = (lowpass_sum / weight_sum).astype(np.float32)
+    fused_lowpass = (lowpass_sum / weight_sum[..., None]).astype(np.float32)
 
     # 3. Reconstruct Final Image
     # The inverse transform runs per channel; the coupling above only decides

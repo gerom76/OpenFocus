@@ -68,17 +68,20 @@ WINDOW_SIZE = 3
 LOWPASS_ACTIVITY_EPS = 1e-6
 
 
-def _lowpass_activity(yh, lowpass_shape):
+def _lowpass_weight(yh, lowpass_shape):
     """Aggregate detail activity of one frame on the lowpass grid.
 
-    Torch mirror of _lowpass_activity in fusion_methods/dtcwt.py: complex
-    magnitudes summed over the six orientations per level, area-resampled to
-    the lowpass resolution and summed across levels. yh: list of
-    (C, 6, h, w, 2) tensors; returns (C, h', w').
+    Torch mirror of _lowpass_weight in fusion_methods/dtcwt.py: complex
+    magnitudes summed over the six orientations per level, summed over the
+    colour channels so one weight serves all three (item 12 in
+    docs/ALGORITHM_IMPROVEMENTS.md), area-resampled to the lowpass resolution
+    and summed across levels. yh: list of (C, 6, h, w, 2) tensors; returns
+    (1, h', w').
     """
     acc = None
     for level in yh:
         mag = torch.sqrt(level[..., 0] ** 2 + level[..., 1] ** 2).sum(dim=1)
+        mag = mag.sum(dim=0, keepdim=True)
         mag = F.interpolate(mag.unsqueeze(0), size=lowpass_shape, mode='area')[0]
         acc = mag if acc is None else acc + mag
     return acc
@@ -191,8 +194,10 @@ def dtcwt_torch_impl(input_source, img_resize=None, N=4, device=None):
 
             # Lowpass is averaged with each frame weighted by its aggregate
             # highpass activity (item 16 in docs/ALGORITHM_IMPROVEMENTS.md);
-            # the weighted sum streams just like the plain sum did.
-            weight = _lowpass_activity(yh, yl.shape[-2:]) + LOWPASS_ACTIVITY_EPS
+            # the weighted sum streams just like the plain sum did. The weight
+            # is one map per pixel, broadcast over the channels, so the coarse
+            # band mixes the stack alike in all three (item 12).
+            weight = _lowpass_weight(yh, yl.shape[-2:]) + LOWPASS_ACTIVITY_EPS
             activity = [_coefficient_activity(level) for level in yh]
 
             if lowpass_sum is None:
