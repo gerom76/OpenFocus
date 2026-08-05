@@ -1698,7 +1698,115 @@ against 3.8 s.
 
 **Guarded by** the quality ratchet (re-recorded, diff above),
 `tests/test_depthmap_halo.py`, and the CPU/GPU parity pairs - MODE_MAX stays
-bitwise identical between the two paths, MODE_AVERAGE within 1 LSB.
+bitwise identical between the two paths, MODE_AVERAGE within 2 LSB (the
+pre-existing float summation-order departure, measured over 12 configurations).
+
+---
+
+## 22. Depth Map's argmax has no spatial prior, so it tears whatever it cannot resolve
+
+**Method:** Depth Map | **Category:** Quality | **Impact:** High |
+**Effort:** Low | **Fixed in 1.34.0**
+
+Item 21 fixed what the focus measure claimed. This is about what happens where
+it has nothing to claim at all.
+
+Over a region no frame ever resolves - a background well behind the focus
+sweep, or any dark, flat patch - every frame's energy sits at the same
+defocused level and the winner is decided by whatever noise survived the
+pooling. The argmax carries no spatial prior whatsoever, so neighbouring pixels
+happily take frames from opposite ends of the stack. Those frames render that
+background at visibly different blur and brightness, and the result is a torn
+mosaic of hard-edged patches. It is the artefact `deep_stack` was written to
+catch, quoting its own docstring: *"a tie broken badly shows up as steps
+between frames that look nothing alike"*.
+
+Measured on the reference ant stack, in a background region that never comes
+into focus: **22% of pixels at kernel 9 chose a frame more than 3 slices from
+their neighbourhood's choice** (13.7% more than 15 slices), against 2.3% over
+the ant's body and 3.9% on the in-focus PCB. At kernel 51 the confetti coarsens
+into blobs - 6.5% - but the seams get larger, not fewer.
+
+**Fix.** A depth map is piecewise-smooth: it varies continuously across a
+surface and steps only at an occlusion. So the incoherent pixels are outliers
+against their own neighbourhood, which is exactly what a median removes while
+leaving genuine steps standing. Three passes of a 5x5 median over the finished
+index map, before a single pixel is gathered:
+
+```python
+best_index = _regularise_index(best_index)   # 3 x cv2.medianBlur(..., 5)
+```
+
+Where the measure has a real peak the argmax already agrees with its
+neighbours and the median is a no-op there, so sharp detail is not what pays
+for this.
+
+**Why three narrow passes rather than one wide median.** Iterating a narrow
+median converges towards its root signal - it removes what is smaller than the
+window without eroding what is larger - whereas a single wide median rounds off
+real depth features of its own size too. Measured on the ant stack's background
+region, three 5x5 passes match a single true 9x9 on incoherence (seam density
+0.0274 against 0.0259) while keeping *more* detail on the in-focus crops. It is
+also the only affordable option: 5 is the widest window `cv2.medianBlur` takes
+for anything larger than uint8, and the exact wide median is a scipy call - on
+this 1.7 MP index map, 1.07 s for a 9x9 and 2.7 s for a 15x15, against 15 ms
+for three cv2 passes.
+
+**Rejected alternatives.** Guided-filter smoothing of the index map, gated or
+not, cost a third to a half of the in-focus Laplacian variance and *raised*
+incoherence,
+because rounding a smoothed float index dithers. Confidence-gating the median -
+applying it only where the winner fails to stand out - was worse than applying
+it everywhere: the gate's own boundary becomes a seam.
+
+**What the measurements said.** PSNR against the ground-truth reference, mean
+over all seven scenarios, and SSIM:
+
+| Kernel | PSNR before | PSNR after | SSIM before | SSIM after |
+|---|---|---|---|---|
+| 9 | 41.87 | **42.27** | 0.9693 | **0.9820** |
+| 31 | 41.48 | **42.16** | 0.9771 | **0.9864** |
+| 51 | 41.26 | **41.29** | 0.9858 | **0.9890** |
+
+`deep_stack` - the scenario that models this exact failure - gains the most:
+26.05 -> 27.81 dB and 0.806 -> 0.894 SSIM at kernel 9, with its defocus seam
+excess halved (1.949 -> 0.969).
+
+**The one real cost, located.** `long_stack` at kernel 51 loses 0.78 dB. That
+scenario is 12 depth bands 27 px tall, so a 51 px pooling window is already
+wider than a band; the median shifts those boundaries a couple of pixels
+further. Splitting the extra squared error by row shows **100.5% of it lands
+within 4 px of a band boundary** - band interiors come out very slightly
+*better* (-0.02 MSE). It saturates at one pass, so fewer passes do not buy it
+back.
+
+**A metric moved the wrong way, and again should have.** `deep_stack`'s
+`spatial_frequency` fell 14.48 -> 9.80. The reference's own spatial frequency
+is **8.54**: the old render scored 69% *above* the truth because the metric
+counts gradient energy without asking whether the reference has any there, and
+the tearing is gradient energy. Split by region, background gradient went from
+4.9x the reference's down to 2.7x while the subject moved -5%. `block_speckle`
+rose 0.156 - one 8x8 cell out of 640, the metric's quantum, leaving the result
+one block off the reference's own 2.188.
+
+**A latent NaN came out with it.** The two pooled terms item 21 multiplies are
+non-negative in exact arithmetic but not in float32 - `boxFilter` accumulates a
+running sum, and over a window spanning a sharp edge the cancellation can leave
+a tiny negative. Unclamped that reached `sqrt` as a NaN, and a NaN loses every
+`>` it is compared with, so the pixel silently kept whichever frame happened to
+be there. Clamped on both paths.
+
+**Cost.** Three median passes over one index plane: ~15 ms on 1.7 MP. The
+333-frame ant stack, 8 threads, best of three: 4.22 s against 4.15 s at kernel
+9, 4.46 s against 4.49 s at kernel 51 - inside the run-to-run noise. On the GPU
+the median runs on the host, over a plane that is a couple of megabytes, and
+only the pixels it actually moved are re-gathered.
+
+**Guarded by** the quality ratchet (re-recorded, `depthmap_max` only),
+`tests/test_depthmap_halo.py`, `tests/test_depthmap_gpu.py`, and the CPU/GPU
+parity pairs - MODE_MAX is bitwise identical between the two paths at kernels
+9, 31 and 51 and for 16-bit frames with halo suppression, which the shared
+`_regularise_index` is what makes possible.
 
 ---
 

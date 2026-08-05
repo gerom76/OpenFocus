@@ -4,11 +4,11 @@ GPU implementation of depth-map multi-focus fusion.
 Mirrors fusion_methods/depthmap.py on a torch device (CUDA/MPS): the same
 squared-Laplacian focus energy, taken through the same measurement prefilter
 and pooled over the same two windows into the same geometric mean, the same
-order-independent per-pixel argmax (MODE_MAX), the same contrast-weighted blend
-with its baseline weight (MODE_AVERAGE), and halo suppression through the same
-elliptical structuring element - reproduced span by span rather than
-approximated with a square window, so a radius means on the GPU what it means
-on the CPU.
+order-independent per-pixel argmax (MODE_MAX) despeckled by the same median,
+the same contrast-weighted blend with its baseline weight (MODE_AVERAGE), and
+halo suppression through the same elliptical structuring element - reproduced
+span by span rather than approximated with a square window, so a radius means
+on the GPU what it means on the CPU.
 
 Frames are uploaded and measured in chunks, so device memory is bounded by the
 accumulators plus one chunk however deep the stack is. The chunk is sized from
@@ -26,6 +26,7 @@ import functools
 import math
 
 import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -37,7 +38,9 @@ from fusion_methods.depthmap import (
     MODE_MAX,
     _BASELINE_FRACTION,
     _WEIGHT_FLOOR,
+    _index_dtype,
     _near_window,
+    _regularise_index,
     _resolve_halo_radius,
     _resolve_kernel,
 )
@@ -221,7 +224,52 @@ def _focus_energy(batch, window, near, lap_kernel, box_kernel, near_kernel,
     wide = _pool(energy, window, box_kernel)
     if not near:
         return wide
-    return torch.sqrt(wide * _pool(energy, near, near_kernel))
+    # Clamped for the reason depthmap._focus_energy clamps: the pooled product
+    # is non-negative in exact arithmetic but not in float32, and a NaN out of
+    # sqrt would lose every comparison in the reduction below.
+    return torch.sqrt((wide * _pool(energy, near, near_kernel)).clamp_min(0.0))
+
+
+def _repair_index(stack, fused, index, count, chunk, upload):
+    """Despeckle the depth map and re-take the pixels whose frame changed.
+
+    The median itself is run by depthmap._regularise_index on the host rather
+    than reimplemented here: the index map is one narrow plane, so the round
+    trip costs a couple of megabytes, and going through the same cv2 call is
+    what makes the two paths agree on it exactly instead of approximately.
+
+    Only the pixels the median actually moved are re-gathered, and only the
+    chunks holding a frame some moved pixel now names are uploaded a second
+    time, so a decision that was already coherent costs one download and
+    nothing else.
+    """
+    raw = index.to("cpu").numpy().astype(_index_dtype(count), copy=False)
+    regularised = _regularise_index(raw)
+    moved = regularised != raw
+    if not moved.any():
+        return fused
+
+    dev = fused.device
+    wanted = regularised[moved]
+    target = torch.from_numpy(regularised.astype(np.int32)).to(dev)
+    moved_dev = torch.from_numpy(moved).to(dev)
+    # Which frames the moved pixels ask for, so whole chunks of untouched
+    # frames can be skipped rather than uploaded to be written nowhere.
+    needed = set(int(v) for v in np.unique(wanted))
+
+    for start in range(0, count, chunk):
+        stop = min(start + chunk, count)
+        if not needed.intersection(range(start, stop)):
+            continue
+        batch = upload(stack[start:stop])
+        for i in range(batch.shape[0]):
+            if start + i not in needed:
+                continue
+            take = moved_dev & (target == start + i)
+            torch.where(take.unsqueeze(0), batch[i], fused, out=fused)
+        del batch
+
+    return fused
 
 
 def _resolve_device(device):
@@ -261,6 +309,7 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
     if mode == MODE_MAX:
         best = torch.full((rows, cols), float("-inf"), device=dev)
         fused = torch.zeros((channels, rows, cols), device=dev)
+        index = torch.zeros((rows, cols), dtype=torch.int32, device=dev)
 
         for start in range(0, count, chunk):
             batch = upload(stack[start:start + chunk])
@@ -269,16 +318,18 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
             # batched: the strict '>' walking the stack in index order is what
             # gives the CPU path its first-frame-wins tie-break, and a batched
             # argmax would quietly resolve ties the other way. Written back
-            # through `out=` so the two accumulators are updated in place -
+            # through `out=` so the accumulators are updated in place -
             # allocating a fresh copy of the fused frame per slice is what
             # would make a deep chunk expensive.
             for i in range(batch.shape[0]):
                 better = energy[i, 0] > best
                 torch.where(better, energy[i, 0], best, out=best)
                 torch.where(better.unsqueeze(0), batch[i], fused, out=fused)
+                index[better] = start + i
             del batch, energy
+        del best
 
-        return fused
+        return _repair_index(stack, fused, index, count, chunk, upload)
 
     # MODE_AVERAGE: the contrast-weighted sum, the weight sum and a plain sum,
     # blended once the stack's mean energy - and with it the baseline weight

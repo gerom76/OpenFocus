@@ -292,6 +292,7 @@ OpenFocus offers eight fusion algorithms. Each has different characteristics sui
   - **Average**: blends frames in proportion to their focus measure, so flat regions collapse to the plain mean and recover the stack's multi-frame SNR (a free √N noise reduction), while sharp detail still follows the frame that holds it
 - **Best for**: *Max* — clean, artifact-free selection on well-defined subjects; *Average* — stacks with large smooth areas where a hard select would chase sensor noise
 - **Advantages**: Runs on GPU (CUDA/MPS) with automatic CPU fallback; no colour splitting across sources; order-independent
+- **Note**: In *Max* mode the depth map is despeckled before any pixels are gathered. Over an area no frame ever resolves the focus measure has no real winner, and an undespeckled selection tears such an area into a mosaic of patches taken from frames that look nothing alike; the despeckle makes those pixels follow their neighbourhood instead. Genuinely sharp detail already agrees with its neighbours, so it is not what pays for this
 - **Parameter**: Kernel size sets the window the focus measure is pooled over (larger is steadier on noise, smaller follows finer detail). The measure is pooled at two scales at once — the window you set, and a narrow one — so a sharply focused outline can no longer claim the background beside it on the strength of energy that lives half a window away. That is what used to draw a flat, washed-out ring around every subject at large kernel sizes, and large kernels are now safe to use
 - **Parameter**: Halo suppression radius (0 = off). A defocused foreground edge casts a bright glow over the background in the frames where the background is sharp, and plain per-pixel selection copies that glow into the result — the classic focus-stacking halo. With a radius set, a sharply focused region also claims the surrounding band its glow contaminates, so the ring comes out as natural defocused background instead. **Leave this at 0 unless a glow actually survives**: the two-scale measure already discounts a veil on its own (a glow is low-frequency, so it scores badly on the narrow window), and the dilation does not remove a ring so much as fill one with defocused pixels, whether or not there was a glow to fight. If you do need it, set it to roughly the visible halo width and keep it well under the kernel size — larger radii round off genuine detail near depth edges, the same trade-off the Radius dial has in Helicon Focus and Zerene Stacker
 
@@ -564,6 +565,13 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 - Distinct from the glow above: this is a *loss* of background detail in a band around the subject, not a bright fringe, and it grows with the kernel size
 - Fixed in 1.33.0 — if you are seeing it, you are on an older build
 - If it persists, check that **Halo suppression** is 0; a radius comparable to the kernel size forces this band by design
+
+#### Blotchy, Torn-Looking Background Behind the Subject
+
+- Distinct from both entries above: a mosaic of hard-edged patches, each a slightly different shade or blur, over an area that is out of focus in every frame — a background well behind the focus sweep, or any dark, flat patch
+- The cause is that no frame is genuinely sharper than the others there, so per-pixel selection has nothing to go on and neighbouring pixels take frames from opposite ends of the stack
+- Fixed in 1.34.0 — if you are seeing it, you are on an older build. Depth maps are now despeckled before the pixels are gathered, so such an area comes out as one coherent choice
+- A *smooth* shading variation over that area is normal and is not this artifact; if you want it perfectly even, a transform-domain method (DTCWT, Pyramid) blends the defocused background rather than selecting from it
 
 #### StackMFF-V4 Unavailable
 

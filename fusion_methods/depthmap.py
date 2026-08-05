@@ -29,7 +29,10 @@ except ImportError:  # psutil is a hard requirement, but never fail a load over 
 #                 it.
 # Both rules read the same focus measure, and that measure is pooled at two
 # scales rather than one so it cannot leak across an occlusion boundary; see
-# _focus_energy and NEAR_WINDOW_DIVISOR for what that fixes.
+# _focus_energy and NEAR_WINDOW_DIVISOR for what that fixes. MODE_MAX then
+# despeckles the depth map it arrived at before gathering any pixels, so a
+# region no frame ever resolves comes out coherent instead of torn; see
+# INDEX_MEDIAN_PASSES.
 
 MODE_MAX = "max"
 MODE_AVERAGE = "average"
@@ -106,6 +109,38 @@ MEASURE_BLUR_KSIZE = 7
 # Reach for this only if a glow survives that, and keep the radius well under
 # the kernel size.
 DEFAULT_HALO_RADIUS = 0
+
+# Passes of a 5x5 median over the finished index map, before the pixels are
+# gathered; 0 disables it. MODE_MAX only - MODE_AVERAGE has no index map, and
+# its blend is coherent by construction.
+#
+# The argmax has no spatial prior whatsoever, and over a region no frame ever
+# resolves - a background well behind the stack's focus sweep, or any dark,
+# flat patch - every frame's energy sits at the same defocused level and the
+# winner is decided by noise. Neighbouring pixels then take frames from
+# opposite ends of the stack, which render that background at visibly different
+# blur and brightness, and the result is a torn mosaic of hard-edged patches.
+# On the reference ant stack 22% of pixels in such a region chose a frame more
+# than 3 slices from their neighbourhood's choice, against 2% over the subject.
+#
+# A depth map is piecewise-smooth - it varies continuously across a surface and
+# steps only at an occlusion - so the incoherent pixels are outliers against
+# their own neighbourhood, which is exactly what a median removes while leaving
+# genuine steps standing. Where the measure has a real peak the argmax already
+# agrees with its neighbours and the median is a no-op, so sharp detail is not
+# what pays for this.
+INDEX_MEDIAN_PASSES = 3
+
+# Side of that median. Deliberately the smallest window that can outvote a
+# speckle rather than one wide enough to despeckle in a single pass: iterating a
+# narrow median converges towards its root signal, removing what is smaller than
+# the window without eroding what is larger, whereas one wide median rounds off
+# real depth features of its own size too. Three 5x5 passes match a single 9x9
+# on incoherence while keeping measurably more detail, and 5 is also the widest
+# window cv2.medianBlur takes for anything larger than uint8 - the exact wide
+# median is a scipy call costing of order a second per megapixel and growing
+# with the window, which a 60 MP stack cannot wear.
+INDEX_MEDIAN_KSIZE = 5
 
 # In MODE_AVERAGE every frame is given a small baseline weight on top of its
 # focus measure, set to this fraction of the stack's mean energy. It is what
@@ -256,6 +291,24 @@ def _pool(energy, window):
                          normalize=True, borderType=cv2.BORDER_REFLECT)
 
 
+def _regularise_index(index):
+    """Median-despeckle the index map so the depth it encodes is coherent.
+
+    See INDEX_MEDIAN_PASSES for what this is undoing. Returns the map unchanged
+    when the filtering is switched off or the window cannot fit.
+    """
+    if INDEX_MEDIAN_PASSES <= 0 or min(index.shape) < INDEX_MEDIAN_KSIZE:
+        return index
+    # cv2.medianBlur takes uint8 and uint16 directly; the uint32 map a stack of
+    # more than 65536 frames needs goes through float32, which is exact for
+    # every index that can address such a stack.
+    native = index.dtype in (np.uint8, np.uint16)
+    work = index if native else index.astype(np.float32)
+    for _ in range(INDEX_MEDIAN_PASSES):
+        work = cv2.medianBlur(work, INDEX_MEDIAN_KSIZE)
+    return work if native else work.astype(index.dtype)
+
+
 def _focus_energy(img, window):
     """Local focus energy of one frame: pooled squared Laplacian response.
 
@@ -295,6 +348,13 @@ def _focus_energy(img, window):
     # Folded in place: `wide` is this function's own buffer, so the geometric
     # mean costs no allocation beyond the narrow pooling itself.
     np.multiply(wide, _pool(energy, near), out=wide)
+    # Both poolings average a non-negative quantity, so the product is
+    # non-negative in exact arithmetic - but boxFilter accumulates a running sum,
+    # and over a window that spans a sharp edge the cancellation can leave a tiny
+    # negative behind. Unclamped that reaches sqrt as a NaN, and a NaN loses
+    # every '>' it is compared with, so the pixel would silently keep whichever
+    # frame happened to be there rather than the one that won.
+    np.maximum(wide, 0.0, out=wide)
     return np.sqrt(wide, out=wide)
 
 
@@ -304,7 +364,8 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
 
     A local Laplacian-energy focus measure is computed for every frame. In
     MODE_MAX the pixel is taken whole from the frame whose measure is highest -
-    an order-independent argmax that is the classic hard depth map. In
+    an order-independent argmax that is the classic hard depth map, despeckled
+    by INDEX_MEDIAN_PASSES before the pixels are gathered. In
     MODE_AVERAGE the frames are blended in proportion to that measure, so flat
     regions average (recovering multi-frame SNR) and sharp regions still follow
     the frame that holds the detail.
@@ -412,6 +473,11 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
             np.copyto(best_index, k, where=better)
             del energy, better
         del best_energy
+
+        # The depth map is despeckled before anything is gathered, so a pixel
+        # whose winner was decided by noise takes its neighbourhood's frame
+        # instead of tearing away from it.
+        best_index = _regularise_index(best_index)
 
         # Every pixel names exactly one frame - frame 0 already beats the -inf
         # the map starts at - so every pixel is written exactly once below and
