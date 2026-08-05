@@ -2,7 +2,8 @@
 GPU implementation of depth-map multi-focus fusion.
 
 Mirrors fusion_methods/depthmap.py on a torch device (CUDA/MPS): the same
-squared-Laplacian focus energy pooled over the same window, the same
+squared-Laplacian focus energy, taken through the same measurement prefilter
+and pooled over the same two windows into the same geometric mean, the same
 order-independent per-pixel argmax (MODE_MAX), the same contrast-weighted blend
 with its baseline weight (MODE_AVERAGE), and halo suppression through the same
 elliptical structuring element - reproduced span by span rather than
@@ -30,10 +31,13 @@ import torch.nn.functional as F
 
 from fusion_methods import torch_depth
 from fusion_methods.depthmap import (
+    MEASURE_BLUR_KSIZE,
+    MEASURE_SIGMA,
     MODE_AVERAGE,
     MODE_MAX,
     _BASELINE_FRACTION,
     _WEIGHT_FLOOR,
+    _near_window,
     _resolve_halo_radius,
     _resolve_kernel,
 )
@@ -62,12 +66,13 @@ def _frame_bytes(rows, cols, channels, radius):
 
     Conservative and deliberately rough - it decides a batch size, not a
     correctness bound, and the allocator retry below covers an underestimate.
-    The normalised frame and its Laplacian response carry `channels` planes
-    each and the padded copy each convolution makes carries a little more; the
-    energy map and its pooled output are single-channel, as are the row maxima
-    the halo dilation builds.
+    The normalised frame, the prefilter's two passes over it and its Laplacian
+    response carry `channels` planes each and the padded copy each convolution
+    makes carries a little more; the energy map and the two pooled outputs the
+    measure combines are single-channel, as are the row maxima the halo
+    dilation builds.
     """
-    planes = 2.5 * channels + 3.0
+    planes = 4.5 * channels + 4.0
     if radius > 0:
         planes += 3.0
     return max(1, int(4 * rows * cols * planes))
@@ -111,6 +116,34 @@ def _box_kernel(window, device):
     """(1, 1, w, w) normalised box filter, the twin of cv2.boxFilter."""
     return torch.full((1, 1, window, window), 1.0 / (window * window),
                       dtype=torch.float32, device=device)
+
+
+@functools.lru_cache(maxsize=8)
+def _blur_kernel(channels, device):
+    """The measurement prefilter's taps as a depthwise separable (1, k) filter.
+
+    Built from cv2.getGaussianKernel rather than from a formula of our own, so
+    the GPU convolves with bit-for-bit the coefficients cv2.GaussianBlur uses
+    on the CPU path.
+    """
+    taps = cv2.getGaussianKernel(MEASURE_BLUR_KSIZE, MEASURE_SIGMA).ravel()
+    row = torch.tensor(taps, dtype=torch.float32, device=device)
+    return row.view(1, 1, 1, -1).expand(channels, 1, 1, MEASURE_BLUR_KSIZE).contiguous()
+
+
+def _measure_blur(batch, blur_kernel):
+    """Separable Gaussian prefilter over a (B, C, H, W) chunk.
+
+    Separated into two passes for the same reason cv2 does it: a k-tap square
+    kernel costs k times as much as two k-tap passes for the same result.
+    Reflect padding matches cv2.GaussianBlur's default border.
+    """
+    channels = batch.shape[1]
+    pad = MEASURE_BLUR_KSIZE // 2
+    out = F.conv2d(F.pad(batch, (pad, pad, 0, 0), mode="reflect"),
+                   blur_kernel, groups=channels)
+    return F.conv2d(F.pad(out, (0, 0, pad, pad), mode="reflect"),
+                    blur_kernel.transpose(2, 3), groups=channels)
 
 
 @functools.lru_cache(maxsize=16)
@@ -159,23 +192,36 @@ def _dilate_ellipse(energy, radius):
     return out
 
 
-def _focus_energy(batch, window, lap_kernel, box_kernel):
-    """(B, 1, H, W) pooled squared-Laplacian energy of a (B, C, H, W) chunk.
+def _pool(energy, window, kernel):
+    """Box-pool a (B, 1, H, W) energy map, the twin of depthmap._pool."""
+    if window <= 1:
+        return energy
+    pad = window // 2
+    return F.conv2d(F.pad(energy, (pad,) * 4, mode="reflect"), kernel)
+
+
+def _focus_energy(batch, window, near, lap_kernel, box_kernel, near_kernel,
+                  blur_kernel):
+    """(B, 1, H, W) focus measure of a (B, C, H, W) chunk.
 
     Channels are squared and summed before the pooling, exactly as on the CPU,
     so all three channels of a pixel stay tied to one frame and colour can
-    never split across sources.
+    never split across sources, and the same two poolings are combined as the
+    same geometric mean; see depthmap._focus_energy for what the narrow window
+    is for.
     """
     channels = batch.shape[1]
+    if blur_kernel is not None:
+        batch = _measure_blur(batch, blur_kernel)
     lap = F.conv2d(F.pad(batch, (1, 1, 1, 1), mode="reflect"),
                    lap_kernel, groups=channels)
     energy = (lap * lap).sum(dim=1, keepdim=True)
     del lap
 
-    if window <= 1:
-        return energy
-    pad = window // 2
-    return F.conv2d(F.pad(energy, (pad,) * 4, mode="reflect"), box_kernel)
+    wide = _pool(energy, window, box_kernel)
+    if not near:
+        return wide
+    return torch.sqrt(wide * _pool(energy, near, near_kernel))
 
 
 def _resolve_device(device):
@@ -195,6 +241,9 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
     """One full pass over the stack on `dev`, returning a (C, H, W) tensor."""
     lap_kernel = _laplacian_kernel(channels, dev)
     box_kernel = _box_kernel(window, dev) if window > 1 else None
+    near = _near_window(window)
+    near_kernel = _box_kernel(near, dev) if near else None
+    blur_kernel = _blur_kernel(channels, dev) if MEASURE_SIGMA > 0 else None
     count = len(stack)
 
     def upload(frames):
@@ -205,7 +254,8 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
         return torch_depth.stack_to_float01(frames, dev)
 
     def measure(batch):
-        energy = _focus_energy(batch, window, lap_kernel, box_kernel)
+        energy = _focus_energy(batch, window, near, lap_kernel, box_kernel,
+                               near_kernel, blur_kernel)
         return _dilate_ellipse(energy, radius)
 
     if mode == MODE_MAX:
@@ -309,8 +359,9 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         rows, cols = first.shape[:2]
 
     # Reflect padding requires pad < dim; below this size the CPU path (whose
-    # cv2 borders have no such limit) is the one that can do the work.
-    max_pad = max(1, window // 2)
+    # cv2 borders have no such limit) is the one that can do the work. The
+    # measurement prefilter pads too, so it sets the floor for small windows.
+    max_pad = max(1, window // 2, MEASURE_BLUR_KSIZE // 2 if MEASURE_SIGMA > 0 else 1)
     if min(rows, cols) <= max_pad:
         raise ValueError(
             f"Image {cols}x{rows} too small for GPU depth-map fusion with a "

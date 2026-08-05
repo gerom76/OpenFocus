@@ -292,8 +292,8 @@ OpenFocus offers eight fusion algorithms. Each has different characteristics sui
   - **Average**: blends frames in proportion to their focus measure, so flat regions collapse to the plain mean and recover the stack's multi-frame SNR (a free √N noise reduction), while sharp detail still follows the frame that holds it
 - **Best for**: *Max* — clean, artifact-free selection on well-defined subjects; *Average* — stacks with large smooth areas where a hard select would chase sensor noise
 - **Advantages**: Runs on GPU (CUDA/MPS) with automatic CPU fallback; no colour splitting across sources; order-independent
-- **Parameter**: Kernel size sets the window the focus measure is pooled over (larger is steadier on noise, smaller follows finer detail)
-- **Parameter**: Halo suppression radius (0 = off). A defocused foreground edge casts a bright glow over the background in the frames where the background is sharp, and plain per-pixel selection copies that glow into the result — the classic focus-stacking halo. With a radius set, a sharply focused region also claims the surrounding band its glow contaminates, so the ring comes out as natural defocused background instead. Set it to roughly the visible halo width in pixels; larger values round off genuine detail near depth edges, which is the same trade-off the Radius dial has in Helicon Focus and Zerene Stacker
+- **Parameter**: Kernel size sets the window the focus measure is pooled over (larger is steadier on noise, smaller follows finer detail). The measure is pooled at two scales at once — the window you set, and a narrow one — so a sharply focused outline can no longer claim the background beside it on the strength of energy that lives half a window away. That is what used to draw a flat, washed-out ring around every subject at large kernel sizes, and large kernels are now safe to use
+- **Parameter**: Halo suppression radius (0 = off). A defocused foreground edge casts a bright glow over the background in the frames where the background is sharp, and plain per-pixel selection copies that glow into the result — the classic focus-stacking halo. With a radius set, a sharply focused region also claims the surrounding band its glow contaminates, so the ring comes out as natural defocused background instead. **Leave this at 0 unless a glow actually survives**: the two-scale measure already discounts a veil on its own (a glow is low-frequency, so it scores badly on the narrow window), and the dilation does not remove a ring so much as fill one with defocused pixels, whether or not there was a glow to fight. If you do need it, set it to roughly the visible halo width and keep it well under the kernel size — larger radii round off genuine detail near depth edges, the same trade-off the Radius dial has in Helicon Focus and Zerene Stacker
 
 ### StackMFF-V4 (Deep Learning)
 
@@ -555,8 +555,15 @@ The batch dialog shows real-time progress. You can cancel processing at any time
 #### Bright Halo Around the Subject
 
 - This is the defocused foreground's glow being copied from the background-focused frames
-- Switch to a **Depth Map** method and raise **Halo suppression** to roughly the halo's width in pixels
+- On a **Depth Map** method, try this before touching **Halo suppression** — the focus measure discounts a glow on its own, and the dial fills the ring with defocused pixels rather than recovering what is behind it
+- If a glow still survives, raise **Halo suppression** to roughly the halo's width in pixels
 - Larger radii trade away genuine background detail near the subject's outline, so use the smallest value that clears the glow
+
+#### Flat, Washed-Out Ring Tracing the Subject's Outline
+
+- Distinct from the glow above: this is a *loss* of background detail in a band around the subject, not a bright fringe, and it grows with the kernel size
+- Fixed in 1.33.0 — if you are seeing it, you are on an older build
+- If it persists, check that **Halo suppression** is 0; a radius comparable to the kernel size forces this band by design
 
 #### StackMFF-V4 Unavailable
 

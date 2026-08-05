@@ -1611,6 +1611,97 @@ exercised without a card - and by the CPU/GPU parity pairs in
 
 ---
 
+## 21. Depth Map's pooling leaks across occlusion boundaries, ringing every subject
+
+**Method:** Depth Map | **Category:** Quality | **Impact:** High |
+**Effort:** Low | **Fixed in 1.33.0**
+
+`_focus_energy` pooled the squared Laplacian with a single `cv2.boxFilter`.
+A box window is edge-blind, so the enormous energy of a sharply focused,
+high-contrast contour was smeared `kernel // 2` pixels in *every* direction -
+including out across the occlusion boundary, onto background belonging to a
+different slice. Inside that band the foreground's frame won the argmax, and
+the result took the background from a frame where the background is defocused.
+The visible artefact is a flat, washed-out ring hugging every subject outline,
+its width set by the kernel dial: 25 px at kernel 51.
+
+It went unnoticed because the method's default kernel is 9, where the band is
+4 px, and because the ring is a *loss* of detail rather than something added -
+it reads as "the background was never sharp there" unless another method is
+put beside it. On a 333-frame macro stack of an ant on a PCB at kernel 51, the
+silkscreen text ran right up to the ant in DTCWT, DCT and Pyramid, and
+dissolved into a smooth blur roughly 25 px out from every leg and antenna in
+Depth Map.
+
+`halo_radius` made it worse rather than better, and by design: it grey-dilates
+the *already pooled* energy, so the claimed band is `kernel // 2 + radius`
+wide. The report that started this was a `k51_h30` render - a 55 px band.
+
+**Fix.** Pool the same energy at two scales and take the geometric mean:
+
+```python
+wide = _pool(energy, window)                 # the dial's region measure
+near = _pool(energy, window // 3)            # local evidence; barely leaks
+energy = np.sqrt(wide * near)
+```
+
+The ratio between the two says how much of a frame's regional score really
+belongs to this pixel's own neighbourhood - about 1 where the detail is
+genuinely there, far below 1 in the band beside a contour the wide window has
+reached across. Requiring a frame to carry both is what collapses the ring.
+Where the energy really is uniform over the window the two poolings agree and
+the mean is the plain pooled energy, so flat regions decide exactly as they
+did. The narrow window is a *divisor* of the kernel rather than a fixed size,
+so the correction stays the same fraction of whatever the caller dials in, and
+it is dropped below 5 px: a window that small barely leaks, while a 3 px
+pooling of a squared Laplacian is mostly sensor noise.
+
+**A prefilter came with it.** A bare `ksize=3` Laplacian is the most
+noise-sensitive high-pass there is, and on flat, low-signal regions the argmax
+was ranking frames by their noise floor rather than their focus - which picks
+whichever frame is most veiled, and mottles. Smoothing each frame by
+`sigma=0.6` *for measurement only* (the output pixels are still gathered from
+the untouched frames, so it costs nothing in output resolution) removes most of
+that. 0.6 is where the ground-truth scenarios settle: it carries almost all of
+the gain on `deep_stack` while a wider one starts costing on `sensor_noise` and
+`fine_texture`.
+
+**What the measurements said.** Every scenario in `tests/fusion_scenarios.py`,
+PSNR against the ground-truth all-in-focus reference, MODE_MAX at kernel 51:
+
+| Scenario | Before | After |
+|---|---|---|
+| fine_texture | 34.84 | **39.71** |
+| sensor_noise | 47.78 | **50.32** |
+| depth_edge | 34.39 | **35.45** |
+| long_stack | 30.77 | **38.13** |
+| low_contrast | 60.28 | **64.07** |
+| saturated_colour | 30.40 | **31.65** |
+| deep_stack | 27.60 | **29.49** |
+
+No scenario got worse. On the ant stack, detail retained in the band around the
+subject - measured against the per-pixel best any frame offers - improved 2.6x
+(a deficit of 0.236 down to 0.092) with flat-region noise essentially unmoved.
+
+**One metric moved the wrong way, and should have.** `deep_stack`'s
+`spatial_frequency` fell from 17.35 to 14.48 while its PSNR rose 3.45 dB and
+its SSIM rose 0.056. That scenario's background is never sharp in any frame,
+and the old result filled it with the mismatched patches the scenario was
+written to catch; the "detail" the metric was counting was the tearing. Put
+beside the reference, the new background is the one that matches it.
+`block_speckle` rose by 0.156 on two scenarios, which is one 8x8 cell out of
+640 - the metric's own quantum.
+
+**Cost.** One extra box filter and a separable 7-tap Gaussian per frame. The
+333-frame ant stack at 1619x1064, kernel 51, 8 threads, best of three: 4.7 s
+against 3.8 s.
+
+**Guarded by** the quality ratchet (re-recorded, diff above),
+`tests/test_depthmap_halo.py`, and the CPU/GPU parity pairs - MODE_MAX stays
+bitwise identical between the two paths, MODE_AVERAGE within 1 LSB.
+
+---
+
 ## Tuning Pyramid
 
 Everything item 19 added is exposed, because every one of them is a judgement
