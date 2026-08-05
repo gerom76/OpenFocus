@@ -291,6 +291,13 @@ def setup_menus(window: QMainWindow) -> None:
     settings_menu.addAction(gpu_loading_action)
     window.ui_objs['action_gpu_loading'] = gpu_loading_action
 
+    force_cpu_action = QAction(trans.t('action_force_cpu_fusion'), window)
+    force_cpu_action.setCheckable(True)
+    force_cpu_action.setChecked(getattr(window, 'force_cpu_fusion', False))
+    force_cpu_action.triggered.connect(lambda checked: window.set_force_cpu_fusion(checked))
+    settings_menu.addAction(force_cpu_action)
+    window.ui_objs['action_force_cpu_fusion'] = force_cpu_action
+
     # --- Help Menu ---
     help_menu = menubar.addMenu(trans.t('menu_help'))
     window.ui_objs['menu_help'] = help_menu

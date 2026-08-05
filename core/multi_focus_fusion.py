@@ -62,6 +62,26 @@ def get_tile_params() -> dict:
     }
 
 
+# User override from Settings: when set, every fusion runs on the CPU even
+# where a GPU path exists and the device is present. Kept module-level, next to
+# the code that acts on it, so the render workers - which build their own
+# MultiFocusFusion and are handed no such setting - honour it without each
+# call site having to pass it down. Same arrangement as core.gpu_decode for
+# the image-loading toggle.
+_FORCE_CPU = False
+
+
+def set_force_cpu(enabled: bool) -> None:
+    """Force all fusion algorithms onto the CPU (True) or allow the GPU again."""
+    global _FORCE_CPU
+    _FORCE_CPU = bool(enabled)
+
+
+def get_force_cpu() -> bool:
+    """Return True when fusion is pinned to the CPU by the user setting."""
+    return _FORCE_CPU
+
+
 def is_stackmffv4_available() -> bool:
     """Return True when PyTorch is importable for the StackMFF-V4 fusion.
 
@@ -100,7 +120,7 @@ class MultiFocusFusion:
         """
         self._ensure_supported_algorithm(algorithm)
         self.algorithm = algorithm
-        self.use_gpu = bool(use_gpu)
+        self.use_gpu = self._resolve_use_gpu(use_gpu)
         # Optional cooperative-cancellation hook (raises to abort); None = no-op.
         self.cancel_check = cancel_check
         # Tile (tiled fusion) related instance-level settings
@@ -117,6 +137,20 @@ class MultiFocusFusion:
         self.resolved_auto = {}
         self._validate_environment()
     
+    @staticmethod
+    def _resolve_use_gpu(use_gpu: bool) -> bool:
+        """Apply the CPU-only setting to a requested device choice.
+
+        Announced once here rather than in each algorithm's environment check,
+        which reports what the machine can do and would otherwise blame a
+        missing device for a choice the user made.
+        """
+        if use_gpu and _FORCE_CPU:
+            print("Note: CPU-only fusion is enabled in Settings; this render will not use the GPU.",
+                  flush=True)
+            return False
+        return bool(use_gpu)
+
     def _ensure_supported_algorithm(self, algorithm: str) -> None:
         """Ensure the algorithm is supported."""
         if algorithm not in self.SUPPORTED_ALGORITHMS:
@@ -1132,9 +1166,9 @@ class MultiFocusFusion:
         Args:
             use_gpu (bool): Whether to use the GPU
         """
-        self.use_gpu = bool(use_gpu)
+        self.use_gpu = self._resolve_use_gpu(use_gpu)
         self._validate_environment()
-    
+
     def get_info(self) -> dict:
         """
         Get information about the current fusion engine.
@@ -1144,6 +1178,10 @@ class MultiFocusFusion:
         """
         if self.use_gpu:
             device_name = gpu_device_name() or 'CPU (GPU unavailable)'
+        elif _FORCE_CPU:
+            # Named apart from a plain CPU run so the render log confirms the
+            # setting took effect rather than looking like a missing device.
+            device_name = 'CPU (forced)'
         else:
             device_name = 'CPU'
         return {

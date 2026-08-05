@@ -142,6 +142,12 @@ class EnvironmentInfoDialog(QDialog):
         except ImportError:
             info_lines.append(f"  ✗ {trans.t('env_not_installed')}")
             info_lines.append(f"  ✗ {trans.t('env_stackmff_unavailable')}")
+        # Stated here because the lines above describe what the machine can do,
+        # which is not what fusion will use while this setting is on. Imported
+        # locally to keep the dialog off the fusion engine's import chain.
+        from core.multi_focus_fusion import get_force_cpu
+        if get_force_cpu():
+            info_lines.append(f"  ⚠ {trans.t('env_fusion_cpu_only')}")
         if BLOCKED_STUB_MODULES:
             # Only ever non-empty in a packaged build; explains why an apparently
             # present package is reported as missing.

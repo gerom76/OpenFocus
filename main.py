@@ -151,6 +151,9 @@ class OpenFocus(QMainWindow):
         # without CUDA. Held on the window for save/restore; the loader reads
         # it from core.gpu_decode.
         self.gpu_loading_enabled = True
+        # CPU-only fusion, off by default. Held on the window for save/restore;
+        # the fusion engine reads it from core.multi_focus_fusion.
+        self.force_cpu_fusion = False
         # StackMFF V4 batch-size setting, default 2 (can be changed in Settings)
         self.stackmffv4_batch_size = STACKMFFV4_BATCH_SIZE
         # Processing bit depth: 'auto' follows the source files, '8'/'16' force one.
@@ -1069,6 +1072,21 @@ class OpenFocus(QMainWindow):
         self.gpu_loading_enabled = enabled
         gpu_decode.set_enabled(enabled)
         action = getattr(self, 'ui_objs', {}).get('action_gpu_loading')
+        if action is not None and action.isChecked() != enabled:
+            action.setChecked(enabled)
+
+    def set_force_cpu_fusion(self, enabled: bool):
+        """Toggle CPU-only fusion (no GPU path for any fusion algorithm).
+
+        Syncs the window attribute, the multi_focus_fusion module the render
+        workers read, and the checkable menu action, so the three never
+        disagree - the same arrangement as the GPU loading toggle above.
+        """
+        from core import multi_focus_fusion
+        enabled = bool(enabled)
+        self.force_cpu_fusion = enabled
+        multi_focus_fusion.set_force_cpu(enabled)
+        action = getattr(self, 'ui_objs', {}).get('action_force_cpu_fusion')
         if action is not None and action.isChecked() != enabled:
             action.setChecked(enabled)
 

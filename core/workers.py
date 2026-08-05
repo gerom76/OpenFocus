@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import imageio.v2 as imageio
 from core.registration import ImageRegistration, resolve_reference_index
-from core.multi_focus_fusion import MultiFocusFusion
+from core.multi_focus_fusion import MultiFocusFusion, get_force_cpu
 from core.cancellation import RenderCancelled
 from core import contrast
 from core.memory import release_render_memory
@@ -53,7 +53,9 @@ def refine_with_ifcnn(fusion_result, source_images, tile_enabled=None, tile_bloc
             fusion_result,
             source_images,
             get_ifcnn_model_path(),
-            use_gpu=True,
+            # The refinement runs inside the fusion pipeline, so the CPU-only
+            # setting has to reach it too or the render still touches the GPU.
+            use_gpu=not get_force_cpu(),
             tile_enabled=(tile_enabled if tile_enabled is not None else True),
             tile_block_size=(tile_block_size if tile_block_size is not None else TILE_BLOCK_SIZE),
             tile_overlap=(tile_overlap if tile_overlap is not None else TILE_OVERLAP),

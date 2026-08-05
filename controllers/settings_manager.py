@@ -200,6 +200,7 @@ class SettingsManager:
             "thread_count": window.thread_count,
             "stackmffv4_batch_size": window.stackmffv4_batch_size,
             "gpu_loading": getattr(window, "gpu_loading_enabled", True),
+            "force_cpu_fusion": getattr(window, "force_cpu_fusion", False),
             "bit_depth_mode": bitdepth.get_mode(),
             "dng_compression": dng.get_compression(),
             "dng_lossy_quality": dng.get_lossy_quality(),
@@ -333,6 +334,11 @@ class SettingsManager:
         # gpu_decode module and the menu action's check mark.
         if isinstance(data.get("gpu_loading"), bool):
             window.set_gpu_loading_enabled(data["gpu_loading"])
+
+        # CPU-only fusion; the window setter syncs the fusion module and the
+        # menu action's check mark the same way.
+        if isinstance(data.get("force_cpu_fusion"), bool):
+            window.set_force_cpu_fusion(data["force_cpu_fusion"])
 
         # Reference frame mode, validated so a hand-edited config can only ever
         # leave a value the registration pipeline understands.
