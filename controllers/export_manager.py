@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 
 from constants import (
     DCT_BLOCK_SIZE_DEFAULT, DCT_PLATEAU_DEFAULT,
-    DEPTH_SMOOTHING_DEFAULT, SLICE_BLENDING_DEFAULT,
+    DEPTH_SMOOTHING_DEFAULT,
     PYRAMID_BASE_DEFAULT, PYRAMID_COHERENCE_DEFAULT, PYRAMID_SELECTIVITY_DEFAULT,
 )
 from core import contrast
@@ -317,23 +317,20 @@ class ExportManager:
         return ""
 
     def _coherent_suffix(self) -> str:
-        """Return a '_ds<n>bl<n>' suffix for the Depth Map (Max) depth dials.
+        """Return a '_ds<n>' suffix for the Depth Map (Max) coherence dial.
 
-        Only when they differ from their defaults: they are on by default, so
-        naming them every time would push the setting that was actually varied
-        off the end of an already long filename.
+        Only when it differs from the default: it is on by default, so naming it
+        every time would push the setting that was actually varied off the end
+        of an already long filename.
         """
         window = self.window
         if not window.rb_dmap_max.isChecked():
             return ""
         try:
             smoothing = int(window.slider_depth_smooth.value())
-            blending = int(window.slider_slice_blend.value())
         except Exception:
             return ""
-        if (smoothing, blending) == (DEPTH_SMOOTHING_DEFAULT, SLICE_BLENDING_DEFAULT):
-            return ""
-        return f"_ds{smoothing}bl{blending}"
+        return "" if smoothing == DEPTH_SMOOTHING_DEFAULT else f"_ds{smoothing}"
 
     def _fusion_suffix(self) -> str:
         """Describe the fusion stages in the name: method, kernel, refinement."""

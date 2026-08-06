@@ -85,7 +85,7 @@ from constants import (
     KERNEL_SIZE_DEFAULT_GFG, KERNEL_SIZE_DEFAULT_DMAP,
     KERNEL_SIZE_DEFAULT_PYRAMID,
     DCT_PLATEAU_PRESETS,
-    DEPTH_SMOOTHING_DEFAULT, SLICE_BLENDING_DEFAULT,
+    DEPTH_SMOOTHING_DEFAULT,
     PYRAMID_BASE_PRESETS, PYRAMID_COHERENCE_PRESETS,
     PYRAMID_LEVELS, PYRAMID_SELECTIVITY_PRESETS,
 )
@@ -312,8 +312,6 @@ class OpenFocus(QMainWindow):
         self.halo_widget = right_panel_components.halo_widget
         self.slider_depth_smooth = right_panel_components.slider_depth_smooth
         self.lbl_depth_smooth_value = right_panel_components.depth_smooth_value_label
-        self.slider_slice_blend = right_panel_components.slider_slice_blend
-        self.lbl_slice_blend_value = right_panel_components.slice_blend_value_label
         self.coherent_widget = right_panel_components.coherent_widget
         self.combo_dct_block = right_panel_components.combo_dct_block
         self.combo_dct_plateau = right_panel_components.combo_dct_plateau
@@ -551,9 +549,8 @@ class OpenFocus(QMainWindow):
         # Halo suppression back to off
         self.slider_halo.setValue(0)
 
-        # Coherent-depth dials back to their defaults
+        # Coherent-depth dial back to its default
         self.slider_depth_smooth.setValue(DEPTH_SMOOTHING_DEFAULT)
-        self.slider_slice_blend.setValue(SLICE_BLENDING_DEFAULT)
 
         # Reset contrast to off (strength back to the 50% default)
         self.combo_contrast.setCurrentIndex(0)
@@ -662,12 +659,6 @@ class OpenFocus(QMainWindow):
         """Update the depth-smoothing display label; 0 reads as Off."""
         strength = int(value)
         self.lbl_depth_smooth_value.setText(
-            trans.t('halo_off') if strength <= 0 else f"{strength}%")
-
-    def handle_slice_blend_slider_change(self, value):
-        """Update the slice-blending display label; 0 reads as Off."""
-        strength = int(value)
-        self.lbl_slice_blend_value.setText(
             trans.t('halo_off') if strength <= 0 else f"{strength}%")
 
     def _set_kernel_range(self, maximum):
@@ -1357,7 +1348,6 @@ class OpenFocus(QMainWindow):
         c.lbl_kernel.setText(trans.t('label_kernel'))
         c.lbl_halo.setText(trans.t('label_halo'))
         c.lbl_depth_smooth.setText(trans.t('label_depth_smooth'))
-        c.lbl_slice_blend.setText(trans.t('label_slice_blend'))
         c.lbl_dct_block.setText(trans.t('label_dct_block'))
         c.lbl_dct_plateau.setText(trans.t('label_dct_plateau'))
         c.cb_dct_blend.setText(trans.t('label_dct_blend'))
@@ -1382,7 +1372,6 @@ class OpenFocus(QMainWindow):
 
         self.handle_halo_slider_change(self.slider_halo.value())
         self.handle_depth_smooth_slider_change(self.slider_depth_smooth.value())
-        self.handle_slice_blend_slider_change(self.slider_slice_blend.value())
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))
         c.btn_stop.setText(trans.t('btn_stop'))

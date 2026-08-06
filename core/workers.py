@@ -131,7 +131,6 @@ class RenderWorker(QThread):
         kernel_slider_value,
         halo_radius_value=0,
         depth_smoothing_value=None,
-        slice_blending_value=None,
         rb_pyramid_checked=False,
         rb_dmap_max_checked=False,
         rb_dmap_avg_checked=False,
@@ -195,10 +194,9 @@ class RenderWorker(QThread):
         self.kernel_slider_value = kernel_slider_value
         # Halo-suppression radius for the depth-map methods; 0 = off
         self.halo_radius_value = max(0, int(halo_radius_value or 0))
-        # Coherent-depth dials for Depth Map (Max); None keeps the method's own
-        # defaults, and 0 on both is the plain hard per-pixel select.
+        # Coherent-depth dial for Depth Map (Max); None keeps the method's own
+        # default, and 0 is the plain hard per-pixel select.
         self.depth_smoothing_value = depth_smoothing_value
-        self.slice_blending_value = slice_blending_value
         # DCT tuning; None on any of them keeps the method's own default
         self.dct_block_size = dct_block_size
         self.dct_plateau = dct_plateau
@@ -506,7 +504,6 @@ class RenderWorker(QThread):
                 kernel_size=kernel_size,
                 halo_radius=self.halo_radius_value,
                 depth_smoothing=self.depth_smoothing_value,
-                slice_blending=self.slice_blending_value,
                 thread_count=self.thread_count,
             )
         elif algorithm == "stackmffv4":
@@ -845,7 +842,6 @@ class BatchWorker(QThread):
                     kernel_size=kernel_size,
                     halo_radius=fusion_params.get('halo_radius', 0),
                     depth_smoothing=fusion_params.get('depth_smoothing'),
-                    slice_blending=fusion_params.get('slice_blending'),
                     thread_count=self.thread_count,
                 )
             elif fusion_method == "stackmffv4":
@@ -915,7 +911,6 @@ class BatchWorker(QThread):
                 kernel_size=fusion_params.get('kernel_size'),
                 halo_radius=fusion_params.get('halo_radius', 0),
                 depth_smoothing=fusion_params.get('depth_smoothing'),
-                slice_blending=fusion_params.get('slice_blending'),
                 ifcnn_refine=bool(settings.get('ifcnn_refine')),
                 align_scale="scale" in reg_methods,
                 align_homography="homography" in reg_methods,

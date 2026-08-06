@@ -158,22 +158,27 @@ INDEX_MEDIAN_KSIZE = 5
 #
 # Helicon renders the same region smoothly even at its lowest smoothing
 # setting, which is the tell that it is not despeckling a hard selection at all.
-# Two things get us there, and both are switchable dials because both trade
-# something:
+# It is declining to make a hard selection where the measurement does not
+# support one - and, crucially, it is not *averaging* there either, because the
+# background it produces keeps the contrast and brightness of its surroundings.
 #
-#   depth_smoothing  the depth map is regularised by how much each pixel can be
-#                    trusted, so unresolvable pixels inherit depth from
-#                    confident neighbours instead of voting with their noise.
-#   slice_blending   the pixel is no longer taken whole from one frame but
-#                    blended across a band of slices whose width is set per
-#                    pixel, so the mosaic's hard edges cannot form and a region
-#                    nobody resolves converges on the local mean of the stack -
-#                    the same multi-frame SNR win MODE_AVERAGE gets for free.
+# So: work out which pixels the focus measure can actually speak for, throw away
+# the depth of the ones it cannot, and fill the holes by interpolating the
+# depths of the ones it can. One dial, `depth_smoothing`, sets how readily a
+# pixel is declared unresolvable; 0 is the plain hard select, byte for byte.
 #
-# Both off reproduces the plain hard select exactly, byte for byte.
+# What this deliberately does *not* do is vary the rendering rule from pixel to
+# pixel. An earlier version widened the slice blend where trust was low, and it
+# was wrong twice over. The trust map is bimodal on real stacks - on the
+# reference ant stack only 9-14% of pixels land between 0.05 and 0.95, the rest
+# saturate - so "blend width proportional to (1 - trust)" is a step, not a ramp,
+# and it drew its own hard-edged boundary. And averaging tens of defocused,
+# drifting frames converges on something flatter and paler than any one of them,
+# so the regions it covered came out as washed-out patches that had lost the
+# texture the hard select still had. The depth field is the thing that must be
+# continuous; the rule that renders it stays the same everywhere.
 
 DEFAULT_DEPTH_SMOOTHING = 50
-DEFAULT_SLICE_BLENDING = 50
 
 # How trustworthy a pixel's focus decision is, from the shape of its focus
 # curve across the stack. The measure is the participation ratio of the energy,
@@ -194,33 +199,30 @@ DEFAULT_SLICE_BLENDING = 50
 # tiled fusion runs each tile through here independently, and a threshold taken
 # from the tile's own histogram would mean something different in every tile
 # and lay a visible seam along the tile lattice.
-TRUST_LO = 0.35
-TRUST_HI = 0.60
+#
+# The dial slides the pair: at 1 only the most hopeless pixels are given up on,
+# at 100 anything short of a clean spike is. Measured on the ant stack, the
+# never-resolved background scores 0.05-0.20 and the subject 0.85-0.95, so the
+# midpoint of this range separates them with room to spare either side.
+TRUST_LO_MIN, TRUST_LO_MAX = 0.02, 0.50
+TRUST_SPAN_MIN, TRUST_SPAN_MAX = 0.10, 0.30
 
-# Exponent on the trust map when it is used as a vote weight in the depth
-# regularisation. Cubed rather than linear because this decides who gets to
-# speak for a neighbourhood, not how much of a blend they contribute: a pixel
-# half as trustworthy as its neighbour should not carry half its weight, it
-# should be most of the way to silent.
-TRUST_EXPONENT = 3
+# Levels the depth fill runs to at full dial. Each level roughly doubles the
+# reach, so 5 covers a couple of hundred pixels; the default lands on 3, which
+# is where both the scenarios and the reference ant stack put the best result.
+# Past 5 the low-pass starts flattening depth structure that is real - the
+# background stops being a surface and becomes one plane.
+DEPTH_FILL_LEVELS_MAX = 5
 
-# Windows the depth map is propagated over, coarse-to-fine, at full smoothing.
-# Three scales rather than one wide pass because the incoherent regions vary in
-# size - a thin band beside a contour and a whole quadrant of dead background
-# both have to be filled - and a single window wide enough for the largest
-# would drag depth across every occlusion in the frame on its way there.
-DEPTH_SMOOTH_SCALES = (9, 21, 45)
+# Weight every pixel carries into that low-pass on top of its trust. See
+# _fill_depth: this is what makes the fill an average of what an unresolvable
+# region measured rather than an extrapolation of what its neighbours did, and
+# it is worth 7 dB on deep_stack.
+DEPTH_FILL_WEIGHT_FLOOR = 0.1
 
-# Side of the window the depth map's local spread is measured over, which is
-# what sets the blend width below.
-DISAGREE_WINDOW = 9
-
-# Cap on the blend width at full slider, as a share of the stack depth. The
-# width is otherwise self-scaling - it is read straight off the neighbourhood's
-# own disagreement in slices, so a neighbourhood that cannot agree within 20
-# slices blends 20 - and this only stops a pathological stack from averaging
-# itself flat.
-BLEND_MAX_SHARE = 0.25
+# Stop taking the pyramid down once a side reaches this, so a small tile cannot
+# reduce to a single pixel and average its whole depth map to one value.
+PYRAMID_MIN_SIDE = 4
 
 # Narrowest blend the renderer will use, in slices. Under 1 so that a depth
 # sitting on a whole slice - which is what every trusted pixel's depth still is
@@ -487,16 +489,25 @@ def _smoothstep(edge0, edge1, values):
     return t
 
 
-def _trust_map(energy_sum, energy_sq_sum, count):
+def _trust_anchors(strength):
+    """The (low, high) sharpness the trust ramp spans at this dial setting."""
+    t = max(0.0, min(1.0, (strength - 1) / 99.0))
+    low = TRUST_LO_MIN + (TRUST_LO_MAX - TRUST_LO_MIN) * t
+    span = TRUST_SPAN_MIN + (TRUST_SPAN_MAX - TRUST_SPAN_MIN) * t
+    return low, low + span
+
+
+def _trust_map(energy_sum, energy_sq_sum, count, strength):
     """How far each pixel's focus curve is from flat, on a 0-1 scale.
 
-    See TRUST_LO for what the statistic is and why it is this one. The result
-    is what both the depth regularisation and the blend width read: 1 where a
-    frame genuinely stood out and the hard selection can be believed, 0 where
-    every frame measured the same and it cannot.
+    See TRUST_LO_MIN for what the statistic is and why it is this one. The
+    result says which pixels the hard selection can be believed for: 1 where a
+    frame genuinely stood out, 0 where every frame measured the same and the
+    argmax was reading its own noise.
     """
     if count < 2:
         return np.ones_like(energy_sum)
+    trust_lo, trust_hi = _trust_anchors(strength)
     # eff = (sum E)^2 / sum(E^2), the effective number of frames sharing the
     # energy. A pixel with no energy at all in any frame divides 0 by 0; it has
     # no focus information by definition, so it is handed the flat-curve answer.
@@ -507,114 +518,91 @@ def _trust_map(energy_sum, energy_sq_sum, count):
     eff -= 1.0
     eff /= float(count - 1)
     np.subtract(1.0, eff, out=eff)
-    return _smoothstep(TRUST_LO, TRUST_HI, eff)
+    return _smoothstep(trust_lo, trust_hi, eff)
 
 
-def _local_spread(depth, window):
-    """Standard deviation of the depth map over `window`, per pixel.
+def _fill_levels(strength):
+    """Pyramid depth the fill runs to, from the dial. 0 is handled by caller."""
+    levels = 1 + int(round(DEPTH_FILL_LEVELS_MAX * (strength / 100.0)))
+    return max(1, min(DEPTH_FILL_LEVELS_MAX, levels))
 
-    How far the neighbourhood is from agreeing on a depth, in slices. Read
-    directly as a blend width by _blend_width, which is why it is worth having
-    in the units it is already in.
+
+def _fill_depth(depth, weight, levels):
+    """Trust-weighted low-pass of the depth map, at a scale set by `levels`.
+
+    A normalised convolution carried on a Gaussian pyramid: the weighted depth
+    and its weight are taken down `levels` times and brought straight back up,
+    so the cost is the same whatever the scale and the support grows by roughly
+    an order of magnitude for three levels rather than by the width of a window.
+    That reach is the point - the incoherence being removed is tens of pixels
+    across, which no affordable box filter covers.
+
+    `weight` carries a floor as well as the trust map, and the floor is what
+    stops this from being extrapolation. With trust alone, a region nothing
+    resolves takes its depth entirely from the nearest pixels that *were*
+    resolved - which on deep_stack means the background is rendered at the
+    subject's depth and loses 7 dB, because a never-sharp background still has
+    a real, weak preference of its own. The floor lets such a region average its
+    own measurement instead: the scatter goes, the regional level stays.
     """
-    mean = cv2.boxFilter(depth, cv2.CV_32F, (window, window),
-                         normalize=True, borderType=cv2.BORDER_REFLECT)
-    sq = cv2.boxFilter(np.square(depth), cv2.CV_32F, (window, window),
-                       normalize=True, borderType=cv2.BORDER_REFLECT)
-    var = np.subtract(sq, np.square(mean), out=sq)
-    np.maximum(var, 0.0, out=var)
-    return np.sqrt(var, out=var)
+    num = (depth * weight).astype(np.float32)
+    den = np.asarray(weight, dtype=np.float32)
+    shapes = []
+    for _ in range(levels):
+        if min(num.shape[:2]) <= PYRAMID_MIN_SIDE:
+            break
+        shapes.append((num.shape[1], num.shape[0]))
+        num = cv2.pyrDown(num)
+        den = cv2.pyrDown(den)
+    for size in reversed(shapes):
+        num = cv2.pyrUp(num, dstsize=size)
+        den = cv2.pyrUp(den, dstsize=size)
+    return num / np.maximum(den, 1e-8)
 
 
-def _regularise_depth(depth, trust, strength):
-    """Let confident pixels dictate the depth of the ones around them.
+def _coherent_depth(despeckled, trust, strength):
+    """The depth the renderer follows: measured where trusted, smoothed where not.
 
-    A normalised convolution - each window's depth averaged with the trust map
-    as the weight - so a pixel that measured nothing takes the depth of
-    whichever neighbours did measure something, rather than the depth its own
-    noise picked. Run coarse-to-fine over DEPTH_SMOOTH_SCALES, and the result
-    is mixed back in by trust at every scale, so a pixel that was confident to
-    begin with keeps its own depth and only the unresolvable ones actually move.
+    `trust` gates the crossover rather than thresholding it, so the pixels that
+    genuinely sit between the two regimes move over gradually. Everywhere else
+    trust has saturated - it is close to bimodal on real stacks - and this is
+    simply a choice between the frame the argmax named and what the low-pass
+    says its neighbourhood meant.
+
+    The two agree wherever the argmax was already coherent, which is why this
+    leaves resolved detail alone: the low-pass of a locally constant depth is
+    that same constant, so the crossover has nothing to change there.
     """
     if strength <= 0:
-        return depth
-
-    scale = strength / 100.0
-    weight = np.power(trust, TRUST_EXPONENT)
-    # A floor under the weights so a window in which nothing at all is trusted
-    # still averages its members instead of dividing by zero.
-    weight += 1e-4
-
-    smoothed = depth
-    for base in DEPTH_SMOOTH_SCALES:
-        window = max(3, int(round(base * scale)))
-        if window % 2 == 0:
-            window += 1
-        if window < 3 or min(depth.shape) < window:
-            continue
-        num = cv2.boxFilter(smoothed * weight, cv2.CV_32F, (window, window),
-                            normalize=True, borderType=cv2.BORDER_REFLECT)
-        den = cv2.boxFilter(weight, cv2.CV_32F, (window, window),
-                            normalize=True, borderType=cv2.BORDER_REFLECT)
-        num /= np.maximum(den, 1e-8)
-        # trust*own + (1-trust)*propagated, folded into the buffer boxFilter
-        # already allocated.
-        num *= (1.0 - trust)
-        smoothed = num
-        smoothed += trust * depth
-    return smoothed
+        return despeckled.astype(np.float32)
+    measured = despeckled.astype(np.float32)
+    smoothed = _fill_depth(measured, trust + DEPTH_FILL_WEIGHT_FLOOR,
+                           _fill_levels(strength))
+    return (trust * measured + (1.0 - trust) * smoothed).astype(np.float32)
 
 
-def _blend_width(despeckled, trust, strength, count):
-    """Half-width of the slice blend, per pixel, in slices.
+def _gather_blended(load_float, count, depth, out_dtype, rows, cols):
+    """Render the stack at a continuous depth, one narrow tent per pixel.
 
-    The product of two things, and it needs both. The neighbourhood's own
-    disagreement says how wide a blend would have to be to cover what the
-    pixels around here wanted - it is already in slices, so it needs no scaling
-    - and the trust map says whether that disagreement is real depth or noise.
-    A genuine occlusion edge disagrees violently and is trusted completely, so
-    it stays hard; unresolvable background disagrees just as violently and is
-    trusted not at all, so it blends wide and comes out as the local mean of
-    the stack. Disagreement alone would soften every occlusion in the frame.
-    """
-    if strength <= 0 or count < 2:
-        return None
-    spread = _local_spread(despeckled.astype(np.float32), DISAGREE_WINDOW)
-    ceiling = (strength / 100.0) * BLEND_MAX_SHARE * count
-    np.clip(spread, 0.0, max(ceiling, 0.0), out=spread)
-    spread *= (1.0 - trust)
-    np.maximum(spread, BLEND_WIDTH_FLOOR, out=spread)
-    return spread
-
-
-def _gather_blended(load_float, count, depth, width, out_dtype, rows, cols):
-    """Render the stack through a per-pixel band of slices centred on `depth`.
-
-    One tent per pixel, `width` slices to either side, which is the step that
-    stops the depth map's remaining disagreement from reaching the output as an
-    edge: where the band is at its floor the pixel still resolves to a single
-    frame, and where it is wide the frames inside it are averaged, so a region
-    nobody resolved comes out as the local mean of the stack rather than as
-    whichever slice its noise happened to name.
+    The tent is BLEND_WIDTH_FLOOR wide for every pixel in the frame - the rule
+    does not vary, only the depth it is applied at. A depth that landed on a
+    whole slice takes that slice outright; one that landed between two takes
+    both, weighted towards the nearer. Since the depth is only ever fractional
+    where the measurement had nothing to say, the frames that carry real detail
+    are still selected rather than mixed.
 
     Frames are visited in index order and only loaded when some pixel is
-    actually asking for them, so a band that never reaches the far end of a
-    deep stack does not pay to read it.
+    actually asking for them, so a stack whose depths cluster does not pay to
+    read the slices nobody wants.
     """
-    if width is None:
-        # Smoothing on, blending off: the regularised depth is still followed,
-        # but every band stays at its floor, so each pixel resolves to the one
-        # slice nearest the depth it settled on.
-        width = np.full((rows, cols), BLEND_WIDTH_FLOOR, dtype=np.float32)
-
     accum = None
     weight_sum = np.zeros((rows, cols), dtype=np.float32)
     for k in range(count):
         # max(0, width - |depth - k|). The textbook tent is 1 - |depth-k|/width,
-        # which is this divided by a per-pixel constant; the normalisation at
-        # the end cancels it, so the division is never taken.
+        # which is this divided by a constant; the normalisation at the end
+        # cancels it, so the division is never taken.
         tent = np.abs(depth - k)
-        np.subtract(width, tent, out=tent)
+        np.subtract(BLEND_WIDTH_FLOOR, tent, out=tent)
         np.maximum(tent, 0.0, out=tent)
         if not tent.any():
             continue
@@ -628,8 +616,8 @@ def _gather_blended(load_float, count, depth, width, out_dtype, rows, cols):
         weight_sum += tent
         del img, tent
 
-    # Every pixel's band holds at least the slice nearest its depth - the floor
-    # is a full slice wide and the depth is clamped inside the stack - so the
+    # Every pixel's band holds at least the slice nearest its depth - the tent
+    # is wider than half a slice and the depth is inside the stack - so the
     # accumulator is written and the weights are positive everywhere.
     np.maximum(weight_sum, 1e-8, out=weight_sum)
     accum /= weight_sum[:, :, np.newaxis] if accum.ndim == 3 else weight_sum
@@ -638,7 +626,7 @@ def _gather_blended(load_float, count, depth, width, out_dtype, rows, cols):
 
 def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
                   kernel_size=None, thread_count=None, halo_radius=None,
-                  depth_smoothing=None, slice_blending=None):
+                  depth_smoothing=None):
     """Depth-map multi-focus fusion (per-pixel select or contrast-weighted avg).
 
     A local Laplacian-energy focus measure is computed for every frame. In
@@ -654,12 +642,12 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     region also claims the surrounding band its defocused image contaminates
     in the other frames. See DEFAULT_HALO_RADIUS for the mechanism.
 
-    `depth_smoothing` and `slice_blending` (0-100, MODE_MAX only) are what stop
-    a region no frame resolves from tearing into a mosaic of hard-edged
-    patches: the first regularises the depth map by how far each pixel can be
-    trusted, the second renders through a per-pixel band of slices rather than
-    one. Both at 0 reproduces the plain hard select exactly. See the block
-    above DEFAULT_DEPTH_SMOOTHING for what each one is undoing.
+    `depth_smoothing` (0-100, MODE_MAX only) is what stops a region no frame
+    resolves from tearing into a mosaic of hard-edged patches: it sets how
+    readily a pixel's focus decision is given up as unfounded, and the depth of
+    every pixel given up on is interpolated from the ones that were not. 0
+    reproduces the plain hard select exactly. See the block above
+    DEFAULT_DEPTH_SMOOTHING for what it is undoing.
 
     The stack's own depth is preserved end to end: an 8-bit stack returns
     uint8, a 16-bit stack returns uint16.
@@ -671,10 +659,9 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     window = _resolve_kernel(kernel_size)
     halo_element = _halo_element(_resolve_halo_radius(halo_radius))
     smoothing = _resolve_percent(depth_smoothing, DEFAULT_DEPTH_SMOOTHING)
-    blending = _resolve_percent(slice_blending, DEFAULT_SLICE_BLENDING)
     # MODE_AVERAGE is already a blend of every frame by construction; there is
-    # no index map to regularise and no band to widen, so neither dial applies.
-    coherent = mode == MODE_MAX and (smoothing > 0 or blending > 0)
+    # no index map to fill, so the dial has nothing to act on.
+    coherent = mode == MODE_MAX and smoothing > 0
 
     # ---------- Data loading ----------
     if isinstance(input_source, str):
@@ -782,16 +769,11 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
 
         if coherent:
             del best_energy, best_index
-            trust = _trust_map(energy_sum, energy_sq_sum, num_images)
+            trust = _trust_map(energy_sum, energy_sq_sum, num_images, smoothing)
             del energy_sum, energy_sq_sum
-            # Both the depth the renderer follows and the disagreement that
-            # sets its band are read off the despeckled map, so the two agree
-            # about what the neighbourhood wanted.
-            depth = _regularise_depth(despeckled.astype(np.float32), trust,
-                                      smoothing)
-            width = _blend_width(despeckled, trust, blending, num_images)
+            depth = _coherent_depth(despeckled, trust, smoothing)
             del trust, despeckled
-            return _gather_blended(load_float, num_images, depth, width,
+            return _gather_blended(load_float, num_images, depth,
                                    out_dtype, rows, cols)
 
         del best_energy

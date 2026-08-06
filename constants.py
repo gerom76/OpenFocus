@@ -151,8 +151,3 @@ PYRAMID_ENVELOPE_DEFAULT = True
 # leaves each pixel closer to the frame its own measurement named.
 DEPTH_SMOOTHING_DEFAULT = 50
 
-# How wide a band of slices a pixel may be drawn from where the neighbourhood
-# cannot agree on a depth. Higher renders those regions as the local mean of
-# the stack - smoother, and quieter, since averaging frames averages grain
-# away; lower keeps them closer to a single frame.
-SLICE_BLENDING_DEFAULT = 50

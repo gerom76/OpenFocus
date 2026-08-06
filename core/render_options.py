@@ -159,7 +159,6 @@ def describe(
     kernel_size: Optional[int] = None,
     halo_radius: int = 0,
     depth_smoothing: Optional[int] = None,
-    slice_blending: Optional[int] = None,
     ifcnn_refine: bool = False,
     align_scale: bool = False,
     align_homography: bool = False,
@@ -237,8 +236,6 @@ def describe(
         if algorithm in COHERENT_DEPTH_METHODS:
             options["DepthSmoothing"] = (
                 f"{int(depth_smoothing)}%" if depth_smoothing else _OFF)
-            options["SliceBlending"] = (
-                f"{int(slice_blending)}%" if slice_blending else _OFF)
         if algorithm == "stackmffv4" and stackmffv4_batch_size:
             # The batch halves itself when the card runs out of memory, so what
             # was asked for is not always what inferred the tiles.

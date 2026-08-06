@@ -39,7 +39,6 @@ from constants import (
     PYRAMID_NOISE_GATE_DEFAULT,
     PYRAMID_SELECTIVITY_DEFAULT,
     PYRAMID_SELECTIVITY_PRESETS,
-    SLICE_BLENDING_DEFAULT,
 )
 from dialogs import RegistrationHelpDialog, RenderMethodHelpDialog
 from ui.styles import (
@@ -83,8 +82,6 @@ class RightPanelComponents:
     halo_widget: QWidget
     slider_depth_smooth: QSlider
     depth_smooth_value_label: QLabel
-    slider_slice_blend: QSlider
-    slice_blend_value_label: QLabel
     coherent_widget: QWidget
     combo_dct_block: QComboBox
     combo_dct_plateau: QComboBox
@@ -114,7 +111,6 @@ class RightPanelComponents:
     lbl_kernel: QLabel
     lbl_halo: QLabel
     lbl_depth_smooth: QLabel
-    lbl_slice_blend: QLabel
 
     source_images_label: QLabel
     file_list: QListWidget
@@ -262,10 +258,10 @@ def create_right_panel() -> RightPanelComponents:
     config_layout.addWidget(halo_widget)
 
     # Coherent depth (Depth Map (Max) only) ------------------
-    # Two dials over one idea: the depth map the hard select arrives at is not
-    # trustworthy everywhere, and where it is not, saying so beats pretending
-    # otherwise. The first regularises the map by that trust, the second widens
-    # the band of slices each pixel is drawn from.
+    # The depth map the hard select arrives at is not trustworthy everywhere,
+    # and where it is not, saying so beats pretending otherwise: this sets how
+    # readily a pixel's own measurement is given up for what its neighbourhood
+    # implies.
     coherent_widget = QWidget()
     coherent_layout = QVBoxLayout(coherent_widget)
     coherent_layout.setContentsMargins(0, 5, 0, 5)
@@ -283,20 +279,6 @@ def create_right_panel() -> RightPanelComponents:
     slider_depth_smooth.setValue(DEPTH_SMOOTHING_DEFAULT)
     coherent_layout.addLayout(depth_smooth_top)
     coherent_layout.addWidget(slider_depth_smooth)
-
-    slice_blend_top = QHBoxLayout()
-    lbl_slice_blend = QLabel(trans.t('label_slice_blend'))
-    slice_blend_top.addWidget(lbl_slice_blend)
-    slice_blend_top.addStretch()
-    lbl_slice_blend_value = QLabel(f"{SLICE_BLENDING_DEFAULT}%")
-    slice_blend_top.addWidget(lbl_slice_blend_value)
-    slider_slice_blend = QSlider(Qt.Orientation.Horizontal)
-    slider_slice_blend.setRange(0, 100)
-    slider_slice_blend.setSingleStep(1)
-    slider_slice_blend.setPageStep(10)
-    slider_slice_blend.setValue(SLICE_BLENDING_DEFAULT)
-    coherent_layout.addLayout(slice_blend_top)
-    coherent_layout.addWidget(slider_slice_blend)
 
     coherent_widget.setEnabled(False)  # only the hard per-pixel select uses it
     config_layout.addWidget(coherent_widget)
@@ -577,8 +559,6 @@ def create_right_panel() -> RightPanelComponents:
         halo_widget=halo_widget,
         slider_depth_smooth=slider_depth_smooth,
         depth_smooth_value_label=lbl_depth_smooth_value,
-        slider_slice_blend=slider_slice_blend,
-        slice_blend_value_label=lbl_slice_blend_value,
         coherent_widget=coherent_widget,
         combo_dct_block=combo_dct_block,
         combo_dct_plateau=combo_dct_plateau,
@@ -607,7 +587,6 @@ def create_right_panel() -> RightPanelComponents:
         lbl_kernel=lbl_kernel,
         lbl_halo=lbl_halo,
         lbl_depth_smooth=lbl_depth_smooth,
-        lbl_slice_blend=lbl_slice_blend,
 
         source_images_label=source_images_label,
         file_list=file_list,
@@ -651,8 +630,6 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
     components.slider_halo.valueChanged.connect(window.handle_halo_slider_change)
     components.slider_depth_smooth.valueChanged.connect(
         window.handle_depth_smooth_slider_change)
-    components.slider_slice_blend.valueChanged.connect(
-        window.handle_slice_blend_slider_change)
 
     # Contrast is a post-fusion output step, so both controls just re-apply it
     # to the already-rendered result via handle_contrast_change - no re-render.
