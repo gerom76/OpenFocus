@@ -1,0 +1,1171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenFocus 1.34.0 — Quality metrics: a plain-English vocabulary</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+
+  :root {
+    --surface:      #fcfcfb;
+    --plane:        #f9f9f7;
+    --ink:          #0b0b0b;
+    --ink-2:        #52514e;
+    --muted:        #898781;
+    --grid:         #e1e0d9;
+    --rule:         #c3c2b7;
+    --hair:         rgba(11,11,11,0.10);
+
+    --s1:           #2a78d6;  /* full-reference   — needs ground truth      */
+    --s2:           #eb6834;  /* no-reference     — needs the source stack  */
+    --s3:           #7a51c9;  /* artefact         — needs the result alone  */
+    --s4:           #0f9b8e;  /* foreign-reference— needs another render    */
+    --s5:           #b8871b;  /* geometric        — registration            */
+
+    --good:         #0ca30c;
+    --warning:      #fab219;
+    --critical:     #d03b3b;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--plane);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page {
+    width: 297mm; height: 210mm;
+    padding: 11mm 12mm 9mm;
+    background: var(--surface);
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+    display: flex; flex-direction: column;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ---------- typography ---------- */
+  h1 { font-size: 19.5pt; line-height: 1.06; margin: 0 0 1.8mm; letter-spacing: -0.02em; }
+  h2 { font-size: 10pt; margin: 0 0 1.2mm; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+  p  { margin: 0 0 2mm; }
+
+  .lede  { font-size: 8.3pt; line-height: 1.42; color: var(--ink-2); max-width: 208mm; }
+  .small { font-size: 7.4pt; line-height: 1.4; color: var(--muted); }
+  .fnote { font-size: 6.8pt; line-height: 1.45; color: var(--muted); }
+
+  .pagehead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1.5px solid var(--ink); padding-bottom: 1.6mm; margin-bottom: 3mm;
+  }
+  .pagehead .kicker { font-size: 8pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .pagehead h2 { margin: 0; font-size: 11pt; color: var(--ink); letter-spacing: 0.04em; }
+
+  .folio {
+    position: absolute; bottom: 5mm; left: 12mm; right: 12mm;
+    display: flex; justify-content: space-between;
+    font-size: 6.8pt; color: var(--muted);
+    border-top: 1px solid var(--grid); padding-top: 1.5mm;
+  }
+
+  /* ---------- chips ---------- */
+  .chip {
+    display: inline-block; font-size: 6.3pt; line-height: 1.5;
+    padding: 0.2mm 1.4mm; border-radius: 2px; border: 1px solid var(--hair);
+    background: #fff; color: var(--ink-2); white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .chip.up   { border-color: var(--good);     color: #0a6b0a; background: #f0f9f0; }
+  .chip.down { border-color: var(--critical); color: #8f1f1f; background: #fbeded; }
+  .chip.neut { border-color: var(--rule);     color: var(--muted); }
+
+  .fam { display: inline-block; width: 7px; height: 7px; border-radius: 2px; vertical-align: 0; }
+  .f1 { background: var(--s1); } .f2 { background: var(--s2); }
+  .f3 { background: var(--s3); } .f4 { background: var(--s4); } .f5 { background: var(--s5); }
+
+  /* ---------- metric cards ---------- */
+  .cards { display: grid; gap: 3.2mm; flex: 1; }
+  .c2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .c3 { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+  .card {
+    border: 1px solid var(--hair); border-radius: 3px;
+    background: var(--plane);
+    padding: 2.8mm 3.4mm 2.6mm;
+    display: flex; flex-direction: column;
+    border-top: 2.2px solid var(--rule);
+  }
+  .card.t1 { border-top-color: var(--s1); }
+  .card.t2 { border-top-color: var(--s2); }
+  .card.t3 { border-top-color: var(--s3); }
+  .card.t4 { border-top-color: var(--s4); }
+  .card.t5 { border-top-color: var(--s5); }
+
+  .card .head { display: flex; justify-content: space-between; align-items: baseline; gap: 3mm; margin-bottom: 0.6mm; }
+  .card .name { font-size: 11.5pt; font-weight: 660; letter-spacing: -0.015em; line-height: 1.05; }
+  .card .name em { font-style: normal; font-weight: 400; font-size: 7pt; color: var(--muted); display: block; margin-top: 0.5mm; letter-spacing: 0; }
+  .card .tags { display: flex; gap: 1.2mm; flex-shrink: 0; }
+
+  .plain {
+    font-size: 8pt; line-height: 1.38; color: var(--ink);
+    border-left: 2px solid var(--rule); padding-left: 2.4mm;
+    margin: 1.8mm 0 2mm;
+  }
+  .card.t1 .plain { border-left-color: var(--s1); }
+  .card.t2 .plain { border-left-color: var(--s2); }
+  .card.t3 .plain { border-left-color: var(--s3); }
+  .card.t4 .plain { border-left-color: var(--s4); }
+  .card.t5 .plain { border-left-color: var(--s5); }
+
+  .rows { font-size: 7.1pt; line-height: 1.36; color: var(--ink-2); }
+  .c3 .plain { font-size: 7.6pt; line-height: 1.34; }
+  .c3 .rows  { font-size: 6.85pt; line-height: 1.33; }
+  .rows div { display: grid; grid-template-columns: 21mm 1fr; gap: 2mm; margin-bottom: 1.1mm; }
+  .rows div:last-child { margin-bottom: 0; }
+  .rows b {
+    font-weight: 600; font-size: 6.4pt; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); padding-top: 0.25mm;
+  }
+  .rows .warn b { color: #8f1f1f; }
+
+  .spacer { flex: 1; min-height: 1.4mm; }
+
+  /* ---------- observed-range strip ---------- */
+  .range { margin-top: 1.6mm; border-top: 1px solid var(--grid); padding-top: 1.4mm; }
+  .range .cap { font-size: 6.2pt; color: var(--muted); letter-spacing: 0.04em; margin-bottom: 1mm; }
+  .track { position: relative; height: 2.6mm; background: #eeeeea; border-radius: 1.5px; }
+  .fill  { position: absolute; top: 0; bottom: 0; border-radius: 1.5px; opacity: 0.85; }
+  .card.t1 .fill { background: var(--s1); } .card.t2 .fill { background: var(--s2); }
+  .card.t3 .fill { background: var(--s3); } .card.t4 .fill { background: var(--s4); }
+  .card.t5 .fill { background: var(--s5); }
+  .tick { position: absolute; top: -0.7mm; bottom: -0.7mm; width: 1.1px; background: var(--ink); }
+  .ends { display: flex; justify-content: space-between; font-size: 6.1pt; color: var(--muted);
+          font-variant-numeric: tabular-nums; margin-top: 0.7mm; }
+
+  /* ---------- cover ---------- */
+  .cover-head { display: grid; grid-template-columns: 1fr 78mm; gap: 9mm; margin-bottom: 4mm; }
+  .stat-row { display: flex; gap: 3.4mm; margin-top: 3mm; }
+  .tile { flex: 1; border: 1px solid var(--hair); border-radius: 3px; padding: 2mm 3mm; background: var(--plane); }
+  .tile .v { font-size: 16pt; font-weight: 650; line-height: 1; letter-spacing: -0.02em; }
+  .tile .k { font-size: 6.5pt; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin-top: 1.2mm; }
+
+  .legend-box { border: 1px solid var(--hair); border-radius: 3px; background: var(--plane); padding: 3mm 3.4mm; }
+  .legend-box h2 { margin-bottom: 2mm; }
+  .legend-box ul { margin: 0; padding: 0; list-style: none; font-size: 7.2pt; line-height: 1.4; color: var(--ink-2); }
+  .legend-box li { margin-bottom: 1.8mm; display: grid; grid-template-columns: 5mm 1fr; }
+  .legend-box li:last-child { margin-bottom: 0; }
+  .legend-box li strong { color: var(--ink); font-weight: 620; }
+
+  /* ---------- reference table ---------- */
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 6.5pt; line-height: 1.22; }
+  table.matrix th, table.matrix td { text-align: left; padding: 0.42mm 1.4mm; vertical-align: middle; }
+  table.matrix thead th {
+    font-size: 6.1pt; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--rule);
+  }
+  table.matrix tbody tr { border-bottom: 1px solid var(--grid); }
+  table.matrix tbody tr:nth-child(even) { background: #f6f6f3; }
+  table.matrix td.name { font-weight: 640; font-size: 7pt; white-space: nowrap; }
+  table.matrix td.name span { display: block; font-weight: 400; font-size: 5.9pt; color: var(--muted); line-height: 1.15; }
+  table.matrix .chip { font-size: 5.9pt; padding: 0 1.1mm; }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .rules { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3.2mm; margin-top: 3mm; }
+  .rule-card { border: 1px solid var(--hair); border-left: 2.2px solid var(--critical); border-radius: 3px;
+               background: var(--plane); padding: 2.2mm 3mm; }
+  .rule-card h3 { font-size: 8pt; margin: 0 0 1mm; font-weight: 640; }
+  .rule-card p { font-size: 6.8pt; line-height: 1.35; color: var(--ink-2); margin: 0; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════ PAGE 1 — COVER ══ -->
+<section class="page">
+  <div class="cover-head">
+    <div>
+      <div class="kicker" style="font-size:8pt;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:2.5mm;">
+        OpenFocus 1.34.0 · Common reference · All algorithms
+      </div>
+      <h1>Quality metrics: what each number<br>actually measures</h1>
+      <p class="lede" style="margin-top:2.5mm;">
+        Every fusion and registration algorithm in OpenFocus is tuned against the same set of numbers. This
+        sheet says, in plain English, what each of those numbers means, which direction is better, and — the
+        part that matters most — what each one <em>cannot</em> see. No metric here is a verdict on its own.
+        They are used together precisely because each is blind to something another one catches.
+      </p>
+      <p class="lede">
+        The organising idea is <strong>what a metric needs as input</strong>. That decides where you are
+        allowed to use it. A metric that needs a perfect answer to compare against can only run on synthetic
+        test scenes; a metric that needs nothing but the result can run on any photograph you take.
+      </p>
+
+      <div class="stat-row">
+        <div class="tile"><div class="v">5</div><div class="k">metric families</div></div>
+        <div class="tile"><div class="v">24</div><div class="k">terms defined</div></div>
+        <div class="tile"><div class="v">6&thinsp;&times;&thinsp;7</div><div class="k">methods × scenarios measured</div></div>
+        <div class="tile"><div class="v">2</div><div class="k">have ground truth</div></div>
+      </div>
+    </div>
+
+    <div class="legend-box">
+      <h2>The five families</h2>
+      <ul>
+        <li><span class="fam f1"></span><div><strong>Full-reference</strong> — needs the perfect answer.
+          Only exists on synthetic scenes. <em>PSNR, SSIM, region PSNR, colour error.</em></div></li>
+        <li><span class="fam f2"></span><div><strong>No-reference</strong> — needs the result and the source
+          frames. Works on any real stack. <em>QABF, spatial frequency, entropy, std dev.</em></div></li>
+        <li><span class="fam f3"></span><div><strong>Artefact</strong> — needs the result alone. Hunts one
+          specific defect. <em>Seam excess/visible, defocus seams, block speckle, envelope.</em></div></li>
+        <li><span class="fam f4"></span><div><strong>Foreign-reference</strong> — needs another program's
+          render of the same capture. Not a truth, just a second opinion.
+          <em>Detail agreement, detail share.</em></div></li>
+        <li><span class="fam f5"></span><div><strong>Geometric</strong> — needs the true per-frame transform.
+          Registration only, and it is exact. <em>Residual, gain, kept, selection share.</em></div></li>
+      </ul>
+    </div>
+  </div>
+
+  <div style="border-top:1px solid var(--grid);padding-top:3mm;flex:1;">
+    <h2>What each family can and cannot be run on</h2>
+    <svg viewBox="0 0 1140 168" style="width:100%;height:auto;margin-top:1.5mm;" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+      <!-- lane labels -->
+      <g font-size="11" fill="#898781" text-anchor="end">
+        <text x="150" y="34">Needs as input</text>
+        <text x="150" y="76">Where it can run</text>
+        <text x="150" y="118">Answers</text>
+        <text x="150" y="156">Fails silently when</text>
+      </g>
+      <line x1="160" y1="8" x2="160" y2="164" stroke="#e1e0d9" stroke-width="1"/>
+
+      <g font-size="11.5">
+        <!-- FULL REFERENCE -->
+        <rect x="172" y="2" width="228" height="20" fill="#2a78d6" opacity="0.12" rx="3"/>
+        <text x="182" y="16" font-weight="650" fill="#1c5397">FULL-REFERENCE</text>
+        <text x="182" y="42" fill="#0b0b0b">result + the perfect image</text>
+        <text x="182" y="84" fill="#52514e">synthetic scenes only</text>
+        <text x="182" y="126" fill="#52514e">“how close to correct?”</text>
+        <text x="182" y="160" fill="#8f1f1f">anything is shifted a pixel</text>
+
+        <!-- NO REFERENCE -->
+        <rect x="410" y="2" width="228" height="20" fill="#eb6834" opacity="0.14" rx="3"/>
+        <text x="420" y="16" font-weight="650" fill="#a2431d">NO-REFERENCE</text>
+        <text x="420" y="42" fill="#0b0b0b">result + the source frames</text>
+        <text x="420" y="84" fill="#52514e">every real stack</text>
+        <text x="420" y="126" fill="#52514e">“did the detail survive?”</text>
+        <text x="420" y="160" fill="#8f1f1f">noise is mistaken for detail</text>
+
+        <!-- ARTEFACT -->
+        <rect x="648" y="2" width="228" height="20" fill="#7a51c9" opacity="0.13" rx="3"/>
+        <text x="658" y="16" font-weight="650" fill="#513390">ARTEFACT</text>
+        <text x="658" y="42" fill="#0b0b0b">the result, nothing else</text>
+        <text x="658" y="84" fill="#52514e">every real stack</text>
+        <text x="658" y="126" fill="#52514e">“is one defect present?”</text>
+        <text x="658" y="160" fill="#8f1f1f">the defect is elsewhere</text>
+
+        <!-- FOREIGN -->
+        <rect x="886" y="2" width="120" height="20" fill="#0f9b8e" opacity="0.14" rx="3"/>
+        <text x="896" y="16" font-weight="650" fill="#0a6b62">FOREIGN</text>
+        <text x="896" y="42" fill="#0b0b0b">another render</text>
+        <text x="896" y="84" fill="#52514e">real captures</text>
+        <text x="896" y="126" fill="#52514e">“do we agree?”</text>
+        <text x="896" y="160" fill="#8f1f1f">both are wrong</text>
+
+        <!-- GEOMETRIC -->
+        <rect x="1014" y="2" width="120" height="20" fill="#b8871b" opacity="0.16" rx="3"/>
+        <text x="1024" y="16" font-weight="650" fill="#7d5b0e">GEOMETRIC</text>
+        <text x="1024" y="42" fill="#0b0b0b">true transforms</text>
+        <text x="1024" y="84" fill="#52514e">handheld samples</text>
+        <text x="1024" y="126" fill="#52514e">“how many px off?”</text>
+        <text x="1024" y="160" fill="#8f1f1f">— it is exact</text>
+      </g>
+
+      <g stroke="#e1e0d9" stroke-width="1">
+        <line x1="160" y1="56" x2="1134" y2="56"/>
+        <line x1="160" y1="98" x2="1134" y2="98"/>
+        <line x1="160" y1="138" x2="1134" y2="138"/>
+      </g>
+    </svg>
+
+    <p class="fnote" style="margin-top:2mm;">
+      Read left to right and the trade-off is visible: the further right you go, the weaker the evidence, but
+      the more real the picture it was measured on. Full-reference metrics are the most trustworthy numbers
+      OpenFocus has and also the least representative — a rendered test scene is not a photograph of an insect.
+      That is why nothing is decided on one family alone.
+    </p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3.4mm;margin-top:3.5mm;">
+      <div class="card" style="border-top-color:var(--s2);">
+        <div class="head"><div class="name" style="font-size:10pt">Where the numbers come from<em>the seven test scenarios</em></div></div>
+        <div class="rows" style="margin-top:1.8mm;">
+          <div><b>Scenarios</b><span>deep stack · depth edge · fine texture · long stack · low contrast · saturated
+            colour · sensor noise. Each isolates one thing a fusion method can get wrong.</span></div>
+          <div><b>Why seven</b><span>A method that wins on texture and collapses on a depth edge has not won. Every
+            observed range on this sheet spans all seven, which is why the spreads look wide.</span></div>
+        </div>
+      </div>
+      <div class="card" style="border-top-color:var(--s5);">
+        <div class="head"><div class="name" style="font-size:10pt">The handheld sample scenes<em>where registration is measured</em></div></div>
+        <div class="rows" style="margin-top:1.8mm;">
+          <div><b>What they hold</b><span>The exact transform applied to every frame, recorded when the scene was built.
+            Alignment error is therefore computed, not judged.</span></div>
+          <div><b>Consequence</b><span>Registration is the one part of the pipeline whose quality is known exactly. The
+            numbers on page 6 are arithmetic; every other page is inference.</span></div>
+        </div>
+      </div>
+      <div class="card" style="border-top-color:var(--s1);">
+        <div class="head"><div class="name" style="font-size:10pt">The regression baseline<em>how a change is judged</em></div></div>
+        <div class="rows" style="margin-top:1.8mm;">
+          <div><b>How it works</b><span>Every method's score on every scenario is recorded. A change that moves any of
+            them by more than its tolerance has to be explained before it is accepted.</span></div>
+          <div><b>Tolerance</b><span>Listed per metric on page 7. It absorbs ordinary run-to-run variation — a move
+            inside it is not a small win, it is no evidence at all.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="folio"><span>OpenFocus — Quality metrics vocabulary</span><span>Common to all fusion and registration algorithms</span><span>1 / 7</span></div>
+</section>
+
+<!-- ══════════════════════════════════════ PAGE 2 — FULL REFERENCE ══ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Family 1 · needs the perfect answer</span><h2>Full-reference metrics</h2></div>
+    <span class="small">Synthetic scenes only — a real focus stack has no all-in-focus truth to compare against</span>
+  </div>
+
+  <div class="cards c3">
+
+    <div class="card t1">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">PSNR<em>Peak signal-to-noise ratio</em></div>
+        <div class="tags"><span class="chip up">higher better</span><span class="chip">dB</span></div>
+      </div>
+      <div class="plain">
+        The average pixel error, rewritten as a number that grows as the error shrinks. Take how far every
+        pixel is from where it should be, square it, average it, and put it on a logarithmic scale. Adding
+        6&nbsp;dB means the error was cut in half.
+      </div>
+      <div class="rows">
+        <div><b>Goes up</b><span>The result matches the truth pixel for pixel. Infinite on an exact match.</span></div>
+        <div><b>Goes down</b><span>Any deviation at all — blur, noise, a shifted edge, a colour cast.</span></div>
+        <div class="warn"><b>Blind to</b><span>Where the error is. A faint softness spread over the whole frame and one
+          ugly tear in the subject's eye can score identically. It has no idea what a picture is.</span></div>
+        <div><b>Watch out</b><span>Needs pixel-perfect alignment. Shift the result one pixel and PSNR collapses,
+          even though nothing looks worse. That is why it is useless against another program's render.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Observed across 6 fusion methods × 7 test scenarios</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:27.5%"></div></div>
+        <div class="ends"><span>23.2 dB — worst</span><span>median 35.9</span><span>69.4 dB — best</span></div>
+      </div>
+    </div>
+
+    <div class="card t1">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">SSIM<em>Structural similarity index</em></div>
+        <div class="tags"><span class="chip up">higher better</span><span class="chip">−1 … 1</span></div>
+      </div>
+      <div class="plain">
+        Slides a small soft window over both images and, at every position, asks whether the local
+        brightness, the local contrast and the local pattern agree. It asks “does this look like the same
+        thing?” where PSNR asks “is this the same number?”.
+      </div>
+      <div class="rows">
+        <div><b>Goes up</b><span>Structure is preserved — edges land in the same place with the same contrast.
+          1.0 is identical.</span></div>
+        <div><b>Goes down</b><span>Blur, ringing, halos, smearing — anything that changes local structure rather
+          than overall level.</span></div>
+        <div class="warn"><b>Blind to</b><span>Its own top end. Real results crowd into 0.97–1.00, so the difference
+          between “good” and “excellent” is buried in the third decimal. Read the change, not the value.</span></div>
+        <div><b>Use it for</b><span>Coherence. When a change makes the result hang together better without moving
+          pixel error much, SSIM sees it and PSNR mostly does not.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Observed across 6 fusion methods × 7 test scenarios</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:94.3%"></div></div>
+        <div class="ends"><span>0.894 — worst</span><span>median 0.994</span><span>1.000 — best</span></div>
+      </div>
+    </div>
+
+    <div class="card t1">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Region PSNR<em>PSNR inside a boundary band</em></div>
+        <div class="tags"><span class="chip up">higher better</span><span class="chip">dB</span></div>
+      </div>
+      <div class="plain">
+        The same PSNR, but computed only in a narrow strip — six pixels or so — hugging the borders where one
+        depth meets another. That strip is where fusion has to make its hardest choice, and it is where
+        halos and bleeding live.
+      </div>
+      <div class="rows">
+        <div><b>Why separate</b><span>The boundary is a tiny share of the frame. Averaged into a whole-frame score, a
+          bad halo around every leg vanishes into a rounding error.</span></div>
+        <div><b>Goes down</b><span>Bright fringes beside a dark subject, background bleeding into the subject, an
+          edge taken from the wrong frame.</span></div>
+        <div><b>Read with</b><span>Whole-frame PSNR. Interior high and boundary low is the signature of a method that
+          reconstructs flat areas well and mishandles depth edges.</span></div>
+        <div><b>Needs</b><span>The per-frame focus masks, so it is a synthetic-scene measurement.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Interpretation</div>
+        <div class="track"><div class="fill" style="left:0%;right:52%"></div><div class="tick" style="left:48%"></div></div>
+        <div class="ends"><span>boundary far below interior = halos</span><span>equal = clean edges</span></div>
+      </div>
+    </div>
+
+    <div class="card t1">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Colour error<em>Mean absolute channel deviation</em></div>
+        <div class="tags"><span class="chip down">lower better</span><span class="chip">levels, 0–255</span></div>
+      </div>
+      <div class="plain">
+        How far off the colour is, in the units your histogram is drawn in. Compare red with red, green with
+        green, blue with blue, take the average distance. A value of 3 means the typical channel is three
+        levels out of 255 away from correct.
+      </div>
+      <div class="rows">
+        <div><b>Why it exists</b><span>PSNR and SSIM are computed on brightness. Hues can drift a long way while both
+          still look healthy — this is what “the colours came out wrong” measures as.</span></div>
+        <div><b>Goes up</b><span>A fusion rule applied per channel that picks different frames for red and blue, or
+          tone shifts from blending.</span></div>
+        <div class="warn"><b>Blind to</b><span>Structure entirely. A perfectly graded but completely blurred result
+          scores well here.</span></div>
+        <div><b>Rule of thumb</b><span>Under 1 level is invisible. Above 3–4 is a visible cast on smooth gradients.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Visibility</div>
+        <div class="track"><div class="fill" style="left:0%;right:70%"></div><div class="tick" style="left:30%"></div></div>
+        <div class="ends"><span>0 — exact</span><span>~3 — starts to show</span><span>10+ — obvious cast</span></div>
+      </div>
+    </div>
+
+    <div class="card t1" style="border-top-color:var(--rule);background:#fff;">
+      <div class="head"><div class="name" style="font-size:10.5pt">Ground truth<em>the thing being compared against</em></div></div>
+      <div class="plain" style="border-left-color:var(--rule);">
+        The image the result <em>should</em> have been — every part of the subject sharp, and known to be
+        correct because the scene was built rather than photographed.
+      </div>
+      <div class="rows">
+        <div><b>Where from</b><span>Synthetic stacks: a sharp scene is rendered, then blurred by depth to manufacture
+          the frames a camera would have taken. The unblurred original is the truth.</span></div>
+        <div class="warn"><b>The catch</b><span>A real focus stack has no such image. If it existed there would be nothing
+          to fuse. That single fact is why the rest of this sheet exists.</span></div>
+        <div><b>So</b><span>Everything on this page is a <strong>laboratory</strong> measurement — precise, trustworthy,
+          and taken on a scene that is not a photograph of an insect.</span></div>
+      </div>
+    </div>
+
+    <div class="card t1" style="border-top-color:var(--rule);background:#fff;">
+      <div class="head"><div class="name" style="font-size:10.5pt">Reading decibels<em>the dB scale, for PSNR</em></div></div>
+      <div class="plain" style="border-left-color:var(--rule);">
+        A dB is not a linear unit. Each step of about 6&nbsp;dB means the error was <em>halved</em>. That is why
+        30&nbsp;dB and 36&nbsp;dB are not “close together”.
+      </div>
+      <div class="rows">
+        <div><b>Rough guide</b><span>Under 25 dB: visibly wrong. 30–35 dB: acceptable. Over 40 dB: differences are hard
+          to see. Over 60 dB: essentially identical, and usually a flat, easy scene.</span></div>
+        <div class="warn"><b>Why 69 dB appears</b><span>The low-contrast test scenario has almost nothing to get wrong. A
+          spectacular PSNR there says the scene was easy, not that the method is good.</span></div>
+        <div><b>Compare</b><span>Only differences within one scenario. A 0.75 dB move is the point at which the
+          regression suite treats a change as real.</span></div>
+      </div>
+    </div>
+
+  </div>
+  <div class="folio"><span>OpenFocus — Quality metrics vocabulary</span><span>Full-reference</span><span>2 / 7</span></div>
+</section>
+
+<!-- ══════════════════════════════════════ PAGE 3 — NO REFERENCE ══ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Family 2 · needs only the result and the source frames</span><h2>No-reference metrics</h2></div>
+    <span class="small">The set that applies to real focus stacks, where no correct answer exists to compare against</span>
+  </div>
+
+  <div class="cards c3">
+
+    <div class="card t2">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">QABF<em>Q<sup>AB/F</sup> — gradient fusion quality<br>(Xydeas &amp; Petrovic, 2000)</em></div>
+        <div class="tags"><span class="chip up">higher better</span><span class="chip">0 … 1</span></div>
+      </div>
+      <div class="plain">
+        Of all the edge detail that was present somewhere in the source frames, what fraction survived into the
+        fused result? Strong edges count for more than faint ones, and an edge only counts if it kept both its
+        <em>strength</em> and its <em>direction</em>.
+      </div>
+      <div class="rows">
+        <div><b>Why it leads</b><span>It needs no ground truth, so it is the headline number for real stacks — the one
+          quoted when comparing methods on an actual capture.</span></div>
+        <div><b>Goes up</b><span>The method picked the sharp frame everywhere and did not soften the edge on its
+          way through.</span></div>
+        <div><b>Goes down</b><span>Detail lost to blending, edges softened by smoothing, regions sourced from a
+          defocused frame.</span></div>
+        <div class="warn"><b>Blind to</b><span>Colour, tone, and seams. It also cannot tell a <em>correct</em> edge from a
+          <em>consistent</em> one: an edge faithfully copied from the wrong frame still scores.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Observed across 6 fusion methods × 7 test scenarios</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:54.1%"></div></div>
+        <div class="ends"><span>0.336 — worst</span><span>median 0.612</span><span>0.846 — best</span></div>
+      </div>
+    </div>
+
+    <div class="card t2">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Spatial frequency<em>RMS of the row and column gradients</em></div>
+        <div class="tags"><span class="chip up">higher usually better</span><span class="chip">levels</span></div>
+      </div>
+      <div class="plain">
+        How busy the picture is. Measure how much brightness changes from each pixel to its neighbour going
+        across, and going down, and combine the two. A blurred image barely changes between neighbours and
+        scores low; a crisp one scores high.
+      </div>
+      <div class="rows">
+        <div><b>Goes up</b><span>Retained fine detail and crisp edges.</span></div>
+        <div class="warn"><b>Also goes up</b><span>Sensor noise, block seams, speckle, ringing. Every defect that adds
+          contrast between neighbouring pixels <em>raises</em> this score.</span></div>
+        <div><b>So</b><span>Never read it alone. Rising spatial frequency is good news only when the seam and
+          speckle numbers on page 4 held still. A noisy render is the easiest way to top this metric.</span></div>
+        <div><b>Scale</b><span>Depends entirely on the subject. Compare methods on one scene, never one method
+          across scenes.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Observed across 6 fusion methods × 7 test scenarios — note the 37× spread, it is subject-driven</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:31%"></div></div>
+        <div class="ends"><span>2.4 — flat scene</span><span>median 29.8</span><span>90.7 — fine texture</span></div>
+      </div>
+    </div>
+
+    <div class="card t2">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Entropy<em>Shannon entropy of the histogram</em></div>
+        <div class="tags"><span class="chip up">higher usually better</span><span class="chip">bits, 0 … 8</span></div>
+      </div>
+      <div class="plain">
+        How many different brightness values the picture actually uses, and how evenly. A flat grey card uses
+        one value and carries almost no information: near 0 bits. A rich photograph spreads across the whole
+        range: near 8 bits, the most an 8-bit image can hold.
+      </div>
+      <div class="rows">
+        <div><b>Goes up</b><span>More tonal information preserved — detail that would otherwise be crushed into a
+          single level survives.</span></div>
+        <div class="warn"><b>Also goes up</b><span>Noise, which is the purest form of “many different values”. Entropy
+          cannot distinguish information from randomness.</span></div>
+        <div class="warn"><b>Blind to</b><span>Arrangement, completely. Shuffle every pixel in the frame and entropy does
+          not move at all.</span></div>
+        <div><b>Use it as</b><span>A supporting number: a drop in entropy alongside a drop in QABF confirms detail was
+          genuinely lost rather than merely relocated.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Scale</div>
+        <div class="track"><div class="fill" style="left:0%;right:8%"></div><div class="tick" style="left:80%"></div></div>
+        <div class="ends"><span>0 — one flat tone</span><span>~7.5 typical photo</span><span>8 — theoretical max</span></div>
+      </div>
+    </div>
+
+    <div class="card t2">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Std dev<em>Grayscale standard deviation</em></div>
+        <div class="tags"><span class="chip up">higher usually better</span><span class="chip">levels</span></div>
+      </div>
+      <div class="plain">
+        How far a typical pixel sits from the average brightness of the frame — a one-number stand-in for
+        contrast. A washed-out result huddles around mid-grey and scores low; one with deep blacks and clean
+        highlights scores high.
+      </div>
+      <div class="rows">
+        <div><b>Goes down</b><span>Averaging across frames, which is what blending does when it cannot decide. This is
+          the clearest symptom of a fusion rule that hedges.</span></div>
+        <div class="warn"><b>Blind to</b><span>Where the contrast came from. Clipping the blacks raises it. So does adding
+          noise. So does a seam.</span></div>
+        <div><b>Read as</b><span>A sanity check, not a target. A large unexplained drop against the source frames means
+          the method is washing the picture out. It costs nothing to compute, which is why it is logged
+          everywhere — but it is the weakest evidence on this page.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Interpretation</div>
+        <div class="track"><div class="fill" style="left:0%;right:45%"></div><div class="tick" style="left:55%"></div></div>
+        <div class="ends"><span>below the source frames = washed out</span><span>matching = contrast preserved</span></div>
+      </div>
+    </div>
+
+    <div class="card t2" style="border-top-color:var(--critical);background:#fff;">
+      <div class="head"><div class="name" style="font-size:10.5pt">The noise trap<em>read this before quoting page 3</em></div></div>
+      <div class="plain" style="border-left-color:var(--critical);">
+        Three of the four metrics on this page — spatial frequency, entropy and std dev — go <em>up</em> when
+        you add noise to the picture. All three would call a grainy render an improvement.
+      </div>
+      <div class="rows">
+        <div><b>Why</b><span>Each is measuring “variation”. Detail is variation. So is noise. Nothing in the arithmetic
+          separates them.</span></div>
+        <div class="warn"><b>The failure</b><span>Tune a method to maximise spatial frequency and you will end up with a
+          sharpened, noisy result that scores beautifully and prints badly.</span></div>
+        <div><b>The defence</b><span>QABF is the exception: noise in the result matches no edge in any source frame, so
+          it does not earn credit. Lead with QABF; use the other three to confirm, never to decide.</span></div>
+      </div>
+    </div>
+
+    <div class="card t2" style="border-top-color:var(--rule);background:#fff;">
+      <div class="head"><div class="name" style="font-size:10.5pt">What “no reference” costs<em>the limit of this whole family</em></div></div>
+      <div class="plain" style="border-left-color:var(--rule);">
+        These metrics can tell you detail <em>survived</em>. None of them can tell you it ended up in the
+        <em>right place</em>.
+      </div>
+      <div class="rows">
+        <div><b>The blind spot</b><span>Take a sharp region from frame 12 and paste it where frame 30 should have won.
+          The edges are all present and all crisp: QABF is content.</span></div>
+        <div><b>Caught by</b><span>The artefact metrics on page 4, which know where a wrong choice has to leave its
+          mark, and the geometric checks on page 6.</span></div>
+        <div><b>Still, it leads</b><span>This is the only family that runs on the stacks people actually shoot. It is the
+          headline evidence because it is the <em>available</em> evidence.</span></div>
+      </div>
+    </div>
+
+  </div>
+  <div class="folio"><span>OpenFocus — Quality metrics vocabulary</span><span>No-reference</span><span>3 / 7</span></div>
+</section>
+
+<!-- ══════════════════════════════════════ PAGE 4 — ARTEFACT ══ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Family 3 · needs the result alone</span><h2>Artefact metrics — each hunts one specific defect</h2></div>
+    <span class="small">General metrics average defects away; these look exactly where a known defect has to live</span>
+  </div>
+
+  <div class="cards c3">
+
+    <div class="card t3">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Seam excess<em>block_seams — part 1</em></div>
+        <div class="tags"><span class="chip down">lower better</span></div>
+      </div>
+      <div class="plain">
+        How big a brightness step sits <em>on the block grid</em>, beyond the step you would expect from the
+        picture there. In levels. Zero means the grid is invisible.
+      </div>
+      <div class="rows">
+        <div><b>The idea</b><span>Real detail does not know where a block-based method's lattice is. Only a fusion
+          mistake lines up exactly with it.</span></div>
+        <div><b>Applies to</b><span>Block-selection methods — DCT above all, where the block size is a tuning
+          parameter this number responds to directly.</span></div>
+        <div class="warn"><b>Blind to</b><span>Rarity. A hundred tiny steps and one enormous tear give the same
+          mean — which is why the metric next to it exists.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Observed, all methods × scenarios</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:24.4%"></div></div>
+        <div class="ends"><span>0.003</span><span>med 5.2</span><span>21.4</span></div>
+      </div>
+    </div>
+
+    <div class="card t3">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Seam visible<em>block_seams — part 2</em></div>
+        <div class="tags"><span class="chip down">lower better</span><span class="chip">%</span></div>
+      </div>
+      <div class="plain">
+        What percentage of the block grid actually shows — the share of boundary pixels whose step is more
+        than three times the local norm.
+      </div>
+      <div class="rows">
+        <div><b>Why paired</b><span>Excess says <em>how bad</em>, visible says <em>how much</em>. One 100-level tear is
+          a defect anyone notices; a hundred 1-level steps is not. A mean alone cannot tell them apart.</span></div>
+        <div><b>Goes up</b><span>The lattice is showing across large parts of the frame.</span></div>
+        <div><b>Read as</b><span>Low excess + low visible = clean. High excess + low visible = one bad tear.
+          Low excess + high visible = a faint grid everywhere.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Regression tolerance: 2.0 percentage points</div>
+        <div class="track"><div class="fill" style="left:0%;right:60%"></div><div class="tick" style="left:40%"></div></div>
+        <div class="ends"><span>0 % — invisible</span><span>30 %+ — grid on show</span></div>
+      </div>
+    </div>
+
+    <div class="card t3">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Defocus seams<em>defocus_seams — excess &amp; visible</em></div>
+        <div class="tags"><span class="chip down">lower better</span></div>
+      </div>
+      <div class="plain">
+        The same two numbers, measured only in the parts of the picture that have no detail — the smooth,
+        defocused background.
+      </div>
+      <div class="rows">
+        <div><b>Why restrict</b><span>A seam is most objectionable exactly where there is nothing to hide behind. A
+          method can score respectably overall while tearing the background to pieces.</span></div>
+        <div><b>Self-locating</b><span>The quiet region is found from the fused image itself, so this needs no
+          reference and runs on any real stack.</span></div>
+        <div><b>Sharpest test</b><span>Of the artefact set, this is the one that most reliably matches what a viewer
+          complains about.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Observed excess, all methods × scenarios</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:1.3%"></div></div>
+        <div class="ends"><span>0.0</span><span>med 0.32</span><span>25.7</span></div>
+      </div>
+    </div>
+
+    <div class="card t3">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Block speckle<em>block_speckle</em></div>
+        <div class="tags"><span class="chip down">lower better</span><span class="chip">%</span></div>
+      </div>
+      <div class="plain">
+        The percentage of flat-area blocks standing far outside their neighbours — lone squares that came
+        from the wrong frame.
+      </div>
+      <div class="rows">
+        <div><b>The defect</b><span>A dust speck that happens to be sharp in exactly one frame wins its block. One
+          square, wildly out of place, immediately obvious to a viewer.</span></div>
+        <div><b>Why needed</b><span>The seam metrics average along the grid — the wrong shape for an isolated square,
+          which contributes almost nothing to a mean.</span></div>
+        <div class="warn"><b>Earned its place</b><span>It was added after a mean-based seam score ranked a visibly
+          speckled render the best of a parameter sweep.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Observed; tolerance 0.15 pp</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:2.5%"></div></div>
+        <div class="ends"><span>0.0 %</span><span>med 0.16</span><span>6.25 %</span></div>
+      </div>
+    </div>
+
+    <div class="card t3">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Envelope excursion<em>stack envelope check</em></div>
+        <div class="tags"><span class="chip down">must be zero</span><span class="chip">levels</span></div>
+      </div>
+      <div class="plain">
+        How far the result strayed outside the darkest and brightest value any source frame had at that
+        pixel. Anything above zero is a value the fusion invented.
+      </div>
+      <div class="rows">
+        <div><b>Plain reading</b><span>If no frame ever recorded a pixel brighter than 180 there, a result of 205 did not
+          come from the scene. It came from the algorithm.</span></div>
+        <div><b>Symptom of</b><span>Ringing and halos — the overshoot that transform-based methods produce beside a
+          strong edge.</span></div>
+        <div class="warn"><b>Hard gate</b><span>In autotuning this is not scored, it is a veto. A candidate that leaves the
+          envelope is rejected however well it scores on everything else.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Pass condition</div>
+        <div class="track"><div class="fill" style="left:0%;right:97%;background:var(--good)!important"></div></div>
+        <div class="ends"><span>(0, 0) — the only passing value</span></div>
+      </div>
+    </div>
+
+    <div class="card t3" style="border-top-color:var(--rule);background:#fff;">
+      <div class="head"><div class="name" style="font-size:10.5pt">Why this family exists</div></div>
+      <div class="plain" style="border-left-color:var(--rule);">
+        A general metric asks “is the picture good?” and answers by averaging over millions of pixels. A
+        defect that occupies 0.2&nbsp;% of the frame and ruins the print is, to an average, noise.
+      </div>
+      <div class="rows">
+        <div><b>The pattern</b><span>Each metric here encodes a <em>hypothesis</em> about where a specific algorithm puts
+          its mistakes — on the block grid, in the flat background, outside the source range — and then looks
+          only there.</span></div>
+        <div><b>Consequence</b><span>They are not comparable between algorithm types. Seam metrics on a pyramid method
+          measure nothing, because a pyramid has no lattice to tear along.</span></div>
+        <div><b>Direction</b><span>All of them: <strong>lower is better, zero is the goal</strong>. Unlike everything on
+          pages 2 and 3, there is no trade-off — nothing is lost by driving these to zero.</span></div>
+      </div>
+    </div>
+
+  </div>
+  <div class="folio"><span>OpenFocus — Quality metrics vocabulary</span><span>Artefact-specific</span><span>4 / 7</span></div>
+</section>
+
+<!-- ══════════════════════════════════════ PAGE 5 — FOREIGN REFERENCE ══ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Family 4 · needs another program's render of the same capture</span><h2>Foreign-reference metrics</h2></div>
+    <span class="small">A second opinion, not a ground truth — and it is neither aligned to our result nor graded like it</span>
+  </div>
+
+  <div class="cards c3">
+
+    <div class="card t4">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Tone matching<em>match_tone — a preparation step,<br>not a score</em></div>
+        <div class="tags"><span class="chip neut">no direction</span></div>
+      </div>
+      <div class="plain">
+        Before comparing anything, regrade one image onto the other's tone by matching their histograms,
+        channel by channel. Another program's render of the same capture carries its own exposure, its own
+        contrast curve, its own colour grade.
+      </div>
+      <div class="rows">
+        <div><b>The problem</b><span>None of that grading is a property of the fusion — but every intensity metric reads
+          it as error, and a very large one. Uncorrected, the comparison measures taste, not quality.</span></div>
+        <div><b>What it removes</b><span>Exactly the class of difference a global brightness curve can express, and
+          nothing more. <em>Where</em> the detail sits cannot survive a per-channel lookup table, so real
+          differences pass through untouched.</span></div>
+        <div><b>Applied</b><span>Per candidate, so a single source frame is regraded onto its own tone the same way the
+          fused result is — neither is charged for a grade it never chose.</span></div>
+        <div><b>Limit</b><span>8-bit images only, which is the scale the metrics here are defined on.</span></div>
+      </div>
+    </div>
+
+    <div class="card t4">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Detail map<em>detail_map — the shared building block</em></div>
+        <div class="tags"><span class="chip neut">an image, not a number</span></div>
+      </div>
+      <div class="plain">
+        A small picture of where the detail is: divide the frame into 64&nbsp;×&nbsp;64&nbsp;pixel tiles and
+        record the average local contrast in each. A photograph of a beetle becomes a coarse map with bright
+        tiles on the resolved parts and dark tiles on the blur.
+      </div>
+      <div class="rows">
+        <div><b>Why tiles</b><span>Two programs' renders of one capture sit a few pixels apart — each aligned its own
+          way, and focus breathing means no single warp relates them.</span></div>
+        <div><b>The consequence</b><span>A pixel-by-pixel comparison would mostly measure that offset. A tile several
+          times wider than the offset does not notice it.</span></div>
+        <div><b>This is why</b><span>PSNR cannot be used against a foreign render at all, and the two metrics below can.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Tile size trade-off</div>
+        <div class="track"><div class="fill" style="left:22%;right:38%"></div><div class="tick" style="left:40%"></div></div>
+        <div class="ends"><span>smaller = sharper, but sees misalignment</span><span>64 px</span><span>larger = blunter</span></div>
+      </div>
+    </div>
+
+    <div class="card t4">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Detail agreement<em>detail_agreement — first return value</em></div>
+        <div class="tags"><span class="chip up">higher better</span><span class="chip">−1 … 1</span></div>
+      </div>
+      <div class="plain">
+        How well the two detail maps correlate: do we and the other program agree about <em>which parts of
+        the frame resolve</em>? At 1.0 both found detail in all the same places. At 0 the two disagree
+        completely about what is sharp.
+      </div>
+      <div class="rows">
+        <div><b>Goes down</b><span>We resolved a region they left blurred, or — the worrying direction — they resolved
+          something we did not.</span></div>
+        <div class="warn"><b>Blind to</b><span>Amount. A heavily blurred copy of the reference keeps decent agreement while
+          recovering no detail at all: the pattern of where detail <em>would</em> be is unchanged.</span></div>
+        <div><b>Hence</b><span>Never quoted without the share, next card. Either one alone is trivially easy to satisfy.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Scale</div>
+        <div class="track"><div class="fill" style="left:0%;right:12%"></div><div class="tick" style="left:73%"></div></div>
+        <div class="ends"><span>0 — no relationship</span><span>~0.85 healthy</span><span>1.0</span></div>
+      </div>
+    </div>
+
+    <div class="card t4">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Detail share<em>detail_agreement — second return value</em></div>
+        <div class="tags"><span class="chip neut">1.0 is the target</span><span class="chip">ratio</span></div>
+      </div>
+      <div class="plain">
+        How much local contrast we recovered, as a fraction of theirs. 1.0 means as much detail as the other
+        program pulled out of the same frames.
+      </div>
+      <div class="rows">
+        <div><b>Below 1</b><span>Softer. Detail the capture contained is being lost somewhere in our pipeline.</span></div>
+        <div class="warn"><b>Above 1</b><span>Either genuinely better recovery or amplified noise and sharpening
+          artefacts. An image of pure noise agrees with nothing yet scores an enormous share.</span></div>
+        <div><b>Read the pair</b><span>High agreement <em>and</em> share near 1.0 is the only combination that means what
+          it appears to mean.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Interpretation</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:50%"></div></div>
+        <div class="ends"><span>0.7 softer</span><span>1.0 matched</span><span>1.3 crunchier — check for noise</span></div>
+      </div>
+    </div>
+
+    <div class="card t4" style="border-top-color:var(--rule);background:#fff;">
+      <div class="head"><div class="name" style="font-size:10.5pt">Why PSNR is banned here<em>the two differences that are not errors</em></div></div>
+      <div class="plain" style="border-left-color:var(--rule);">
+        Two programs given the same capture return two images that differ in ways no metric should be
+        counting — and that a pixel-comparison counts most heavily of all.
+      </div>
+      <div class="rows">
+        <div><b>Difference 1</b><span>Grade. Their exposure, contrast curve and colour rendering are choices, not
+          quality. Removed by <em>tone matching</em>.</span></div>
+        <div><b>Difference 2</b><span>Position. Each program aligned the stack its own way, and focus breathing means no
+          single warp relates the two results. Removed by <em>pooling into tiles</em>.</span></div>
+        <div class="warn"><b>Left over</b><span>Where the detail is, and how much of it there is. Those two survive both
+          corrections — which is exactly why they are the two numbers reported.</span></div>
+      </div>
+    </div>
+
+    <div class="card t4" style="border-top-color:var(--rule);background:#fff;">
+      <div class="head"><div class="name" style="font-size:10.5pt">The reference is a peer<em>how much weight to give it</em></div></div>
+      <div class="plain" style="border-left-color:var(--rule);">
+        Another program's render is one more attempt at the same difficult problem. It is evidence, and it is
+        the only evidence available on a real capture that comes from outside our own code — but it is not
+        an answer key.
+      </div>
+      <div class="rows">
+        <div><b>Disagreement means</b><span>One of us handled that region better. Which one is a question to open, by
+          looking at the region, not a verdict to record.</span></div>
+        <div class="warn"><b>Both can be wrong</b><span>Nothing here detects a defect the two programs share. Two renders
+          agreeing is not truth; it is a coincidence of approach.</span></div>
+        <div><b>Its real value</b><span>It catches the failures our own metrics are structurally blind to, because it was
+          not designed around our assumptions.</span></div>
+      </div>
+    </div>
+
+  </div>
+  <div class="folio"><span>OpenFocus — Quality metrics vocabulary</span><span>Foreign-reference</span><span>5 / 7</span></div>
+</section>
+
+<!-- ══════════════════════════════════════ PAGE 6 — REGISTRATION ══ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">Family 5 · needs the true per-frame transform</span><h2>Registration metrics — measured in pixels, not impressions</h2></div>
+    <span class="small">The handheld sample scenes record the exact shift applied to every frame, so alignment error is known, not inferred</span>
+  </div>
+
+  <div class="cards c3">
+
+    <div class="card t5">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Residual — mean<em>mean px</em></div>
+        <div class="tags"><span class="chip down">lower better</span><span class="chip">px</span></div>
+      </div>
+      <div class="plain">
+        After alignment, how far a point of the scene still lands from where the reference frame put it —
+        averaged over the whole stack. In output pixels.
+      </div>
+      <div class="rows">
+        <div><b>Plain reading</b><span>1.2&nbsp;px means a feature that should sit in one place is typically a pixel and a
+          bit away from it in the other frames.</span></div>
+        <div><b>Why exact</b><span>The sample scenes store the transform that was applied to each frame, so this is
+          arithmetic, not an opinion about the picture.</span></div>
+        <div><b>Matters because</b><span>Misalignment reaches fusion as double edges and ghosting — which the fusion
+          metrics then blame on the fusion method.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Target</div>
+        <div class="track"><div class="fill" style="left:0%;right:75%"></div><div class="tick" style="left:25%"></div></div>
+        <div class="ends"><span>sub-pixel = invisible</span><span>&gt;1 px = ghosting</span></div>
+      </div>
+    </div>
+
+    <div class="card t5">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Residual — worst<em>worst px</em></div>
+        <div class="tags"><span class="chip down">lower better</span><span class="chip">px</span></div>
+      </div>
+      <div class="plain">
+        The same measurement, for the single frame that ended up furthest out. The mean's companion.
+      </div>
+      <div class="rows">
+        <div><b>Why both</b><span>A stack of forty frames, thirty-nine perfect and one badly misaligned, has an excellent
+          mean. The output still has one ghosted layer running through it.</span></div>
+        <div><b>Goes up</b><span>Feature matching failed on one frame — usually the ones furthest from the reference,
+          where the least is in focus and there is least to match on.</span></div>
+        <div><b>Read as</b><span>A wide gap between mean and worst points at a specific frame to look at, not at the
+          pipeline as a whole.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Diagnosis</div>
+        <div class="track"><div class="fill" style="left:0%;right:55%"></div><div class="tick" style="left:45%"></div></div>
+        <div class="ends"><span>worst ≈ mean = uniform</span><span>worst ≫ mean = one bad frame</span></div>
+      </div>
+    </div>
+
+    <div class="card t5">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Gain<em>improvement factor</em></div>
+        <div class="tags"><span class="chip up">higher better</span><span class="chip">×</span></div>
+      </div>
+      <div class="plain">
+        The misalignment before registration divided by the misalignment after. 4× means the pipeline removed
+        three quarters of the error.
+      </div>
+      <div class="rows">
+        <div><b>Why a ratio</b><span>Raw pixel error depends on how badly the stack was shot. A ratio compares pipelines
+          across scenes that were never equally shaky.</span></div>
+        <div class="warn"><b>Below 1.0×</b><span>Registration made the alignment <em>worse</em> than leaving the frames
+          alone. The benchmark flags this explicitly — it is a real outcome, not a hypothetical.</span></div>
+        <div><b>Diminishing</b><span>Each added stage costs time; gain is what says whether the stage paid for itself.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Scale</div>
+        <div class="track"><div class="fill" style="left:0%;right:88%;background:var(--critical)!important"></div><div class="tick" style="left:12%"></div></div>
+        <div class="ends"><span>&lt;1× harmful</span><span>1× no effect</span><span>higher = better</span></div>
+      </div>
+    </div>
+
+    <div class="card t5">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Kept<em>surviving frame area</em></div>
+        <div class="tags"><span class="chip up">higher better</span><span class="chip">%</span></div>
+      </div>
+      <div class="plain">
+        How much of the original frame is left after cropping to the region every aligned frame covers. The
+        price of alignment, in field of view.
+      </div>
+      <div class="rows">
+        <div><b>Why it drops</b><span>Shifting frames to line them up leaves each one missing a strip at some edge. Only
+          the area they all cover can be kept.</span></div>
+        <div><b>The trade</b><span>A more aggressive pipeline can align better and crop harder. 98&nbsp;% kept at 0.6&nbsp;px
+          error may beat 91&nbsp;% at 0.4&nbsp;px, depending on how tightly the shot was framed.</span></div>
+        <div><b>Not quality</b><span>It measures cost, not correctness — but it is the number a photographer notices
+          first.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Typical</div>
+        <div class="track"><div class="fill" style="left:0%;right:8%"></div><div class="tick" style="left:88%"></div></div>
+        <div class="ends"><span>85 %</span><span>~97 % typical</span><span>100 %</span></div>
+      </div>
+    </div>
+
+    <div class="card t5">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Selection share<em>vs. focus_index truth</em></div>
+        <div class="tags"><span class="chip neut">closer to truth is better</span><span class="chip">%</span></div>
+      </div>
+      <div class="plain">
+        After registration, what share of the picture does the focus measure decide to take from the
+        reference frame — and how does that compare with the share genuinely sharpest there?
+      </div>
+      <div class="rows">
+        <div><b>What it tests</b><span>Whether alignment error is pushing the <em>focus decision</em> onto the wrong
+          frame. That is a registration failure that looks exactly like a fusion failure.</span></div>
+        <div><b>Reported as</b><span>A ratio against the ground-truth share. 1.0× means the measure is choosing frames as
+          often as it should.</span></div>
+        <div><b>Above 1</b><span>The reference frame is winning territory it does not deserve — a classic sign that the
+          other frames are blurred by misalignment.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Scale</div>
+        <div class="track"><div class="fill" style="left:0%;right:0%"></div><div class="tick" style="left:50%"></div></div>
+        <div class="ends"><span>&lt;1× under-picked</span><span>1.0× correct</span><span>&gt;1× over-picked</span></div>
+      </div>
+    </div>
+
+    <div class="card t5">
+      <div class="head">
+        <div class="name" style="font-size:10.5pt">Detection width<em>a setting, not a score</em></div>
+        <div class="tags"><span class="chip neut">tuning parameter</span><span class="chip">px</span></div>
+      </div>
+      <div class="plain">
+        The width the frames are scaled to <em>while the transform is being worked out</em>. The full-size
+        frames are then warped by the result — they are never upsampled, so nothing is thrown away.
+      </div>
+      <div class="rows">
+        <div><b>Why it exists</b><span>Estimating a transform on a 60&nbsp;MP frame is slow. Estimating it on a 2000&nbsp;px
+          version is fast and, up to a point, just as accurate.</span></div>
+        <div><b>Too small</b><span>Fine features vanish before matching sees them, and the residual rises.</span></div>
+        <div><b>Above frame width</b><span>Means full-resolution detection: the setting is a cap, not a target.</span></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="range">
+        <div class="cap">Trade-off — residual vs. time</div>
+        <div class="track"><div class="fill" style="left:28%;right:30%"></div><div class="tick" style="left:42%"></div></div>
+        <div class="ends"><span>narrow = fast, imprecise</span><span>wide = slow, precise</span></div>
+      </div>
+    </div>
+
+  </div>
+  <div class="folio"><span>OpenFocus — Quality metrics vocabulary</span><span>Registration / geometric</span><span>6 / 7</span></div>
+</section>
+
+<!-- ══════════════════════════════════════ PAGE 7 — REFERENCE CARD ══ -->
+<section class="page">
+  <div class="pagehead">
+    <div><span class="kicker">One page · every metric</span><h2>Reference card</h2></div>
+    <span class="small">All 22 scored metrics — the detail map (p.&nbsp;5) and detection width (p.&nbsp;6) are a building block and a setting, so they are not scored. Observed ranges cover 6 fusion methods × 7 test scenarios</span>
+  </div>
+
+  <table class="matrix">
+    <thead>
+      <tr>
+        <th style="width:34mm">Term</th>
+        <th style="width:17mm">Family</th>
+        <th style="width:14mm">Better</th>
+        <th style="width:17mm">Unit</th>
+        <th style="width:34mm">Observed range</th>
+        <th style="width:16mm">Tolerance</th>
+        <th>In one line</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="name">PSNR<span>Peak signal-to-noise ratio</span></td><td class="num"><span class="fam f1"></span> full-ref</td><td><span class="chip up">higher</span></td><td>dB</td><td class="num">23.2 – 69.4 (med 35.9)</td><td class="num">0.75 dB</td><td>Average pixel error on a log scale. Blind to where the error is.</td></tr>
+      <tr><td class="name">SSIM<span>Structural similarity</span></td><td class="num"><span class="fam f1"></span> full-ref</td><td><span class="chip up">higher</span></td><td>−1 … 1</td><td class="num">0.894 – 1.000 (med 0.994)</td><td class="num">0.02</td><td>Does it look like the same thing locally. Saturates near 1.</td></tr>
+      <tr><td class="name">Region PSNR<span>boundary band</span></td><td class="num"><span class="fam f1"></span> full-ref</td><td><span class="chip up">higher</span></td><td>dB</td><td class="num">—</td><td class="num">—</td><td>PSNR in a 6 px strip at depth edges. Catches halos the frame average hides.</td></tr>
+      <tr><td class="name">Colour error<span>mean abs. channel dev.</span></td><td class="num"><span class="fam f1"></span> full-ref</td><td><span class="chip down">lower</span></td><td>levels 0–255</td><td class="num">—</td><td class="num">—</td><td>Hue drift in histogram units. What “the colours came out wrong” measures as.</td></tr>
+
+      <tr><td class="name">QABF<span>Q<sup>AB/F</sup> edge preservation</span></td><td class="num"><span class="fam f2"></span> no-ref</td><td><span class="chip up">higher</span></td><td>0 … 1</td><td class="num">0.336 – 0.846 (med 0.612)</td><td class="num">0.03</td><td>Share of source edges that survived. The headline metric for real stacks.</td></tr>
+      <tr><td class="name">Spatial frequency<span>row/col gradient RMS</span></td><td class="num"><span class="fam f2"></span> no-ref</td><td><span class="chip up">higher</span></td><td>levels</td><td class="num">2.4 – 90.7 (med 29.8)</td><td class="num">1.0</td><td>How busy the picture is. Noise and seams raise it too.</td></tr>
+      <tr><td class="name">Entropy<span>Shannon, grayscale hist.</span></td><td class="num"><span class="fam f2"></span> no-ref</td><td><span class="chip up">higher</span></td><td>bits 0 … 8</td><td class="num">~7.0 – 7.9 typical</td><td class="num">—</td><td>How much tonal information is present. Blind to arrangement entirely.</td></tr>
+      <tr><td class="name">Std dev<span>grayscale spread</span></td><td class="num"><span class="fam f2"></span> no-ref</td><td><span class="chip up">higher</span></td><td>levels</td><td class="num">subject-dependent</td><td class="num">—</td><td>Coarse contrast proxy. Drops when a method hedges and blends.</td></tr>
+
+      <tr><td class="name">Seam excess<span>block_seams · 1</span></td><td class="num"><span class="fam f3"></span> artefact</td><td><span class="chip down">lower</span></td><td>levels</td><td class="num">0.003 – 21.4 (med 5.2)</td><td class="num">0.25</td><td>How big a step sits on the block grid, beyond the local norm.</td></tr>
+      <tr><td class="name">Seam visible<span>block_seams · 2</span></td><td class="num"><span class="fam f3"></span> artefact</td><td><span class="chip down">lower</span></td><td>%</td><td class="num">0 – 31 %</td><td class="num">2.0 pp</td><td>How much of the grid actually shows. Excess says how bad; this says how much.</td></tr>
+      <tr><td class="name">Defocus seam excess<span>flat regions only</span></td><td class="num"><span class="fam f3"></span> artefact</td><td><span class="chip down">lower</span></td><td>levels</td><td class="num">0.0 – 25.7 (med 0.32)</td><td class="num">0.25</td><td>Seams where there is no detail to hide behind — the most objectionable case.</td></tr>
+      <tr><td class="name">Defocus seam visible<span>flat regions only</span></td><td class="num"><span class="fam f3"></span> artefact</td><td><span class="chip down">lower</span></td><td>%</td><td class="num">0 – 31 % (med 2.7)</td><td class="num">2.0 pp</td><td>Share of the grid showing in the smooth background.</td></tr>
+      <tr><td class="name">Block speckle<span>isolated wrong blocks</span></td><td class="num"><span class="fam f3"></span> artefact</td><td><span class="chip down">lower</span></td><td>%</td><td class="num">0.0 – 6.25 % (med 0.16)</td><td class="num">0.15 pp</td><td>Lone squares taken from the wrong frame. Means cannot see them.</td></tr>
+      <tr><td class="name">Envelope excursion<span>stack min/max check</span></td><td class="num"><span class="fam f3"></span> artefact</td><td><span class="chip down">must be 0</span></td><td>levels</td><td class="num">(0, 0) required</td><td class="num">veto</td><td>Values no source frame contained. Ringing and halos. A hard rejection.</td></tr>
+
+      <tr><td class="name">Tone matching<span>match_tone</span></td><td class="num"><span class="fam f4"></span> foreign</td><td><span class="chip neut">step</span></td><td>—</td><td class="num">8-bit only</td><td class="num">—</td><td>Strips out another program's exposure and grade before comparing.</td></tr>
+      <tr><td class="name">Detail agreement<span>tile-map correlation</span></td><td class="num"><span class="fam f4"></span> foreign</td><td><span class="chip up">higher</span></td><td>−1 … 1</td><td class="num">~0.85 healthy</td><td class="num">—</td><td>Do we agree about which parts of the frame resolve. Survives misalignment.</td></tr>
+      <tr><td class="name">Detail share<span>contrast ratio</span></td><td class="num"><span class="fam f4"></span> foreign</td><td><span class="chip neut">1.0</span></td><td>ratio</td><td class="num">0.7 – 1.3</td><td class="num">—</td><td>How much local contrast we recovered vs. theirs. Above 1 may be noise.</td></tr>
+
+      <tr><td class="name">Residual — mean<span>geometric error</span></td><td class="num"><span class="fam f5"></span> geometric</td><td><span class="chip down">lower</span></td><td>px</td><td class="num">sub-pixel is the target</td><td class="num">—</td><td>How far a scene point still lands from the reference, after alignment.</td></tr>
+      <tr><td class="name">Residual — worst<span>geometric error</span></td><td class="num"><span class="fam f5"></span> geometric</td><td><span class="chip down">lower</span></td><td>px</td><td class="num">—</td><td class="num">—</td><td>The frame that got left behind. One bad frame ghosts the whole output.</td></tr>
+      <tr><td class="name">Gain<span>improvement factor</span></td><td class="num"><span class="fam f5"></span> geometric</td><td><span class="chip up">higher</span></td><td>×</td><td class="num">must exceed 1.0×</td><td class="num">—</td><td>Error before ÷ error after. Below 1× registration made things worse.</td></tr>
+      <tr><td class="name">Kept<span>surviving area</span></td><td class="num"><span class="fam f5"></span> geometric</td><td><span class="chip up">higher</span></td><td>%</td><td class="num">~97 % typical</td><td class="num">—</td><td>Field of view left after the common-region crop. Cost, not correctness.</td></tr>
+      <tr><td class="name">Selection share<span>vs. focus_index truth</span></td><td class="num"><span class="fam f5"></span> geometric</td><td><span class="chip neut">1.0×</span></td><td>%, ratio</td><td class="num">—</td><td class="num">—</td><td>Is misalignment pushing the focus choice onto the wrong frame.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="rules">
+    <div class="rule-card">
+      <h3>Never read one number alone</h3>
+      <p>Every metric on this sheet can be gamed by a defect. Spatial frequency and entropy both reward noise.
+        SSIM rewards smoothing. Detail share rewards over-sharpening. A change is only an improvement when the
+        metrics it <em>should not</em> have moved held still.</p>
+    </div>
+    <div class="rule-card">
+      <h3>Compare within a scene, never across</h3>
+      <p>Spatial frequency spans 2.4 to 90.7 across the test scenarios — a 37-fold range driven entirely by
+        subject, not by method quality. Rank methods on one scene at a time. A number quoted without its scene
+        means nothing.</p>
+    </div>
+    <div class="rule-card">
+      <h3>Tolerance is not precision</h3>
+      <p>The tolerance column is how far a value may drift before the regression test treats it as a real
+        change. It absorbs ordinary run-to-run variation. A move inside tolerance is not a small improvement —
+        it is no evidence at all.</p>
+    </div>
+  </div>
+
+  <div class="folio"><span>OpenFocus — Quality metrics vocabulary</span><span>Reference card</span><span>7 / 7</span></div>
+</section>
+
+</body>
+</html>
