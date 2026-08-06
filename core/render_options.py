@@ -43,6 +43,11 @@ KERNEL_METHODS = {"guided_filter", "dct", "gfgfgf", "pyramid",
                   "depthmap_max", "depthmap_average"}
 HALO_METHODS = {"depthmap_max", "depthmap_average"}
 
+# The coherent-depth dials regularise an index map and blend across the slices
+# it names, and only the hard per-pixel select builds one: the average is a
+# blend of the whole stack already, so neither dial has anything to act on.
+COHERENT_DEPTH_METHODS = {"depthmap_max"}
+
 _CONTRAST_NAMES = {"auto": "Auto", "clahe": "Local (CLAHE)"}
 _REFERENCE_NAMES = {"first": "First", "middle": "Middle", "last": "Last"}
 
@@ -153,6 +158,8 @@ def describe(
     algorithm: Optional[str] = None,
     kernel_size: Optional[int] = None,
     halo_radius: int = 0,
+    depth_smoothing: Optional[int] = None,
+    slice_blending: Optional[int] = None,
     ifcnn_refine: bool = False,
     align_scale: bool = False,
     align_homography: bool = False,
@@ -227,6 +234,11 @@ def describe(
             options["KernelSize"] = f"{int(kernel_size)} px"
         if algorithm in HALO_METHODS:
             options["HaloRadius"] = f"{int(halo_radius)} px" if halo_radius else _OFF
+        if algorithm in COHERENT_DEPTH_METHODS:
+            options["DepthSmoothing"] = (
+                f"{int(depth_smoothing)}%" if depth_smoothing else _OFF)
+            options["SliceBlending"] = (
+                f"{int(slice_blending)}%" if slice_blending else _OFF)
         if algorithm == "stackmffv4" and stackmffv4_batch_size:
             # The batch halves itself when the card runs out of memory, so what
             # was asked for is not always what inferred the tiles.

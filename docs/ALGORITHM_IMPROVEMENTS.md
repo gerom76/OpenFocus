@@ -52,8 +52,11 @@ mitigation shipped but the underlying issue remains.
 | 18 | DCT | Quality | Per-block winner never clears its margin in a deep stack, so 91% of blocks fell to a fallback that tore the background - *fixed in 1.17.1* | High | Medium | 100% |
 | 19 | Pyramid | Quality | Choose-max stitches defocused regions out of frames that disagree, reconstructing filaments no frame had, and loses them to grain - *fixed in 1.19.0* | High | Medium | 100% |
 | 20 | Depth Map | Performance | No device path at all, and a measurement pool bounded by thread count rather than by memory - *fixed in 1.31.0* | Medium | Medium | 100% |
+| 21 | Depth Map | Quality | Box pooling is edge-blind, so a sharp contour claims the background beside it and rings every subject - *fixed in 1.33.0* | High | Low | 100% |
+| 22 | Depth Map | Quality | The argmax has no spatial prior, so a region nothing resolves tears into confetti - *fixed in 1.34.0* | High | Low | 100% |
+| 23 | Depth Map (Max) | Quality | Still hard-selects where the measurement supports no selection, leaving item 22's confetti as coarse patches - *fixed in 1.35.0* | High | Medium | 100% |
 
-**Overall: 85% done** - 17 of 20 items fully fixed, item 8 partially (the GPU
+**Overall: 87% done** - 20 of 23 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
 pairwise fold was not what made it grow), 2 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
@@ -1807,6 +1810,99 @@ only the pixels it actually moved are re-gathered.
 parity pairs - MODE_MAX is bitwise identical between the two paths at kernels
 9, 31 and 51 and for 16-bit frames with halo suppression, which the shared
 `_regularise_index` is what makes possible.
+
+---
+
+## 23. Depth Map still hard-selects where it has no basis to select at all
+
+**Method:** Depth Map (Max) | **Category:** Quality | **Impact:** High |
+**Effort:** Medium | **Fixed in 1.35.0**
+
+Item 22 despeckled the index map and stopped there. It removed the confetti and
+left the blobs: on the reference 333-frame ant stack the chosen index still
+varies by **12.9 slices inside a 9x9 window** over the never-resolved
+background, against 3.8 over the ant's body, because the incoherence is far
+wider than the 5x5 median that was being run over it. What reaches the output is
+a mosaic of hard-edged patches rather than confetti - coarser, and no less
+visible.
+
+Helicon Focus renders the same region smoothly at *radius 1, smoothing 2* - its
+lowest settings, where a hard argmax over a 1 px window would be pure noise.
+That is the tell: Method B is not despeckling a hard selection, it is declining
+to make a hard selection where the measurement does not support one.
+
+**Fix.** Two dials, both exposed, and both no-ops where the measurement *does*
+support a selection.
+
+*Trust.* How far a pixel's focus curve is from flat, from the participation
+ratio of its energy across the stack, `eff = (sum E)^2 / sum(E^2)` mapped onto
+`1 - (eff - 1)/(N - 1)`. The obvious `(peak - mean)/peak` was rejected for
+drifting with stack depth - the same background scores 0.69 at N=333 and 0.60 at
+N=15, so no fixed threshold means the same thing twice. The participation ratio
+holds that background at **0.378-0.397** and the subject at **0.583-0.626**
+across N=15 to 333. It also had to be absolute rather than a percentile of this
+image's own histogram: tiled fusion runs each tile through independently, and a
+threshold read off the tile would lay a seam along the tile lattice.
+
+*`depth_smoothing`* propagates depth from trusted pixels into untrusted ones - a
+normalised convolution weighted by trust, coarse-to-fine over three windows,
+mixed back by trust at every scale so a confident pixel keeps its own depth.
+
+*`slice_blending`* renders each pixel through a band of slices instead of one.
+The width is the neighbourhood's own disagreement in slices - already in the
+right units, so it needs no scaling - gated by `(1 - trust)`. Both factors are
+needed: a genuine occlusion edge disagrees violently *and* is trusted, so it
+stays hard; unresolvable background disagrees just as violently and is trusted
+not at all, so it blends wide and resolves to the local mean of the stack,
+which is also a free `sqrt(N)` on its grain.
+
+**Interpolating between slices was tried and is wrong.** Fitting a sub-slice
+peak (parabola through the winning triple) and rendering through it reads like
+the natural completion of a continuous depth map, and it cost **8 dB of PSNR on
+`long_stack`** (42.46 -> 34.50), where every pixel is genuinely resolved by
+exactly one frame. The two frames either side of a peak are the two that resolve
+a pixel *worst* among those that resolve it at all, so mixing them veils detail
+the winner keeps. `BLEND_WIDTH_FLOOR = 0.75` is what forbids it: under 1 so a
+whole-slice depth puts the entire tent on one frame, over 0.5 so a depth landing
+midway still has both neighbours inside it rather than neither. Dropping the fit
+also dropped three full-resolution planes from the measurement pass.
+
+**What the measurements said.** `deep_stack` is the only scenario that moves at
+all - the other six are bit-identical, because trust is 0.91-0.999 across them
+and both dials correctly do nothing:
+
+| Metric | Before | After |
+|---|---|---|
+| ssim | 0.894 | **0.969** |
+| seam_excess | 0.969 | **0.612** |
+| defocus_seam_excess | 0.433 | **0.260** |
+| defocus_seam_visible | 2.252 | **1.920** |
+| qabf | 0.341 | **0.371** |
+| block_speckle | 2.344 | **2.188** |
+| psnr | 27.814 | 27.759 |
+
+**A metric moved the wrong way, and again should have.** `spatial_frequency`
+fell 9.80 -> 8.44, straight back towards the reference's own **8.54** that item
+22 measured. Split by region at kernel 31: the subject band moved **-0.4%** in
+gradient energy and **+0.38 dB** in PSNR, while the never-resolved background
+moved **-32.6%** and **+1.52 dB**. The activity the metric lost was the mosaic's
+edges, and losing it moved the image closer to the truth in both bands.
+
+**Cost.** Full-resolution ant stack, 333 frames at 1212x1819, 8 threads: 6.8 s
+before, 16.4 s after. The measurement pass is unchanged bar two running sums;
+the second pass over the frames is what the blend costs, and it replaces a
+gather that was already reading them.
+
+**Both dials at 0 is the old hard select, byte for byte** - asserted against the
+pre-change implementation over six scenarios at kernels 9 and 31, MODE_AVERAGE
+included and untouched.
+
+**Guarded by** the quality ratchet (re-recorded, `depthmap_max`/`deep_stack`
+only), `tests/test_depthmap_halo.py` and `tests/test_depthmap_gpu.py`. The GPU
+path does not reimplement any of this: every map involved is a single plane, so
+they are settled by the host's own helpers and only the gather they drive stays
+on the device, which makes the depth map identical between the paths by
+construction.
 
 ---
 

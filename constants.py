@@ -138,3 +138,21 @@ PYRAMID_NOISE_GATE_DEFAULT = True
 # Hold every pixel inside the range its own frames span, so collapsing the
 # pyramid cannot reconstruct a value no frame had.
 PYRAMID_ENVELOPE_DEFAULT = True
+
+# --- Depth Map (Max) coherent-depth tuning exposed in the UI --------------
+# What stops a region no frame ever resolves from coming out as a mosaic of
+# hard-edged patches taken from frames at opposite ends of the stack; see the
+# block above DEFAULT_DEPTH_SMOOTHING in fusion_methods/depthmap.py for the
+# mechanism and what each one was measured to fix. Both at 0 is the plain hard
+# per-pixel select these defaults replaced.
+
+# How far a confident pixel's depth is allowed to propagate into its
+# unresolvable neighbours. Higher fills larger dead regions coherently; lower
+# leaves each pixel closer to the frame its own measurement named.
+DEPTH_SMOOTHING_DEFAULT = 50
+
+# How wide a band of slices a pixel may be drawn from where the neighbourhood
+# cannot agree on a depth. Higher renders those regions as the local mean of
+# the stack - smoother, and quieter, since averaging frames averages grain
+# away; lower keeps them closer to a single frame.
+SLICE_BLENDING_DEFAULT = 50

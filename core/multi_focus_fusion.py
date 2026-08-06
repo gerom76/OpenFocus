@@ -302,6 +302,8 @@ class MultiFocusFusion:
                        mode: str = MODE_MAX,
                        kernel_size: Optional[int] = None,
                        halo_radius: Optional[int] = None,
+                       depth_smoothing: Optional[int] = None,
+                       slice_blending: Optional[int] = None,
                        **kwargs) -> np.ndarray:
         """
         Depth-map fusion (per-pixel select or contrast-weighted average).
@@ -313,6 +315,10 @@ class MultiFocusFusion:
                   contrast-weighted average
             kernel_size: Side of the focus-measure pooling window (odd)
             halo_radius: Halo-suppression radius in pixels; 0/None disables it
+            depth_smoothing: Depth-map regularisation strength, 0-100; 'max'
+                             only, and 0 leaves the depth map as measured
+            slice_blending: Width of the per-pixel slice blend, 0-100; 'max'
+                            only, and 0 keeps the hard per-pixel select
 
         Returns:
             Fused image
@@ -322,7 +328,9 @@ class MultiFocusFusion:
                 from fusion_methods.depthmap_torch import depthmap_torch_impl
                 return depthmap_torch_impl(input_source, img_resize, mode=mode,
                                            kernel_size=kernel_size,
-                                           halo_radius=halo_radius)
+                                           halo_radius=halo_radius,
+                                           depth_smoothing=depth_smoothing,
+                                           slice_blending=slice_blending)
             except Exception as exc:
                 print(f"Warning: GPU depth-map fusion failed ({exc}); falling back to CPU.")
                 try:
@@ -335,7 +343,9 @@ class MultiFocusFusion:
         thread_count = kwargs.get('thread_count', None)
         return depthmap_impl(input_source, img_resize, mode=mode,
                              kernel_size=kernel_size, thread_count=thread_count,
-                             halo_radius=halo_radius)
+                             halo_radius=halo_radius,
+                             depth_smoothing=depth_smoothing,
+                             slice_blending=slice_blending)
 
     def _validate_dct_environment(self) -> None:
         """Validate DCT fusion dependencies."""

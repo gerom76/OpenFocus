@@ -10,6 +10,14 @@ halo suppression through the same elliptical structuring element - reproduced
 span by span rather than approximated with a square window, so a radius means
 on the GPU what it means on the CPU.
 
+The coherent depth stage the CPU path grew - the trust map, the depth
+regularisation and the per-pixel slice blend that keep a region no frame
+resolves from tearing into a mosaic - is not reimplemented here. Every map it
+works on is a single plane, so they are settled by the host's own helpers and
+only the gather they drive is left on the device; see _gather_coherent. That
+makes the depth map identical between the two paths by construction rather than
+by careful transcription.
+
 Frames are uploaded and measured in chunks, so device memory is bounded by the
 accumulators plus one chunk however deep the stack is. The chunk is sized from
 the VRAM the card actually reports free rather than pinned to a constant, and
@@ -17,9 +25,10 @@ halves itself and retries if the allocator still runs out.
 
 Two deliberate departures from the CPU path, both confined to the frame border:
 cv2 pools the energy with BORDER_REFLECT while torch's reflect padding is
-BORDER_REFLECT_101, and the chunk's contributions in MODE_AVERAGE are summed
-as a batch rather than one frame at a time. Neither is visible away from the
-outermost `window // 2` pixels, and both are deterministic run to run.
+BORDER_REFLECT_101, and a chunk's contributions are summed as a batch rather
+than one frame at a time in MODE_AVERAGE and in the coherent gather. Neither is
+visible away from the outermost `window // 2` pixels, and both are
+deterministic run to run.
 """
 
 import functools
@@ -32,17 +41,24 @@ import torch.nn.functional as F
 
 from fusion_methods import torch_depth
 from fusion_methods.depthmap import (
+    BLEND_WIDTH_FLOOR,
+    DEFAULT_DEPTH_SMOOTHING,
+    DEFAULT_SLICE_BLENDING,
     MEASURE_BLUR_KSIZE,
     MEASURE_SIGMA,
     MODE_AVERAGE,
     MODE_MAX,
     _BASELINE_FRACTION,
     _WEIGHT_FLOOR,
+    _blend_width,
     _index_dtype,
     _near_window,
+    _regularise_depth,
     _regularise_index,
     _resolve_halo_radius,
     _resolve_kernel,
+    _resolve_percent,
+    _trust_map,
 )
 from fusion_methods.gff_torch import _load_stack
 from utils import bitdepth
@@ -272,6 +288,62 @@ def _repair_index(stack, fused, index, count, chunk, upload):
     return fused
 
 
+def _gather_coherent(stack, index, energy_sum, energy_sq_sum, count, chunk,
+                     upload, smoothing, blending, rows, cols, channels, dev):
+    """Settle the depth map on the host, then gather the pixels on the device.
+
+    The depth map, the trust map it is regularised by and the blend width it is
+    rendered through are one plane each, so the round trip costs a few megabytes
+    against the tens of megabytes a single frame does, and running the host's
+    own helpers over them is what makes the two paths agree on the depth map
+    exactly rather than approximately - the same bargain _repair_index strikes
+    for the median, for the same reason.
+
+    Only the gather itself, which touches every pixel of every frame, is left
+    on the device.
+    """
+    raw = index.to("cpu").numpy().astype(_index_dtype(count), copy=False)
+    despeckled = _regularise_index(raw)
+    trust = _trust_map(energy_sum.to("cpu").numpy(),
+                       energy_sq_sum.to("cpu").numpy(), count)
+    depth = _regularise_depth(despeckled.astype(np.float32), trust, smoothing)
+    width = _blend_width(despeckled, trust, blending, count)
+    if width is None:
+        width = np.full((rows, cols), BLEND_WIDTH_FLOOR, dtype=np.float32)
+
+    depth_dev = torch.from_numpy(np.ascontiguousarray(depth)).to(dev)
+    width_dev = torch.from_numpy(np.ascontiguousarray(width)).to(dev)
+
+    # The band's reach over the whole frame, so a chunk of frames no pixel can
+    # be asking for is skipped before it is uploaded rather than after.
+    lowest = float((depth - width).min())
+    highest = float((depth + width).max())
+
+    accum = torch.zeros((channels, rows, cols), device=dev)
+    weight_sum = torch.zeros((rows, cols), device=dev)
+
+    for start in range(0, count, chunk):
+        stop = min(start + chunk, count)
+        if stop - 1 < lowest or start > highest:
+            continue
+        batch = upload(stack[start:stop])
+        slices = torch.arange(start, stop, device=dev,
+                              dtype=torch.float32).view(-1, 1, 1)
+        # max(0, width - |depth - k|), the same unnormalised tent the CPU path
+        # builds; the per-pixel 1/width both omit cancels in the division below.
+        tent = (width_dev - (depth_dev - slices).abs()).clamp_min(0.0)
+        weight_sum += tent.sum(dim=0)
+        # The chunk is this iteration's own upload and is dead after the
+        # weighting, so it doubles as the scratch - `(batch * tent).sum(0)`
+        # would allocate a second copy of the whole chunk at the peak.
+        batch *= tent.unsqueeze(1)
+        accum += batch.sum(dim=0)
+        del batch, tent, slices
+
+    accum /= weight_sum.clamp_min(1e-8).unsqueeze(0)
+    return accum
+
+
 def _resolve_device(device):
     """The device to run on, auto-selecting CUDA then MPS when none is named."""
     if device is not None:
@@ -285,8 +357,9 @@ def _resolve_device(device):
 
 
 def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
-                    channels, img_resize):
+                    channels, img_resize, smoothing=0, blending=0):
     """One full pass over the stack on `dev`, returning a (C, H, W) tensor."""
+    coherent = mode == MODE_MAX and (smoothing > 0 or blending > 0)
     lap_kernel = _laplacian_kernel(channels, dev)
     box_kernel = _box_kernel(window, dev) if window > 1 else None
     near = _near_window(window)
@@ -308,12 +381,21 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
 
     if mode == MODE_MAX:
         best = torch.full((rows, cols), float("-inf"), device=dev)
-        fused = torch.zeros((channels, rows, cols), device=dev)
         index = torch.zeros((rows, cols), dtype=torch.int32, device=dev)
+        # The coherent path gathers its pixels in a second pass, once the depth
+        # map is settled, so the running fused frame is not built at all and
+        # its C planes of device memory pay for the two energy sums instead.
+        fused = None if coherent else torch.zeros((channels, rows, cols),
+                                                  device=dev)
+        energy_sum = torch.zeros((rows, cols), device=dev) if coherent else None
+        energy_sq_sum = torch.zeros((rows, cols), device=dev) if coherent else None
 
         for start in range(0, count, chunk):
             batch = upload(stack[start:start + chunk])
             energy = measure(batch)
+            if coherent:
+                energy_sum += energy.sum(dim=(0, 1))
+                energy_sq_sum += energy.square().sum(dim=(0, 1))
             # Reduced one frame at a time even though the measurement is
             # batched: the strict '>' walking the stack in index order is what
             # gives the CPU path its first-frame-wins tie-break, and a batched
@@ -324,10 +406,16 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
             for i in range(batch.shape[0]):
                 better = energy[i, 0] > best
                 torch.where(better, energy[i, 0], best, out=best)
-                torch.where(better.unsqueeze(0), batch[i], fused, out=fused)
+                if fused is not None:
+                    torch.where(better.unsqueeze(0), batch[i], fused, out=fused)
                 index[better] = start + i
             del batch, energy
         del best
+
+        if coherent:
+            return _gather_coherent(stack, index, energy_sum, energy_sq_sum,
+                                    count, chunk, upload, smoothing, blending,
+                                    rows, cols, channels, dev)
 
         return _repair_index(stack, fused, index, count, chunk, upload)
 
@@ -363,7 +451,8 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
 
 def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
                         kernel_size=None, halo_radius=None, device=None,
-                        chunk_size=None):
+                        chunk_size=None, depth_smoothing=None,
+                        slice_blending=None):
     """
     Depth-map fusion on a torch device.
 
@@ -376,6 +465,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         halo_radius: Halo-suppression radius in pixels; 0/None disables it
         device: 'cuda', 'mps', 'cpu', or None to auto-select a GPU
         chunk_size: Frames per device batch; None sizes it from free VRAM
+        depth_smoothing: Depth-map regularisation strength, 0-100 (MODE_MAX)
+        slice_blending: Slice-blend width, 0-100 (MODE_MAX)
 
     Every dial means what it means on the CPU path; see
     fusion_methods/depthmap.py for what each one is for.
@@ -390,6 +481,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
     dev = _resolve_device(device)
     window = _resolve_kernel(kernel_size)
     radius = _resolve_halo_radius(halo_radius)
+    smoothing = _resolve_percent(depth_smoothing, DEFAULT_DEPTH_SMOOTHING)
+    blending = _resolve_percent(slice_blending, DEFAULT_SLICE_BLENDING)
 
     stack_ori = _load_stack(input_source)
     if not stack_ori:
@@ -426,7 +519,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         try:
             with torch.no_grad():
                 fused = _fuse_on_device(stack_ori, mode, window, radius, dev,
-                                        chunk, rows, cols, channels, img_resize)
+                                        chunk, rows, cols, channels, img_resize,
+                                        smoothing, blending)
             break
         except torch.cuda.OutOfMemoryError:
             # Sizing from free VRAM can still be beaten by another process

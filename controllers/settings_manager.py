@@ -215,6 +215,8 @@ class SettingsManager:
             "align_ecc": window.cb_align_ecc.isChecked(),
             "smooth_kernel": window.slider_smooth.value(),
             "halo_radius": window.slider_halo.value(),
+            "depth_smoothing": window.slider_depth_smooth.value(),
+            "slice_blending": window.slider_slice_blend.value(),
             "dct_block_size": window.combo_dct_block.currentData(),
             "dct_plateau": window.combo_dct_plateau.currentData(),
             "dct_blend": window.cb_dct_blend.isChecked(),
@@ -450,6 +452,13 @@ class SettingsManager:
                 window.slider_halo.setValue(int(data["halo_radius"]))
             except (TypeError, ValueError):
                 pass
+        for key, slider in (("depth_smoothing", window.slider_depth_smooth),
+                            ("slice_blending", window.slider_slice_blend)):
+            if key in data:
+                try:
+                    slider.setValue(int(data[key]))
+                except (TypeError, ValueError):
+                    pass
 
         # DCT tuning. Each is matched by value/key, so a settings file written
         # by a build with different presets falls back to the current default
