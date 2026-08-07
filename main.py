@@ -1,5 +1,6 @@
 import sys
 import os
+from typing import NamedTuple
 
 # Refuse to start on a free-threaded interpreter before anything imports PyQt6.
 # D:\Python314 holds both python.exe and python3.14t.exe and they share one
@@ -93,7 +94,78 @@ from constants import (
     PYRAMID_LEVELS, PYRAMID_SELECTIVITY_PRESETS,
 )
 
+class _KernelSpec(NamedTuple):
+    """How one fusion method reads the shared kernel-size slider."""
+
+    # Names the quantity the slider drives for this method. Two methods sharing
+    # a mode mean the same thing by the same number, so switching between them
+    # keeps what was set; arriving from a method with another mode re-seeds the
+    # slider, because the number carried over would have meant something else.
+    mode: str
+    # The largest value that still does something for this method.
+    maximum: int
+    # What the slider is seeded with when the mode changes.
+    default: int
+
+
+class _MethodControls(NamedTuple):
+    """The configuration controls one fusion method actually reads."""
+
+    radio: str                      # window attribute holding its radio button
+    kernel: _KernelSpec | None      # None: the method ignores the kernel slider
+    blocks: tuple[str, ...] = ()    # window attributes of its tuning blocks
+
+
 class OpenFocus(QMainWindow):
+    # What each fusion method reads from the configuration panel. Anything not
+    # named by the selected method's row is hidden, so the panel only ever
+    # shows controls that change the render - a narrow column cannot afford
+    # rows that do nothing, and greying them out still spends the space.
+    #
+    # This mirrors the KERNEL_METHODS / HALO_METHODS / COHERENT_DEPTH_METHODS /
+    # AVERAGE_SELECTIVITY_METHODS sets in core/render_options.py, which decide
+    # what a saved result reports having run with. A method whose controls move
+    # has to be changed in both, or the panel and the XMP packet disagree.
+    _METHOD_CONTROLS = (
+        # Guided Filter, DTCWT and StackMFF-V4 have nothing to tune beyond the
+        # kernel; DTCWT and StackMFF-V4 do not even read that.
+        _MethodControls("rb_a", _KernelSpec(
+            "guided", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_GFF)),
+        # DCT's kernel median-filters its focal-plane map, which holds one entry
+        # per block rather than per pixel, so the same number reaches eight
+        # times further than it does for the pixel-domain methods - and how far
+        # it needs to reach grows with the image. See _set_kernel_range.
+        _MethodControls("rb_b", _KernelSpec(
+            "dct", KERNEL_SIZE_MAX_DCT, KERNEL_SIZE_DEFAULT_DCT), ("dct_widget",)),
+        _MethodControls("rb_c", None),
+        # GFG-FGF's is the initial mean/blur kernel.
+        _MethodControls("rb_gfg", _KernelSpec(
+            "gfg", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_GFG)),
+        # The pyramid pools its band energy over that window at every level of
+        # the decomposition; 5 px is small because each level doubles what the
+        # same window covers.
+        _MethodControls("rb_pyramid", _KernelSpec(
+            "pyramid", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_PYRAMID),
+            ("pyramid_widget",)),
+        # Both depth-map modes pool the focus measure over the same window, so
+        # they share a kernel mode. What they do with the result differs: the
+        # hard select builds an index map the coherent-depth dials regularise,
+        # the average blends the stack on weights selectivity shapes, and
+        # neither dial has anything to act on in the other mode.
+        _MethodControls("rb_dmap_max", _KernelSpec(
+            "dmap", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_DMAP),
+            ("halo_widget", "coherent_widget")),
+        _MethodControls("rb_dmap_avg", _KernelSpec(
+            "dmap", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_DMAP),
+            ("halo_widget", "selectivity_widget")),
+        _MethodControls("rb_d", None),
+    )
+
+    # Every block the table above can show. Listing them here is what lets a row
+    # name only what it uses and still have the rest hidden.
+    _METHOD_BLOCKS = ("smooth_widget", "halo_widget", "coherent_widget",
+                      "selectivity_widget", "dct_widget", "pyramid_widget")
+
     def __init__(self):
         super().__init__()
 
@@ -720,25 +792,32 @@ class OpenFocus(QMainWindow):
         self.handle_kernel_slider_change(self.slider_smooth.value())
 
     def update_slider_availability(self):
-        """Update slider availability and default value based on the selected fusion method"""
-        # Guided Filter/DCT: shared kernel slider
-        # DTCWT / StackMFF-V4: no slider used
+        """Show the tuning controls the selected fusion method reads, hide the rest.
 
-        # Halo suppression only exists on the depth-map paths; the slider keeps
-        # its value while disabled so switching methods does not forget it.
-        self.halo_widget.setEnabled(
-            self.rb_dmap_max.isChecked() or self.rb_dmap_avg.isChecked())
+        Driven by _METHOD_CONTROLS, so a method's controls are declared in one
+        place rather than spread over a chain of tests. Nothing selected is the
+        registration-only render, which reads none of them.
 
-        # The coherent-depth dials regularise an index map and blend across the
-        # slices it names, and only the hard per-pixel select builds one - the
-        # average blends the whole stack already. Same keep-the-value-while-
-        # disabled behaviour as the halo slider above.
-        self.coherent_widget.setEnabled(self.rb_dmap_max.isChecked())
+        Hiding rather than disabling keeps every widget's value, so a method
+        switched away from and back to is found as it was left - the one
+        exception being the shared kernel slider, which is re-seeded when the
+        incoming method reads it as a different quantity (see _METHOD_CONTROLS).
+        """
+        method = next((entry for entry in self._METHOD_CONTROLS
+                       if getattr(self, entry.radio).isChecked()), None)
+        kernel = method.kernel if method else None
 
-        # Selectivity shapes the weights the blend runs on, and only the average
-        # blends - the hard select takes its pixel from one frame whatever the
-        # weights look like. Same keep-the-value-while-disabled behaviour.
-        self.selectivity_widget.setEnabled(self.rb_dmap_avg.isChecked())
+        visible: set[str] = set(method.blocks) if method else set()
+        if kernel:
+            visible.add("smooth_widget")
+        for name in self._METHOD_BLOCKS:
+            getattr(self, name).setVisible(name in visible)
+
+        if kernel:
+            self._set_kernel_range(kernel.maximum)
+            if self.current_kernel_mode != kernel.mode:
+                self.slider_smooth.setValue(kernel.default)
+        self.current_kernel_mode = kernel.mode if kernel else None
 
         # The halo ceiling follows the kernel, and the kernel can change with
         # the method. Done here as well as from the kernel handler because
@@ -747,58 +826,6 @@ class OpenFocus(QMainWindow):
         # share one.
         self._set_halo_range(self.slider_smooth.value())
 
-        # The DCT tuning block keeps its values while disabled, so switching
-        # away and back does not forget them.
-        self.dct_widget.setEnabled(self.rb_b.isChecked())
-        # The pyramid block is hidden rather than greyed out - six controls is
-        # too much dead panel to leave standing. Hidden widgets keep their
-        # values, so this forgets nothing either.
-        self.pyramid_widget.setVisible(self.rb_pyramid.isChecked())
-
-        if self.rb_a.isChecked():
-            self.smooth_widget.setEnabled(True)
-            self._set_kernel_range(KERNEL_SIZE_MAX)
-            if self.current_kernel_mode != "guided":
-                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_GFF)
-            self.current_kernel_mode = "guided"
-        elif self.rb_b.isChecked():
-            self.smooth_widget.setEnabled(True)
-            # DCT's kernel smooths its focal-plane map, which is one entry per
-            # block rather than per pixel, so the same number reaches eight
-            # times further than it does for the pixel-domain methods - and how
-            # far it needs to reach grows with the image. See _set_kernel_range.
-            self._set_kernel_range(KERNEL_SIZE_MAX_DCT)
-            if self.current_kernel_mode != "dct":
-                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_DCT)
-            self.current_kernel_mode = "dct"
-        elif self.rb_gfg.isChecked():
-            self._set_kernel_range(KERNEL_SIZE_MAX)
-            # GFG-FGF uses the initial mean/blur kernel controlled by the same slider
-            self.smooth_widget.setEnabled(True)
-            if self.current_kernel_mode != "gfg":
-                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_GFG)
-            self.current_kernel_mode = "gfg"
-        elif self.rb_dmap_max.isChecked() or self.rb_dmap_avg.isChecked():
-            # Both depth-map modes pool the focus measure over the same slider-
-            # controlled window; 9 px is the method default.
-            self.smooth_widget.setEnabled(True)
-            self._set_kernel_range(KERNEL_SIZE_MAX)
-            if self.current_kernel_mode != "dmap":
-                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_DMAP)
-            self.current_kernel_mode = "dmap"
-        elif self.rb_pyramid.isChecked():
-            # The pyramid pools its band energy over the same slider-controlled
-            # window, at every level of the decomposition; 5 px is small because
-            # each level doubles what that window covers.
-            self.smooth_widget.setEnabled(True)
-            self._set_kernel_range(KERNEL_SIZE_MAX)
-            if self.current_kernel_mode != "pyramid":
-                self.slider_smooth.setValue(KERNEL_SIZE_DEFAULT_PYRAMID)
-            self.current_kernel_mode = "pyramid"
-        else:
-            self.smooth_widget.setEnabled(False)
-            self.current_kernel_mode = None
-    
     def update_result_view(self, index):
         """Update the image shown in the Output area (for registration results or aligned images in ROI mode)"""
         # If ROI mode is active, show the aligned image stack

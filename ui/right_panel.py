@@ -225,6 +225,13 @@ def create_right_panel() -> RightPanelComponents:
     method_registration_layout.addWidget(method_group)
     config_layout.addLayout(method_registration_layout)
 
+    # Per-method tuning blocks -------------------------------
+    # Each block below belongs to a subset of the fusion methods, and is shown
+    # only while one of them is selected - a control that does nothing for the
+    # current method is not left standing greyed out, because a narrow panel
+    # cannot afford the dead rows. Hiding a widget keeps its state, so switching
+    # methods and back does not forget what was set. Which method shows what is
+    # decided in one place: OpenFocus._METHOD_CONTROLS in main.py.
     smooth_widget = QWidget()
     smooth_layout = QVBoxLayout(smooth_widget)
     smooth_layout.setContentsMargins(0, 5, 0, 5)
@@ -260,7 +267,7 @@ def create_right_panel() -> RightPanelComponents:
     slider_halo.setValue(0)
     halo_layout.addLayout(halo_top)
     halo_layout.addWidget(slider_halo)
-    halo_widget.setEnabled(False)  # only the depth-map methods use it
+    halo_widget.setVisible(False)  # only the depth-map methods use it
     config_layout.addWidget(halo_widget)
 
     # Coherent depth (Depth Map (Max) only) ------------------
@@ -286,7 +293,7 @@ def create_right_panel() -> RightPanelComponents:
     coherent_layout.addLayout(depth_smooth_top)
     coherent_layout.addWidget(slider_depth_smooth)
 
-    coherent_widget.setEnabled(False)  # only the hard per-pixel select uses it
+    coherent_widget.setVisible(False)  # only the hard per-pixel select uses it
     config_layout.addWidget(coherent_widget)
 
     # Selectivity (Depth Map (Avg) only) ---------------------
@@ -311,7 +318,7 @@ def create_right_panel() -> RightPanelComponents:
     selectivity_layout.addLayout(selectivity_top)
     selectivity_layout.addWidget(slider_avg_selectivity)
 
-    selectivity_widget.setEnabled(False)  # only the average blends the stack
+    selectivity_widget.setVisible(False)  # only the average blends the stack
     config_layout.addWidget(selectivity_widget)
 
     # DCT tuning (DCT only) ---------------------------------
@@ -348,14 +355,10 @@ def create_right_panel() -> RightPanelComponents:
     cb_dct_blend.setChecked(DCT_BLEND_DEFAULT)
     dct_layout.addWidget(cb_dct_blend)
 
-    dct_widget.setEnabled(False)  # only DCT uses these
+    dct_widget.setVisible(False)  # only DCT uses these
     config_layout.addWidget(dct_widget)
 
     # Pyramid tuning (Pyramid only) -------------------------
-    # Six controls is more than the panel can afford to keep greyed out the way
-    # the DCT block above is, so this one is hidden instead of disabled. Hiding
-    # a widget keeps its state, so switching methods and back does not forget
-    # what was set.
     pyramid_widget = QWidget()
     pyramid_layout = QVBoxLayout(pyramid_widget)
     pyramid_layout.setContentsMargins(0, 5, 0, 5)
