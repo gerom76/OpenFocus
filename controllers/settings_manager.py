@@ -216,6 +216,7 @@ class SettingsManager:
             "smooth_kernel": window.slider_smooth.value(),
             "halo_radius": window.slider_halo.value(),
             "depth_smoothing": window.slider_depth_smooth.value(),
+            "average_selectivity": window.slider_avg_selectivity.value(),
             "dct_block_size": window.combo_dct_block.currentData(),
             "dct_plateau": window.combo_dct_plateau.currentData(),
             "dct_blend": window.cb_dct_blend.isChecked(),
@@ -454,6 +455,12 @@ class SettingsManager:
         if "depth_smoothing" in data:
             try:
                 window.slider_depth_smooth.setValue(int(data["depth_smoothing"]))
+            except (TypeError, ValueError):
+                pass
+        if "average_selectivity" in data:
+            try:
+                window.slider_avg_selectivity.setValue(
+                    int(data["average_selectivity"]))
             except (TypeError, ValueError):
                 pass
 

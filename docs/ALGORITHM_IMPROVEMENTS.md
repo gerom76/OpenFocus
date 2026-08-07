@@ -21,7 +21,9 @@ which were written to this document's standards and contribute only items 15
 and 16. Items 17-19 came from real stacks rather than from an audit, and all
 three are the same failure in three methods' clothing: a selection rule with no
 answer for the parts of a frame where nothing is in focus. Item 20 is the one
-performance gap left by the two methods added after the original audit. The
+performance gap left by the two methods added after the original audit. Items
+21-24 also came from real stacks, and 24 is the same shape as 18: a rule that
+works on a test fixture and quietly stops working as the stack gets deeper. The
 **Fixed** column
 tracks how much of each item has actually landed; a partial percentage means a
 mitigation shipped but the underlying issue remains.
@@ -55,8 +57,9 @@ mitigation shipped but the underlying issue remains.
 | 21 | Depth Map | Quality | Box pooling is edge-blind, so a sharp contour claims the background beside it and rings every subject - *fixed in 1.33.0* | High | Low | 100% |
 | 22 | Depth Map | Quality | The argmax has no spatial prior, so a region nothing resolves tears into confetti - *fixed in 1.34.0* | High | Low | 100% |
 | 23 | Depth Map (Max) | Quality | Still hard-selects where the measurement supports no selection, leaving item 22's confetti as coarse patches - *fixed in 1.35.0, corrected in 1.36.0* | High | Medium | 100% |
+| 24 | Depth Map (Average) | Quality | Linear contrast weighting stops selecting as the stack deepens, so the blend collapses into the plain mean of every frame and hazes over - *fixed in 1.37.0* | High | Low | 100% |
 
-**Overall: 87% done** - 20 of 23 items fully fixed, item 8 partially (the GPU
+**Overall: 88% done** - 21 of 24 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
 pairwise fold was not what made it grow), 2 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
@@ -1937,6 +1940,104 @@ path does not reimplement any of this: every map involved is a single plane, so
 they are settled by the host's own helpers and only the gather they drive stays
 on the device, which makes the depth map identical between the paths by
 construction.
+
+---
+
+## 24. Depth Map (Average) stops selecting as the stack deepens
+
+**Method:** Depth Map (Average) | **Category:** Quality | **Impact:** High |
+**Effort:** Low | **Fixed in 1.37.0**
+
+The mode weighted every frame by its focus energy and added the results up:
+`sum((E + b) * I) / sum(E + b)`. That is selective on a three-frame fixture and
+it is not selective at all on a real stack, because a defocused frame does not
+measure zero at a detailed pixel - it measures a small fraction of the peak -
+and the sum adds that fraction up once per frame.
+
+Measured on the reference 333-frame ant stack at kernel 21, over the frame:
+
+| | |
+|---|---|
+| Defocused tail, summed over the other 332 frames | **50x** the winning frame's own energy |
+| Share of the output the winning frame contributed | **1.8%** at the median pixel, 7.8% at p99 |
+| Frames effectively mixed per pixel (participation ratio) | **233** of 333 at the median |
+
+So the "contrast-weighted average" was, in practice, the arithmetic mean of 333
+differently defocused frames. The mean of many defocus kernels is one enormous
+defocus kernel: a veiled, low-contrast result with lifted blacks, bokeh from
+every bright object smeared across the shadows beside it, and fine detail gone.
+Against the same stack's Max render it held **27%** of the mean absolute
+Laplacian (37.3 against 138.7) and **40%** of the local standard deviation.
+
+It got worse the deeper the stack went, which is exactly why nothing caught it:
+the selectivity of a linear weighting falls as `1/N`, and every scenario in
+`tests/fusion_scenarios.py` bar `deep_stack` is 12 frames or fewer.
+
+**Fix.** Weight by a *power* of the energy, `w = ((E + b) / s) ** p`, exposed as
+a **Selectivity** dial (0-100, default 50 -> `p = 4.5`; 0 is the old linear rule).
+
+Raising a *ratio* of energies to a power is what makes this depth-invariant.
+Where one frame genuinely stands out, its weight pulls away from the rest as the
+p-th power of how far it stands out, so 332 frames at a seventh of the peak can
+no longer outvote it. Where every frame measures the same the ratios are all 1,
+every weight comes out equal whatever `p` is, and the blend is still the plain
+mean that buys the mode its multi-frame SNR. The dial therefore costs nothing in
+the regions averaging is the right answer for.
+
+On a controlled 120-frame stack - flat noisy half, single-frame-sharp half:
+
+| p | Contrast kept in the sharp half | Frames averaged in the flat half |
+|---|---|---|
+| 1 (old) | 35% | 118 of 120 |
+| 3 | 94% | 103 |
+| **4.5 (default)** | **99%** | **85** |
+| 8 (dial at 100) | 101% | 50 |
+
+Detail saturates by `p = 4-6` while the flat-region averaging keeps eroding,
+which is what puts the default at 4.5 and the ceiling at 8.
+
+**On the project's own scenarios**, PSNR against the all-in-focus reference,
+dial at 0 -> 50:
+
+| Scenario | Frames | 0 | 50 | Max, for scale |
+|---|---|---|---|---|
+| `deep_stack` | 64 | 22.01 | **24.44** | 28.61 |
+| `long_stack` | 12 | 30.55 | **38.41** | 45.41 |
+| `sensor_noise` | 3 | 41.41 | **49.49** | 50.74 |
+| `low_contrast` | 3 | 64.28 | **69.65** | 68.95 |
+| `fine_texture` | 3 | 32.94 | **35.81** | 35.01 |
+| `depth_edge` | 2 | 39.35 | 39.30 | 35.86 |
+| `saturated_colour` | 3 | 33.15 | 32.42 | 32.22 |
+
+Only `saturated_colour` gives ground, by 0.7 dB, and it gives it in the
+direction of Max - a scene the metric prefers blended is exactly the scene a
+more selective blend scores worse on. The synthetic photographic fixture moves
+41.0 -> 51.3 dB.
+
+**The energy scale now has to be known before the blend rather than after it.**
+`b` was recoverable for free from the weight sum once the linear fold was done;
+a power cannot wait. Only `b` survives the normalisation - the scale itself
+cancels and is carried purely to keep the exponent on numbers of order one - and
+`b` is a soft floor that tolerates being wrong by a factor of two, so it is
+estimated from **8 evenly spaced probe frames** rather than a second full pass.
+That lands within 3% of the true mean on the ant stack and, being a fixed count,
+costs under 2% of a deep run.
+
+**Cost: none measurable.** 333 frames at 1619x1064, 8 threads: 7 s before, 7 s
+after. The exponent is taken by squaring rather than by `pow()` - the dial only
+ever asks for half-integers, which is why it is quantised to them - and it is
+taken on the measurement pool alongside the energy it belongs to. The
+reduction sheds a whole float32 frame - the plain-sum accumulator the deferred
+baseline needed is gone - and each in-flight measurement task gains two
+single-channel planes for the squaring, which `_worker_bytes` now charges for so
+the pool still sizes itself against what it actually holds.
+
+**Guarded by** `tests/test_depthmap_selectivity.py` - both halves of the bargain
+(detail recovered on a deep stack, flat regions still averaged and still far
+quieter than Max), the exponent helper against `np.power` at every setting the
+dial can produce, `selectivity=0` against the linear rule rebuilt from its
+definition, and MODE_MAX proved indifferent to the dial - plus CPU/GPU parity at
+both ends of the dial in `tests/test_depthmap_gpu.py`.
 
 ---
 

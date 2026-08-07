@@ -27,6 +27,7 @@ from constants import (
     DCT_BLOCK_SIZE_DEFAULT,
     DCT_PLATEAU_DEFAULT,
     DCT_PLATEAU_PRESETS,
+    AVERAGE_SELECTIVITY_DEFAULT,
     DEPTH_SMOOTHING_DEFAULT,
     KERNEL_SIZE_MAX_DCT,
     PYRAMID_BASE_DEFAULT,
@@ -83,6 +84,9 @@ class RightPanelComponents:
     slider_depth_smooth: QSlider
     depth_smooth_value_label: QLabel
     coherent_widget: QWidget
+    slider_avg_selectivity: QSlider
+    avg_selectivity_value_label: QLabel
+    selectivity_widget: QWidget
     combo_dct_block: QComboBox
     combo_dct_plateau: QComboBox
     cb_dct_blend: QCheckBox
@@ -111,6 +115,7 @@ class RightPanelComponents:
     lbl_kernel: QLabel
     lbl_halo: QLabel
     lbl_depth_smooth: QLabel
+    lbl_avg_selectivity: QLabel
 
     source_images_label: QLabel
     file_list: QListWidget
@@ -282,6 +287,31 @@ def create_right_panel() -> RightPanelComponents:
 
     coherent_widget.setEnabled(False)  # only the hard per-pixel select uses it
     config_layout.addWidget(coherent_widget)
+
+    # Selectivity (Depth Map (Avg) only) ---------------------
+    # How sharply the blend favours the frame holding the detail. Left linear,
+    # a deep stack's defocused frames outvote the sharp one by sheer count and
+    # the result is the veiled mean of everything.
+    selectivity_widget = QWidget()
+    selectivity_layout = QVBoxLayout(selectivity_widget)
+    selectivity_layout.setContentsMargins(0, 5, 0, 5)
+
+    selectivity_top = QHBoxLayout()
+    lbl_avg_selectivity = QLabel(trans.t('label_avg_selectivity'))
+    selectivity_top.addWidget(lbl_avg_selectivity)
+    selectivity_top.addStretch()
+    lbl_avg_selectivity_value = QLabel(f"{AVERAGE_SELECTIVITY_DEFAULT}%")
+    selectivity_top.addWidget(lbl_avg_selectivity_value)
+    slider_avg_selectivity = QSlider(Qt.Orientation.Horizontal)
+    slider_avg_selectivity.setRange(0, 100)
+    slider_avg_selectivity.setSingleStep(1)
+    slider_avg_selectivity.setPageStep(10)
+    slider_avg_selectivity.setValue(AVERAGE_SELECTIVITY_DEFAULT)
+    selectivity_layout.addLayout(selectivity_top)
+    selectivity_layout.addWidget(slider_avg_selectivity)
+
+    selectivity_widget.setEnabled(False)  # only the average blends the stack
+    config_layout.addWidget(selectivity_widget)
 
     # DCT tuning (DCT only) ---------------------------------
     dct_widget = QWidget()
@@ -560,6 +590,9 @@ def create_right_panel() -> RightPanelComponents:
         slider_depth_smooth=slider_depth_smooth,
         depth_smooth_value_label=lbl_depth_smooth_value,
         coherent_widget=coherent_widget,
+        slider_avg_selectivity=slider_avg_selectivity,
+        avg_selectivity_value_label=lbl_avg_selectivity_value,
+        selectivity_widget=selectivity_widget,
         combo_dct_block=combo_dct_block,
         combo_dct_plateau=combo_dct_plateau,
         cb_dct_blend=cb_dct_blend,
@@ -587,6 +620,7 @@ def create_right_panel() -> RightPanelComponents:
         lbl_kernel=lbl_kernel,
         lbl_halo=lbl_halo,
         lbl_depth_smooth=lbl_depth_smooth,
+        lbl_avg_selectivity=lbl_avg_selectivity,
 
         source_images_label=source_images_label,
         file_list=file_list,
@@ -630,6 +664,8 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
     components.slider_halo.valueChanged.connect(window.handle_halo_slider_change)
     components.slider_depth_smooth.valueChanged.connect(
         window.handle_depth_smooth_slider_change)
+    components.slider_avg_selectivity.valueChanged.connect(
+        window.handle_avg_selectivity_slider_change)
 
     # Contrast is a post-fusion output step, so both controls just re-apply it
     # to the already-rendered result via handle_contrast_change - no re-render.

@@ -131,6 +131,7 @@ class RenderWorker(QThread):
         kernel_slider_value,
         halo_radius_value=0,
         depth_smoothing_value=None,
+        average_selectivity_value=None,
         rb_pyramid_checked=False,
         rb_dmap_max_checked=False,
         rb_dmap_avg_checked=False,
@@ -197,6 +198,9 @@ class RenderWorker(QThread):
         # Coherent-depth dial for Depth Map (Max); None keeps the method's own
         # default, and 0 is the plain hard per-pixel select.
         self.depth_smoothing_value = depth_smoothing_value
+        # Selectivity dial for Depth Map (Avg); None keeps the method's own
+        # default, and 0 is the plain linear contrast weighting.
+        self.average_selectivity_value = average_selectivity_value
         # DCT tuning; None on any of them keeps the method's own default
         self.dct_block_size = dct_block_size
         self.dct_plateau = dct_plateau
@@ -504,6 +508,7 @@ class RenderWorker(QThread):
                 kernel_size=kernel_size,
                 halo_radius=self.halo_radius_value,
                 depth_smoothing=self.depth_smoothing_value,
+                average_selectivity=self.average_selectivity_value,
                 thread_count=self.thread_count,
             )
         elif algorithm == "stackmffv4":
@@ -842,6 +847,7 @@ class BatchWorker(QThread):
                     kernel_size=kernel_size,
                     halo_radius=fusion_params.get('halo_radius', 0),
                     depth_smoothing=fusion_params.get('depth_smoothing'),
+                    average_selectivity=fusion_params.get('average_selectivity'),
                     thread_count=self.thread_count,
                 )
             elif fusion_method == "stackmffv4":
@@ -911,6 +917,7 @@ class BatchWorker(QThread):
                 kernel_size=fusion_params.get('kernel_size'),
                 halo_radius=fusion_params.get('halo_radius', 0),
                 depth_smoothing=fusion_params.get('depth_smoothing'),
+                average_selectivity=fusion_params.get('average_selectivity'),
                 ifcnn_refine=bool(settings.get('ifcnn_refine')),
                 align_scale="scale" in reg_methods,
                 align_homography="homography" in reg_methods,

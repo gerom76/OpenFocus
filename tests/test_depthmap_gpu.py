@@ -136,6 +136,17 @@ def test_halo_radius_matches_the_cpu_path(stack, mode):
 # The chunking is an implementation detail and must stay one
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("selectivity", [0, 100])
+def test_selectivity_matches_the_cpu_path(stack, selectivity):
+    """The average's weighting dial, at both ends rather than at its default."""
+    cpu = depthmap_impl(list(stack), mode=MODE_AVERAGE, kernel_size=KERNEL,
+                        selectivity=selectivity)
+    gpu = depthmap_torch_impl(list(stack), mode=MODE_AVERAGE, kernel_size=KERNEL,
+                              selectivity=selectivity, device=DEV)
+    inner = (slice(KERNEL, -KERNEL), slice(KERNEL, -KERNEL))
+    assert _psnr(gpu[inner], cpu[inner]) > 55.0
+
+
 @pytest.mark.parametrize("mode", [MODE_MAX, MODE_AVERAGE])
 def test_chunk_size_does_not_change_the_result(stack, mode):
     """Whatever the VRAM sizing picks, the pixels must be the same."""

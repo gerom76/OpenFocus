@@ -151,3 +151,14 @@ PYRAMID_ENVELOPE_DEFAULT = True
 # leaves each pixel closer to the frame its own measurement named.
 DEPTH_SMOOTHING_DEFAULT = 50
 
+# --- Depth Map (Avg) selectivity exposed in the UI ------------------------
+# How sharply the blend favours the frame that holds the detail. Linear
+# weighting only selects while the stack is short - a defocused frame still
+# measures a fraction of the peak, and a deep stack adds that fraction up
+# hundreds of times until the blend is the plain mean of everything and the
+# result is veiled. See the block above DEFAULT_SELECTIVITY in
+# fusion_methods/depthmap.py. 0 is that linear weighting; higher trades the
+# multi-frame noise reduction of the regions that genuinely have nothing to
+# choose between for detail in the regions that do.
+AVERAGE_SELECTIVITY_DEFAULT = 50
+

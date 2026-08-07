@@ -132,12 +132,12 @@ def _depthmap_max(stack, kernel_size=9, halo_radius=0, img_resize=None,
                          thread_count=thread_count)
 
 
-def _depthmap_average(stack, kernel_size=9, halo_radius=0, img_resize=None,
-                      thread_count=None):
+def _depthmap_average(stack, kernel_size=9, halo_radius=0, selectivity=None,
+                      img_resize=None, thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_AVERAGE
     return depthmap_impl(stack, img_resize, mode=MODE_AVERAGE,
                          kernel_size=kernel_size, halo_radius=halo_radius,
-                         thread_count=thread_count)
+                         selectivity=selectivity, thread_count=thread_count)
 
 
 def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
@@ -148,12 +148,12 @@ def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
                                device=device)
 
 
-def _depthmap_average_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
-                            device=None):
+def _depthmap_average_torch(stack, kernel_size=9, halo_radius=0,
+                            selectivity=None, img_resize=None, device=None):
     from fusion_methods.depthmap_torch import depthmap_torch_impl, MODE_AVERAGE
     return depthmap_torch_impl(stack, img_resize, mode=MODE_AVERAGE,
                                kernel_size=kernel_size, halo_radius=halo_radius,
-                               device=device)
+                               selectivity=selectivity, device=device)
 
 
 def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
@@ -328,11 +328,20 @@ METHODS = [
         sweeps=(
             ("kernel_size", [3, 7, 9, 15, 31],
              "Window the focus energy is pooled over before the contrast-weighted "
-             "blend, which also sets how sharply the blend favours the in-focus "
-             "frame. The average blends rather than selects, so it trails Max on "
-             "a clean synthetic reference but recovers SNR in flat regions."),
+             "blend. Small follows fine detail but speckles on noise; large "
+             "is steadier but rounds off narrow in-focus regions."),
+            ("selectivity", [0, 25, 50, 75, 100],
+             "How sharply the blend favours the frame holding the detail. 0 is "
+             "the linear contrast weighting, which only selects while the stack "
+             "is short: a defocused frame still measures a fraction of the peak, "
+             "and a deep stack adds that fraction up hundreds of times until the "
+             "blend is the plain mean of everything and the result is veiled. "
+             "Higher trades the multi-frame noise reduction of regions that "
+             "genuinely have nothing to choose between for detail in the ones "
+             "that do."),
         ),
-        min_psnr=30.0,      # measured 39.6; blends rather than selects, so it
+        min_psnr=30.0,      # measured 39.6 at selectivity 0, 43.9 at the
+                            # default; blends rather than selects, so it still
                             # trails Max but recovers SNR in flat regions
     ),
     FusionMethod(
@@ -434,7 +443,9 @@ METHODS = [
         check=_needs_gpu("torch"), params={"kernel_size": 9, "halo_radius": 0},
         gpu=True,
         sweeps=(("kernel_size", [3, 7, 9, 15, 31],
-                 "Same dial as the CPU depth map."),),
+                 "Same dial as the CPU depth map."),
+                ("selectivity", [0, 25, 50, 75, 100],
+                 "Same dial as the CPU depth map.")),
         min_psnr=30.0,
     ),
     FusionMethod(

@@ -48,6 +48,11 @@ HALO_METHODS = {"depthmap_max", "depthmap_average"}
 # blend of the whole stack already, so neither dial has anything to act on.
 COHERENT_DEPTH_METHODS = {"depthmap_max"}
 
+# The selectivity dial shapes the contrast weighting the blend runs on, and
+# only the average blends: the hard select takes its pixel from one frame
+# whatever the weights look like.
+AVERAGE_SELECTIVITY_METHODS = {"depthmap_average"}
+
 _CONTRAST_NAMES = {"auto": "Auto", "clahe": "Local (CLAHE)"}
 _REFERENCE_NAMES = {"first": "First", "middle": "Middle", "last": "Last"}
 
@@ -159,6 +164,7 @@ def describe(
     kernel_size: Optional[int] = None,
     halo_radius: int = 0,
     depth_smoothing: Optional[int] = None,
+    average_selectivity: Optional[int] = None,
     ifcnn_refine: bool = False,
     align_scale: bool = False,
     align_homography: bool = False,
@@ -236,6 +242,9 @@ def describe(
         if algorithm in COHERENT_DEPTH_METHODS:
             options["DepthSmoothing"] = (
                 f"{int(depth_smoothing)}%" if depth_smoothing else _OFF)
+        if algorithm in AVERAGE_SELECTIVITY_METHODS:
+            options["AverageSelectivity"] = (
+                f"{int(average_selectivity)}%" if average_selectivity else _OFF)
         if algorithm == "stackmffv4" and stackmffv4_batch_size:
             # The batch halves itself when the card runs out of memory, so what
             # was asked for is not always what inferred the tiles.

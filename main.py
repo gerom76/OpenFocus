@@ -85,6 +85,7 @@ from constants import (
     KERNEL_SIZE_DEFAULT_GFG, KERNEL_SIZE_DEFAULT_DMAP,
     KERNEL_SIZE_DEFAULT_PYRAMID,
     DCT_PLATEAU_PRESETS,
+    AVERAGE_SELECTIVITY_DEFAULT,
     DEPTH_SMOOTHING_DEFAULT,
     PYRAMID_BASE_PRESETS, PYRAMID_COHERENCE_PRESETS,
     PYRAMID_LEVELS, PYRAMID_SELECTIVITY_PRESETS,
@@ -313,6 +314,9 @@ class OpenFocus(QMainWindow):
         self.slider_depth_smooth = right_panel_components.slider_depth_smooth
         self.lbl_depth_smooth_value = right_panel_components.depth_smooth_value_label
         self.coherent_widget = right_panel_components.coherent_widget
+        self.slider_avg_selectivity = right_panel_components.slider_avg_selectivity
+        self.lbl_avg_selectivity_value = right_panel_components.avg_selectivity_value_label
+        self.selectivity_widget = right_panel_components.selectivity_widget
         self.combo_dct_block = right_panel_components.combo_dct_block
         self.combo_dct_plateau = right_panel_components.combo_dct_plateau
         self.cb_dct_blend = right_panel_components.cb_dct_blend
@@ -552,6 +556,9 @@ class OpenFocus(QMainWindow):
         # Coherent-depth dial back to its default
         self.slider_depth_smooth.setValue(DEPTH_SMOOTHING_DEFAULT)
 
+        # Average selectivity back to its default
+        self.slider_avg_selectivity.setValue(AVERAGE_SELECTIVITY_DEFAULT)
+
         # Reset contrast to off (strength back to the 50% default)
         self.combo_contrast.setCurrentIndex(0)
         self.slider_contrast.setValue(50)
@@ -661,6 +668,12 @@ class OpenFocus(QMainWindow):
         self.lbl_depth_smooth_value.setText(
             trans.t('halo_off') if strength <= 0 else f"{strength}%")
 
+    def handle_avg_selectivity_slider_change(self, value):
+        """Update the average-selectivity display label; 0 reads as Off."""
+        strength = int(value)
+        self.lbl_avg_selectivity_value.setText(
+            trans.t('halo_off') if strength <= 0 else f"{strength}%")
+
     def _set_kernel_range(self, maximum):
         """Point the shared kernel slider at one method's usable range.
 
@@ -698,6 +711,11 @@ class OpenFocus(QMainWindow):
         # average blends the whole stack already. Same keep-the-value-while-
         # disabled behaviour as the halo slider above.
         self.coherent_widget.setEnabled(self.rb_dmap_max.isChecked())
+
+        # Selectivity shapes the weights the blend runs on, and only the average
+        # blends - the hard select takes its pixel from one frame whatever the
+        # weights look like. Same keep-the-value-while-disabled behaviour.
+        self.selectivity_widget.setEnabled(self.rb_dmap_avg.isChecked())
 
         # The DCT tuning block keeps its values while disabled, so switching
         # away and back does not forget them.
@@ -1348,6 +1366,7 @@ class OpenFocus(QMainWindow):
         c.lbl_kernel.setText(trans.t('label_kernel'))
         c.lbl_halo.setText(trans.t('label_halo'))
         c.lbl_depth_smooth.setText(trans.t('label_depth_smooth'))
+        c.lbl_avg_selectivity.setText(trans.t('label_avg_selectivity'))
         c.lbl_dct_block.setText(trans.t('label_dct_block'))
         c.lbl_dct_plateau.setText(trans.t('label_dct_plateau'))
         c.cb_dct_blend.setText(trans.t('label_dct_blend'))
@@ -1372,6 +1391,7 @@ class OpenFocus(QMainWindow):
 
         self.handle_halo_slider_change(self.slider_halo.value())
         self.handle_depth_smooth_slider_change(self.slider_depth_smooth.value())
+        self.handle_avg_selectivity_slider_change(self.slider_avg_selectivity.value())
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))
         c.btn_stop.setText(trans.t('btn_stop'))

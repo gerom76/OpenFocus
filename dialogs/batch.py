@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QCheckBox,
 )
-from constants import DEPTH_SMOOTHING_DEFAULT
+from constants import AVERAGE_SELECTIVITY_DEFAULT, DEPTH_SMOOTHING_DEFAULT
 from ui.styles import PRIMARY_BLUE
 from locales import trans
 from utils import dng, jxl, log_message_box, show_warning_box
@@ -821,6 +821,8 @@ class BatchProcessingDialog(QDialog):
                 fusion_method = "depthmap_average"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
                 fusion_params["halo_radius"] = _halo_radius_value()
+                fusion_params["average_selectivity"] = _slider_percent(
+                    "slider_avg_selectivity", AVERAGE_SELECTIVITY_DEFAULT)
             elif rb_d and rb_d.isChecked():
                 fusion_method = "stackmffv4"
         

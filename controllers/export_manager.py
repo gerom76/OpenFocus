@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 
 from constants import (
     DCT_BLOCK_SIZE_DEFAULT, DCT_PLATEAU_DEFAULT,
+    AVERAGE_SELECTIVITY_DEFAULT,
     DEPTH_SMOOTHING_DEFAULT,
     PYRAMID_BASE_DEFAULT, PYRAMID_COHERENCE_DEFAULT, PYRAMID_SELECTIVITY_DEFAULT,
 )
@@ -332,6 +333,23 @@ class ExportManager:
             return ""
         return "" if smoothing == DEPTH_SMOOTHING_DEFAULT else f"_ds{smoothing}"
 
+    def _selectivity_suffix(self) -> str:
+        """Return a '_sel<n>' suffix for the Depth Map (Avg) selectivity dial.
+
+        Same rule as the coherence dial above: named only when it differs from
+        the default, so the setting actually being varied keeps its place in the
+        filename.
+        """
+        window = self.window
+        if not window.rb_dmap_avg.isChecked():
+            return ""
+        try:
+            selectivity = int(window.slider_avg_selectivity.value())
+        except Exception:
+            return ""
+        return ("" if selectivity == AVERAGE_SELECTIVITY_DEFAULT
+                else f"_sel{selectivity}")
+
     def _fusion_suffix(self) -> str:
         """Describe the fusion stages in the name: method, kernel, refinement."""
         window = self.window
@@ -360,6 +378,7 @@ class ExportManager:
         fusion_method += self._pyramid_suffix()
         fusion_method += self._halo_suffix()
         fusion_method += self._coherent_suffix()
+        fusion_method += self._selectivity_suffix()
 
         # The IFCNN stage runs on top of the method above, so it reads as an addition
         if getattr(window, "cb_ifcnn", None) is not None and window.cb_ifcnn.isChecked():

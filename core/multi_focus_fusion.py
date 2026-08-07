@@ -303,6 +303,7 @@ class MultiFocusFusion:
                        kernel_size: Optional[int] = None,
                        halo_radius: Optional[int] = None,
                        depth_smoothing: Optional[int] = None,
+                       average_selectivity: Optional[int] = None,
                        **kwargs) -> np.ndarray:
         """
         Depth-map fusion (per-pixel select or contrast-weighted average).
@@ -316,6 +317,11 @@ class MultiFocusFusion:
             halo_radius: Halo-suppression radius in pixels; 0/None disables it
             depth_smoothing: Depth-map coherence strength, 0-100; 'max' only,
                              and 0 keeps the hard per-pixel select
+            average_selectivity: Focus-weight selectivity, 0-100; 'average'
+                         only, and 0 keeps the linear contrast weighting.
+                         Spelled out rather than 'selectivity' because the
+                         pyramid method already claims that key in the shared
+                         kwargs the dispatcher forwards.
 
         Returns:
             Fused image
@@ -326,7 +332,8 @@ class MultiFocusFusion:
                 return depthmap_torch_impl(input_source, img_resize, mode=mode,
                                            kernel_size=kernel_size,
                                            halo_radius=halo_radius,
-                                           depth_smoothing=depth_smoothing)
+                                           depth_smoothing=depth_smoothing,
+                                           selectivity=average_selectivity)
             except Exception as exc:
                 print(f"Warning: GPU depth-map fusion failed ({exc}); falling back to CPU.")
                 try:
@@ -340,7 +347,8 @@ class MultiFocusFusion:
         return depthmap_impl(input_source, img_resize, mode=mode,
                              kernel_size=kernel_size, thread_count=thread_count,
                              halo_radius=halo_radius,
-                             depth_smoothing=depth_smoothing)
+                             depth_smoothing=depth_smoothing,
+                             selectivity=average_selectivity)
 
     def _validate_dct_environment(self) -> None:
         """Validate DCT fusion dependencies."""

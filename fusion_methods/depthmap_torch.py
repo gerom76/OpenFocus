@@ -42,6 +42,8 @@ from fusion_methods import torch_depth
 from fusion_methods.depthmap import (
     BLEND_WIDTH_FLOOR,
     DEFAULT_DEPTH_SMOOTHING,
+    DEFAULT_SELECTIVITY,
+    ENERGY_PROBE_FRAMES,
     MEASURE_BLUR_KSIZE,
     MEASURE_SIGMA,
     MODE_AVERAGE,
@@ -51,10 +53,12 @@ from fusion_methods.depthmap import (
     _index_dtype,
     _near_window,
     _coherent_depth,
+    _probe_indices,
     _regularise_index,
     _resolve_halo_radius,
     _resolve_kernel,
     _resolve_percent,
+    _selectivity_exponent,
     _trust_map,
 )
 from fusion_methods.gff_torch import _load_stack
@@ -349,7 +353,7 @@ def _resolve_device(device):
 
 
 def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
-                    channels, img_resize, smoothing=0):
+                    channels, img_resize, smoothing=0, exponent=1.0):
     """One full pass over the stack on `dev`, returning a (C, H, W) tensor."""
     coherent = mode == MODE_MAX and smoothing > 0
     lap_kernel = _laplacian_kernel(channels, dev)
@@ -411,17 +415,34 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
 
         return _repair_index(stack, fused, index, count, chunk, upload)
 
-    # MODE_AVERAGE: the contrast-weighted sum, the weight sum and a plain sum,
-    # blended once the stack's mean energy - and with it the baseline weight
-    # that makes flat regions average - is known.
+    # MODE_AVERAGE: blend the frames by w = ((E + baseline) / scale) ** exponent,
+    # the energy scale first estimated from a handful of probe frames. See the
+    # block above DEFAULT_SELECTIVITY in depthmap.py for what the exponent is
+    # undoing and why the scale cannot be recovered after the fact any more.
+    probes = _probe_indices(count, ENERGY_PROBE_FRAMES)
+    probe_mean = 0.0
+    for start in range(0, len(probes), chunk):
+        window_probes = probes[start:start + chunk]
+        batch = upload([stack[i] for i in window_probes])
+        probe_mean += float(measure(batch).sum()) / (len(probes) * rows * cols)
+        del batch
+    scale = max(probe_mean, _WEIGHT_FLOOR)
+    baseline = scale * _BASELINE_FRACTION
+
     weighted = torch.zeros((channels, rows, cols), device=dev)
-    plain = torch.zeros((channels, rows, cols), device=dev)
     weight_sum = torch.zeros((rows, cols), device=dev)
 
     for start in range(0, count, chunk):
         batch = upload(stack[start:start + chunk])
         energy = measure(batch)
-        plain += batch.sum(dim=0)
+        # Folded in place: the energy is this iteration's own measurement, so
+        # the whole weight is built where it already sits. torch's pow is a
+        # device kernel either way, so the CPU path's squaring chain buys
+        # nothing here and the exponent is taken directly.
+        energy += baseline
+        energy /= scale
+        if exponent != 1.0:
+            energy.pow_(exponent)
         weight_sum += energy.sum(dim=(0, 1))
         # The chunk is this iteration's own upload and is dead after the
         # weighting, so it doubles as the scratch - `(batch * energy).sum(0)`
@@ -430,20 +451,16 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
         weighted += batch.sum(dim=0)
         del batch, energy
 
-    mean_energy = float(weight_sum.sum()) / max(1, count * rows * cols)
-    baseline = max(mean_energy * _BASELINE_FRACTION, _WEIGHT_FLOOR)
-
-    plain *= baseline
-    weighted += plain
-    del plain
-    weight_sum += baseline * count
+    # Every weight is at least (baseline / scale) ** exponent, so the sum is
+    # positive everywhere and needs no floor of its own.
     weighted /= weight_sum.unsqueeze(0)
     return weighted
 
 
 def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
                         kernel_size=None, halo_radius=None, device=None,
-                        chunk_size=None, depth_smoothing=None):
+                        chunk_size=None, depth_smoothing=None,
+                        selectivity=None):
     """
     Depth-map fusion on a torch device.
 
@@ -457,6 +474,7 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         device: 'cuda', 'mps', 'cpu', or None to auto-select a GPU
         chunk_size: Frames per device batch; None sizes it from free VRAM
         depth_smoothing: Depth-map coherence strength, 0-100 (MODE_MAX)
+        selectivity: Focus-weight selectivity, 0-100 (MODE_AVERAGE)
 
     Every dial means what it means on the CPU path; see
     fusion_methods/depthmap.py for what each one is for.
@@ -472,6 +490,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
     window = _resolve_kernel(kernel_size)
     radius = _resolve_halo_radius(halo_radius)
     smoothing = _resolve_percent(depth_smoothing, DEFAULT_DEPTH_SMOOTHING)
+    exponent = _selectivity_exponent(
+        _resolve_percent(selectivity, DEFAULT_SELECTIVITY))
 
     stack_ori = _load_stack(input_source)
     if not stack_ori:
@@ -509,7 +529,7 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
             with torch.no_grad():
                 fused = _fuse_on_device(stack_ori, mode, window, radius, dev,
                                         chunk, rows, cols, channels, img_resize,
-                                        smoothing)
+                                        smoothing, exponent)
             break
         except torch.cuda.OutOfMemoryError:
             # Sizing from free VRAM can still be beaten by another process
