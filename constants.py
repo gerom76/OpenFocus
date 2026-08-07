@@ -162,3 +162,35 @@ DEPTH_SMOOTHING_DEFAULT = 50
 # choose between for detail in the regions that do.
 AVERAGE_SELECTIVITY_DEFAULT = 50
 
+# --- Depth Map halo-suppression ceiling ------------------------------------
+# The halo dial fills the band around a sharply focused region with that frame's
+# defocused pixels. Where there really was a glow that is the trade it is sold
+# on; where there was not, it is just a band of defocus - and the focus measure
+# cannot tell the two apart, because the energy being spread is real either way.
+# So the dial does it around *every* contour in the frame, and the result reads
+# as soft blobs roughly 2r across hugging every edge, every dust speck and every
+# silhouette.
+#
+# That cost scales with the radius and nothing else, which is what makes a
+# ceiling the place to draw the line. Measured on the reference ant stack at
+# kernel 5, share of the frame moved by more than 8 levels against the same
+# render with the dial off: r=2 8.5%, r=5 18.3%, r=9 24.8%, r=15 29.9% - clean,
+# faint, obvious, bad. Nothing about the scene changed; only the radius did.
+#
+# Tied to the kernel because the radius is a claim on ground the measurement has
+# to be able to speak for, and a pooling window of side k is what decides how far
+# that is. This is the module's own long-standing advice - "keep the radius well
+# under the kernel size", in the block above DEFAULT_HALO_RADIUS - turned into a
+# range the UI enforces instead of a sentence in a comment.
+#
+# The engine is deliberately left permissive: this bounds the slider, not
+# depthmap_impl, so a scripted caller with a genuinely wide glow to fight can
+# still ask for more (tests/test_depthmap_halo.py needs r=8 at k=9 on a fixture
+# blurred by 31 px, which is exactly that case).
+HALO_RADIUS_MAX = 30
+
+
+def halo_radius_ceiling(kernel_size: int) -> int:
+    """Largest halo radius the UI offers at this pooling window."""
+    return max(0, min(HALO_RADIUS_MAX, int(kernel_size)))
+

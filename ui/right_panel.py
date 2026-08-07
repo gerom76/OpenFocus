@@ -28,6 +28,7 @@ from constants import (
     DCT_PLATEAU_DEFAULT,
     DCT_PLATEAU_PRESETS,
     AVERAGE_SELECTIVITY_DEFAULT,
+    HALO_RADIUS_MAX,
     DEPTH_SMOOTHING_DEFAULT,
     KERNEL_SIZE_MAX_DCT,
     PYRAMID_BASE_DEFAULT,
@@ -253,7 +254,7 @@ def create_right_panel() -> RightPanelComponents:
     lbl_halo_value = QLabel(trans.t('halo_off'))
     halo_top.addWidget(lbl_halo_value)
     slider_halo = QSlider(Qt.Orientation.Horizontal)
-    slider_halo.setRange(0, 30)
+    slider_halo.setRange(0, HALO_RADIUS_MAX)
     slider_halo.setSingleStep(1)
     slider_halo.setPageStep(2)
     slider_halo.setValue(0)

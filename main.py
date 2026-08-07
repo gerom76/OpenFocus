@@ -86,6 +86,8 @@ from constants import (
     KERNEL_SIZE_DEFAULT_PYRAMID,
     DCT_PLATEAU_PRESETS,
     AVERAGE_SELECTIVITY_DEFAULT,
+    HALO_RADIUS_MAX,
+    halo_radius_ceiling,
     DEPTH_SMOOTHING_DEFAULT,
     PYRAMID_BASE_PRESETS, PYRAMID_COHERENCE_PRESETS,
     PYRAMID_LEVELS, PYRAMID_SELECTIVITY_PRESETS,
@@ -653,6 +655,27 @@ class OpenFocus(QMainWindow):
             self.slider_smooth.blockSignals(False)
 
         self.lbl_smooth_value.setText(str(adjusted))
+        self._set_halo_range(adjusted)
+
+    def _set_halo_range(self, kernel_size):
+        """Hold the halo radius inside what the pooling window can justify.
+
+        A radius past the window's own half-width stops suppressing haloes and
+        starts filling a band around every contour in the frame with defocused
+        pixels - see halo_radius_ceiling. The measure cannot tell a glow it
+        should fight from an edge it should leave alone, so the ceiling is where
+        the distinction has to be made. Same behaviour as the kernel slider's
+        own re-ranging: a value above the new ceiling comes down to meet it.
+        """
+        ceiling = halo_radius_ceiling(kernel_size)
+        if self.slider_halo.maximum() == ceiling:
+            return
+        current = self.slider_halo.value()
+        self.slider_halo.blockSignals(True)
+        self.slider_halo.setMaximum(ceiling)
+        self.slider_halo.setValue(min(current, ceiling))
+        self.slider_halo.blockSignals(False)
+        self.handle_halo_slider_change(self.slider_halo.value())
 
     def handle_halo_slider_change(self, value):
         """Update the halo-radius display label; 0 reads as Off."""
@@ -716,6 +739,13 @@ class OpenFocus(QMainWindow):
         # blends - the hard select takes its pixel from one frame whatever the
         # weights look like. Same keep-the-value-while-disabled behaviour.
         self.selectivity_widget.setEnabled(self.rb_dmap_avg.isChecked())
+
+        # The halo ceiling follows the kernel, and the kernel can change with
+        # the method. Done here as well as from the kernel handler because
+        # _set_kernel_range short-circuits when the ceiling is already right,
+        # which leaves the handler unrun on a switch between two methods that
+        # share one.
+        self._set_halo_range(self.slider_smooth.value())
 
         # The DCT tuning block keeps its values while disabled, so switching
         # away and back does not forget them.

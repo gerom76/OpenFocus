@@ -58,8 +58,9 @@ mitigation shipped but the underlying issue remains.
 | 22 | Depth Map | Quality | The argmax has no spatial prior, so a region nothing resolves tears into confetti - *fixed in 1.34.0* | High | Low | 100% |
 | 23 | Depth Map (Max) | Quality | Still hard-selects where the measurement supports no selection, leaving item 22's confetti as coarse patches - *fixed in 1.35.0, corrected in 1.36.0* | High | Medium | 100% |
 | 24 | Depth Map (Average) | Quality | Linear contrast weighting stops selecting as the stack deepens, so the blend collapses into the plain mean of every frame and hazes over - *fixed in 1.37.0* | High | Low | 100% |
+| 25 | Depth Map | Quality | Halo radius unbounded by the pooling window, so a radius meant for a wide kernel fills a band around every contour with defocus - *ranged in 1.37.0* | Medium | Trivial | 100% |
 
-**Overall: 88% done** - 21 of 24 items fully fixed, item 8 partially (the GPU
+**Overall: 88% done** - 22 of 25 items fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
 pairwise fold was not what made it grow), 2 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
@@ -2031,6 +2032,37 @@ reduction sheds a whole float32 frame - the plain-sum accumulator the deferred
 baseline needed is gone - and each in-flight measurement task gains two
 single-channel planes for the squaring, which `_worker_bytes` now charges for so
 the pool still sizes itself against what it actually holds.
+
+### What it uncovered in the halo dial
+
+The blend finally selecting made a second thing visible that had been there all
+along. Halo suppression fills the band around a sharply focused region with that
+frame's defocused pixels; where there was a glow that is the trade it is sold
+on, and where there was not it is just a band of defocus - and the focus measure
+cannot tell the two apart, so it does it around every contour in the frame. The
+old linear blend averaged the result into mush, and mush hid it.
+
+On the reference ant stack at kernel 5, share of the frame moved by more than 8
+levels against the same render with the dial off:
+
+| Radius | 2 | 5 | 9 | 15 |
+|---|---|---|---|---|
+| Frame affected | 8.5% | 18.3% | 24.8% | **29.9%** |
+
+Clean, faint, obvious, bad - with nothing changing but the radius. MODE_MAX has
+the same blobs at the same radii and always has; `depth_smoothing`'s low-pass
+partly covers for them there, and MODE_AVERAGE has no equivalent stage.
+
+This is the dial behaving as documented rather than a defect - `depthmap.py`
+has said since 1.33.0 that it "does not remove a ring, it fills one with
+defocused pixels, and it does so whether or not there was a glow to fight" - so
+the response is a range rather than an algorithm change. The halo slider's
+ceiling now follows the kernel (`constants.halo_radius_ceiling`), turning the
+module's own "keep the radius well under the kernel size" from a sentence in a
+comment into something the UI enforces, and bringing a radius dialled in at a
+wide kernel down when the kernel narrows. The engine is left permissive: a
+scripted caller with a genuinely wide glow can still ask for more, which is what
+`tests/test_depthmap_halo.py` needs at r=8 on a fixture blurred by 31 px.
 
 **Guarded by** `tests/test_depthmap_selectivity.py` - both halves of the bargain
 (detail recovered on a deep stack, flat regions still averaged and still far

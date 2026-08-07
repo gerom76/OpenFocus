@@ -147,3 +147,44 @@ def test_output_shape_and_dtype(scene):
                           halo_radius=6)
     assert fused.shape == stack[0].shape
     assert fused.dtype == np.uint8
+
+
+# --------------------------------------------------------------------------
+# The radius the UI is willing to offer
+# --------------------------------------------------------------------------
+# The dial's cost scales with the radius and nothing else: it fills a band
+# around every contour in the frame with defocused pixels, and the focus measure
+# cannot tell a contour that needed it from one that did not. On the reference
+# ant stack at kernel 5 that moved 8.5% of the frame at r=2 and 29.9% at r=15.
+# So the slider is bounded by the pooling window, which is the only thing that
+# says how far a claim can be justified - see constants.halo_radius_ceiling.
+# The engine stays permissive; only the UI is bounded.
+
+def test_ceiling_follows_the_pooling_window():
+    from constants import HALO_RADIUS_MAX, halo_radius_ceiling
+    assert halo_radius_ceiling(5) == 5
+    assert halo_radius_ceiling(9) == 9
+    # Never past the slider's own ceiling, however wide the window gets.
+    assert halo_radius_ceiling(51) == HALO_RADIUS_MAX
+    # A window that does not pool at all can justify no claim.
+    assert halo_radius_ceiling(1) == 1
+    assert halo_radius_ceiling(0) == 0
+
+
+def test_the_engine_is_not_bounded_by_it():
+    """A scripted caller with a genuinely wide glow must still be able to ask.
+
+    This file's own fixture is exactly that case: blurred by 31 px, and it takes
+    r=8 at k=9 to cover the spill - a pair the UI ceiling happens to allow, but
+    the point is that the engine never consults it.
+    """
+    from fusion_methods.depthmap import _resolve_halo_radius
+    assert _resolve_halo_radius(30) == 30
+
+
+# The slider wiring that applies this ceiling - `OpenFocus._set_halo_range`,
+# called from the kernel handler and from update_slider_availability - is not
+# covered here. Constructing the real main window in-process takes Qt down hard
+# enough at interpreter exit to swallow pytest's own summary and everything
+# scheduled after it, and a window is the only thing that exercises the wiring.
+# What is testable without one is the rule it applies, above.
