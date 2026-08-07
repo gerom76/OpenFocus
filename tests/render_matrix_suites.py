@@ -153,6 +153,54 @@ def depthmap_average_coherence() -> Plan:
     )
 
 
+def depthmap_average_slices() -> Plan:
+    """Depth Map (Average): the frame axis, against the spatial one.
+
+    The follow-up to `depthmap_average_coherence`, and the answer to what that
+    run could not reach. Its residual against the Helicon render was the same
+    tilt at every one of its 32 settings - the quiet fifths of the frame could be
+    brought onto Helicon's level and the busy ones would not move below 1.18 -
+    because the spatial filter is edge-aware and so declines to act in exactly
+    the regions those fifths are made of.
+
+    `slice_radius` acts on the axis that is left. The two are swept together
+    rather than one after the other because they trade: the spatial radius moves
+    the whole curve, the slice radius pulls its busy end down hardest, and it is
+    the pair that levels it. Selectivity is pinned at 100 - with both stages
+    supplying the coherence there is no longer a reason to blunt the selection
+    to buy it, and the previous run put every one of its best rows at 100 or 50
+    with nothing between them.
+
+    Radius 0 rows on either axis are the controls.
+    """
+    variants = _grid(
+        "depthmap_average",
+        kernel_size=[9, 25],
+        average_selectivity=[100],
+        coherence_radius=[13, 16],
+        # 4-5 is half the half-maximum width of this stack's focus curve, which
+        # is what the dial should be set from; 0 and 8 bracket it either side.
+        slice_radius=[0, 4, 5, 8],
+    )
+
+    return Plan(
+        stack=StackSpec(source=ELECTRONICS_ANT),
+        destination=WORK,
+        reference=HELICON_A30,
+        suites=[Suite(
+            name="Depth Map (Average) - slice coherence x spatial coherence",
+            fusion="depthmap_average",
+            registration=ECC_HOMOGRAPHY,
+            variants=variants,
+            note="`slice_radius` averages different frames into one pixel, so "
+                 "unlike every other dial here it needs the stack registered - "
+                 "which it is in this run, and is not in samples/. Both stages "
+                 "share one extra pass over the stack, so having both on costs "
+                 "no more than having either.",
+        )],
+    )
+
+
 def depthmap_average_halo() -> Plan:
     """Depth Map (Average): halo radius against kernel, at high selectivity.
 
@@ -253,6 +301,7 @@ def depthmap_modes() -> Plan:
 SUITES = {
     "depthmap_average": depthmap_average,
     "depthmap_average_coherence": depthmap_average_coherence,
+    "depthmap_average_slices": depthmap_average_slices,
     "depthmap_average_halo": depthmap_average_halo,
     "depthmap_max": depthmap_max,
     "depthmap_modes": depthmap_modes,

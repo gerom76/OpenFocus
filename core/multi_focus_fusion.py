@@ -305,6 +305,7 @@ class MultiFocusFusion:
                        depth_smoothing: Optional[int] = None,
                        average_selectivity: Optional[int] = None,
                        coherence_radius: Optional[int] = None,
+                       slice_radius: Optional[int] = None,
                        **kwargs) -> np.ndarray:
         """
         Depth-map fusion (per-pixel select or contrast-weighted average).
@@ -326,6 +327,9 @@ class MultiFocusFusion:
             coherence_radius: Weight-coherence radius in pixels; 'average'
                          only, and 0 disables it. Costs a second measurement
                          pass over the stack when it is on.
+            slice_radius: Weight-coherence radius in frames; 'average' only, and
+                         0 disables it. Shares the second pass with
+                         `coherence_radius`.
 
         Returns:
             Fused image
@@ -338,7 +342,8 @@ class MultiFocusFusion:
                                            halo_radius=halo_radius,
                                            depth_smoothing=depth_smoothing,
                                            selectivity=average_selectivity,
-                                           coherence_radius=coherence_radius)
+                                           coherence_radius=coherence_radius,
+                                           slice_radius=slice_radius)
             except Exception as exc:
                 print(f"Warning: GPU depth-map fusion failed ({exc}); falling back to CPU.")
                 try:
@@ -354,7 +359,8 @@ class MultiFocusFusion:
                              halo_radius=halo_radius,
                              depth_smoothing=depth_smoothing,
                              selectivity=average_selectivity,
-                             coherence_radius=coherence_radius)
+                             coherence_radius=coherence_radius,
+                             slice_radius=slice_radius)
 
     def _validate_dct_environment(self) -> None:
         """Validate DCT fusion dependencies."""

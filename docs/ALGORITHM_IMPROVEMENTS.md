@@ -2207,6 +2207,94 @@ misalignment rather than fusion.
 
 ---
 
+## 26. Depth Map (Average) has no coherence along the frame axis
+
+**Method:** Depth Map (Average) | **Category:** Quality | **Impact:** Medium |
+**Effort:** Medium | **Fixed in 1.39.0**
+
+Item 25's filter is edge-aware by design, which is what stops it costing detail -
+and is also its ceiling. In exactly the regions that hold detail it follows the
+guide and leaves the blend alone, so those pixels are still rendered from about
+one frame. Measured against Helicon Focus method A radius 30, in fifths of the
+frame ordered by how much detail *it* found there, the residual is the same
+shape at every one of the 32 settings that sweep tried:
+
+| quintile | 1 | 2 | 3 | 4 | 5 |
+|---|---:|---:|---:|---:|---:|
+| best spatial setting (k25, sel 100, r 24) | 0.91 | 0.94 | 0.98 | 1.14 | 1.20 |
+
+The quiet end can be put on Helicon's level and the busy end will not move - no
+kernel, selectivity or radius brought quintile 5 below **1.18**. That is not a
+tuning miss; it is the filter declining to act where it was told not to.
+
+**Fix.** Pool each pixel's share of the blend over `slice_radius` slices either
+side, before the spatial filter runs.
+
+The frame axis is where the headroom was. This capture oversamples its own depth
+of field about sevenfold - a real focus peak is 7 frames wide at half maximum,
+and adjacent frames agree on the fine detail at a correlation of **0.92** - so
+the frames around the winner resolve the pixel almost as well and differ mostly
+in their grain. Averaging across that band divides the grain by roughly the
+square root of the count at no cost in spatial resolution, which is the one thing
+a spatial filter cannot offer.
+
+The two compose, and they trade: the spatial radius moves the whole curve, the
+slice radius pulls its busy end down hardest, and the pair levels it.
+
+| Setting | RefGap | RefAgree | band 1..5 |
+|---|---:|---:|---|
+| k9 sel50 coh16 (item 25's best) | 0.157 | 0.9743 | 0.82 0.94 1.05 1.20 1.23 |
+| k9 sel100 coh16 slice4 | 0.055 | 0.9736 | 0.91 0.98 1.00 1.06 1.06 |
+| k9 sel100 coh13 slice5 | 0.029 | 0.9700 | 0.96 1.02 1.03 1.04 1.00 |
+| **k25 sel100 coh16 slice5** | **0.016** | 0.9703 | 0.97 1.00 0.99 1.01 0.98 |
+
+0.016 is within 3% of Helicon's own fine-detail energy in every fifth of the
+frame. Agreement gives up 0.004 against item 25's best to get there, and stays
+well clear of everything reachable before either stage existed (0.945-0.963).
+
+The wide kernel winning is itself the point: with both stages supplying the
+coherence, kernel 25 is free to be the more stable focus measure instead of
+being the only way to get a clean render.
+
+**It costs a pass and a half.** Both stages share the second measurement pass, so
+having both on costs no more than either - but the spatial filter now runs in the
+serial reduction rather than the measurement pool, because it has to follow the
+slice pooling and that needs the neighbouring frames. On the 333-frame capture at
+1.7 MP: 5.6 s unfiltered, 10.3 s with the spatial filter alone, **23.7 s** with
+both.
+
+**Off by default, and it depends on the registration.** Everything else in the
+module re-mixes decisions *within* a frame; this averages different frames into
+one pixel, so it is only free while they agree on where that pixel is:
+
+| | registered | as captured |
+|---|---|---|
+| 111 frames, radius 1 | RefGap 0.160 -> **0.050** | detail recovered 1.16 -> **0.83** |
+
+The value also follows the sampling rather than the stack - the same capture at
+every third frame wants 1, not 5 - and overshooting is not subtle: at 8 slices
+the whole curve drops to 0.77-0.81.
+
+**Guarded by** `tests/test_depthmap_coherence.py` - 0 reproducing the unpooled
+blend byte for byte, MODE_MAX indifferent, the radius clamped inside the stack,
+the ring covering both ends of the stack on its shrinking window, the two stages
+composing inside the envelope of the frames they blended, and the registration
+dependence pinned on the unregistered capture. CPU/GPU parity in
+`tests/test_depthmap_gpu.py`, where the device path buffers shares by frame index
+so the window can straddle a chunk boundary.
+
+**Why the claim is not made on a rendered stack.** Two things must hold at once
+before this dial has anything to do: the blend must be concentrating on one
+frame, and that frame's neighbours must carry nearly - but not exactly - the same
+detail. Every fixture that can be built here fails one. A stack whose frames are
+identical within a focus band measures the same energy across it, so the weights
+are already equal and the blend already averages (36.7 dB at radius 0 against
+34.4 at radius 1, all of it boundary spill). One with a smooth focus ramp has too
+few frames for the exponent to concentrate at all. What produces the regime is a
+deep sweep of real defocus, which is a capture and not a fixture.
+
+---
+
 ## Tuning Pyramid
 
 Everything item 19 added is exposed, because every one of them is a judgement

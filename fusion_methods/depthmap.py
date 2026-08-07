@@ -1,3 +1,4 @@
+import collections
 import functools
 import os
 import glob
@@ -323,6 +324,59 @@ _WEIGHT_FLOOR = 1e-8
 # it should be reached for in.
 DEFAULT_COHERENCE_RADIUS = 0
 
+# ---------------------------------------------------------------------------
+# Slice coherence
+# ---------------------------------------------------------------------------
+# The other axis, and the one nothing above can reach.
+#
+# The filter over DEFAULT_COHERENCE_RADIUS is edge-aware by design, so in exactly
+# the regions that hold detail it follows the guide and leaves the blend alone -
+# and those pixels are still rendered from about one frame. Measured against
+# Helicon Focus method A radius 30, in fifths of the frame ordered by how much
+# detail *it* found there, the residual after the spatial filter is the same
+# shape at every setting the sweep tried:
+#
+#     quintile          1     2     3     4     5
+#     best spatial   0.91  0.94  0.98  1.14  1.20   (kernel 25, sel 100, r 24)
+#
+# The quiet end can be pushed onto Helicon's level and the busy end will not
+# move: no kernel, selectivity or radius in a 32-render sweep brought quintile 5
+# below 1.18. That is not a tuning miss, it is the spatial filter declining to
+# act where it was told not to.
+#
+# The frame axis is untouched and is where the headroom is. This stack
+# oversamples its own depth of field about sevenfold - a real focus peak is 7
+# frames wide at half maximum, and adjacent frames agree on the fine detail at a
+# correlation of 0.92 - so the frames either side of the winner resolve the pixel
+# almost as well and differ mostly in their grain. Averaging a pixel's weight
+# across that band divides the grain by roughly the square root of the count and
+# costs no spatial resolution whatsoever, which is the one thing no spatial
+# filter can offer.
+#
+# So: pool each pixel's share of the blend over this many slices either side,
+# before the spatial filter runs. With the two together the residual flattens -
+# 0.91 0.98 1.00 1.06 1.06 - and the distance from Helicon falls from 0.155 to
+# 0.055 while tile agreement holds at 0.974.
+#
+# The right value follows the stack's sampling and not the scene: it is about
+# half the half-maximum width of the focus curve, so 4-5 slices on a sweep this
+# dense and 0 on a stack that steps a full depth of field per frame, where the
+# neighbouring slices are the ones that resolve the pixel *worst* and averaging
+# them is the veiling BLEND_WIDTH_FLOOR exists to refuse. It tracks the sampling
+# rather than the stack: the same capture at every third frame wants 1, not 5.
+# Overshooting is not subtle - at 8 slices the whole curve drops to 0.77-0.81 and
+# agreement falls with it - so this is dialled to the capture rather than left on.
+#
+# And it is the one stage here that depends on the registration. Everything else
+# in this module re-mixes decisions *within* a frame; this averages different
+# frames into one pixel, so it is only free while they agree on where that pixel
+# is. On the registered ant stack it takes the distance from Helicon from 0.160
+# to 0.050 at 111 frames; on the same capture unregistered it collapses the
+# recovered contrast to 0.49 of the reference's, because it is averaging a
+# subject that moved between the frames it is averaging. A stack that has not
+# been through registration should leave this at 0.
+DEFAULT_SLICE_RADIUS = 0
+
 # Regularisation of that filter, on the guide's own [0, 1] scale. It sets how
 # much local contrast a frame must have before its share is allowed to follow
 # it: below roughly sqrt(eps) in local standard deviation the filter degrades to
@@ -452,6 +506,22 @@ def _resolve_coherence_radius(radius):
         return max(0, int(radius))
     except (TypeError, ValueError):
         return DEFAULT_COHERENCE_RADIUS
+
+
+def _resolve_slice_radius(radius, count):
+    """Coerce the slice-pooling radius, and keep it inside the stack.
+
+    A radius that reaches past both ends of the stack pools every frame into
+    every pixel, which is the plain mean - reachable already, and not what
+    somebody asking for slice coherence meant.
+    """
+    if radius is None:
+        radius = DEFAULT_SLICE_RADIUS
+    try:
+        radius = max(0, int(radius))
+    except (TypeError, ValueError):
+        radius = DEFAULT_SLICE_RADIUS
+    return min(radius, max(0, (count - 1) // 2))
 
 
 def _guide_of(img):
@@ -877,7 +947,7 @@ def _gather_blended(load_float, count, depth, out_dtype, rows, cols):
 def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
                   kernel_size=None, thread_count=None, halo_radius=None,
                   depth_smoothing=None, selectivity=None,
-                  coherence_radius=None):
+                  coherence_radius=None, slice_radius=None):
     """Depth-map multi-focus fusion (per-pixel select or contrast-weighted avg).
 
     A local Laplacian-energy focus measure is computed for every frame. In
@@ -912,8 +982,17 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     gathered, so neighbouring pixels can no longer draw the same smooth surface
     from frames eight slices apart. 0 disables it and reproduces the unfiltered
     blend exactly. It costs a second measurement pass over the stack - the total
-    has to be known before a share can be formed - so it is the one dial here
-    that changes what the mode costs; see DEFAULT_COHERENCE_RADIUS.
+    has to be known before a share can be formed - so it is one of the two dials
+    here that change what the mode costs; see DEFAULT_COHERENCE_RADIUS.
+
+    `slice_radius` (slices, MODE_AVERAGE only) is the same idea along the frame
+    axis, and reaches what the spatial filter by design cannot: it pools each
+    pixel's share over this many slices either side before that filter runs, so
+    a stack which oversamples its own depth of field averages the frames that
+    resolve a pixel equally well and divides their grain at no cost in spatial
+    resolution. 0 disables it. It shares the second pass with `coherence_radius`,
+    so both on cost no more than either alone. See DEFAULT_SLICE_RADIUS for how
+    to pick it - it follows the stack's focus sampling, not the scene.
 
     The stack's own depth is preserved end to end: an 8-bit stack returns
     uint8, a 16-bit stack returns uint16.
@@ -934,6 +1013,7 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     # only form each can carry it.
     coherence = (_resolve_coherence_radius(coherence_radius)
                  if mode == MODE_AVERAGE else 0)
+    slices = 0      # resolved once the stack is loaded and its depth is known
 
     # ---------- Data loading ----------
     if isinstance(input_source, str):
@@ -960,6 +1040,8 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     out_dtype = bitdepth.stack_dtype(stack_ori)
     num_images = len(stack_ori)
     channels = stack_ori[0].shape[2] if stack_ori[0].ndim == 3 else 1
+    if mode == MODE_AVERAGE:
+        slices = _resolve_slice_radius(slice_radius, num_images)
 
     if img_resize:
         cols, rows = int(img_resize[0]), int(img_resize[1])
@@ -1004,10 +1086,11 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
         energy /= scale
         return _powered(energy, exponent) if exponent != 1.0 else energy
 
-    def measure_energy_weight(k, baseline, scale, exponent):
+    def measure_energy_weight(k, baseline, scale, exponent, total=None):
         """The MODE_AVERAGE weight of frame k, without keeping the frame.
 
-        The totalling pass the coherence filter needs. It differs from
+        The totalling pass both coherence stages need, and - once `total` is
+        known - the share pass slice pooling reduces over. It differs from
         `measure_weight` only in not holding the pixels: nothing downstream of
         the total wants them, and at this depth a stack of frames left alive
         until the reduction consumes them is what the memory bound is about.
@@ -1015,7 +1098,10 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
         energy = _focus_energy(load_float(k), window)
         if halo_element is not None:
             energy = cv2.dilate(energy, halo_element)
-        return _weigh(energy, baseline, scale, exponent)
+        weight = _weigh(energy, baseline, scale, exponent)
+        if total is not None:
+            weight /= total
+        return weight
 
     def measure_weight(k, baseline, scale, exponent, total=None):
         """Frame k and the MODE_AVERAGE weight it carries, w = ((E+b)/s)**p.
@@ -1132,16 +1218,16 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     baseline = scale * _BASELINE_FRACTION
     exponent = _selectivity_exponent(selectivity)
 
-    if coherence:
-        # The filter has to run on each frame's *share* of the blend rather than
-        # on its raw weight, which means the total has to be known before any
-        # frame can be filtered - so the stack is measured twice. Shares are the
-        # only form the smoothing is well behaved on: they are bounded in [0, 1]
-        # and sum to 1, so filtering them re-mixes a decision, whereas the raw
-        # weight is an eighth power of an energy ratio spanning three decades and
-        # a filter over it would simply propagate the largest value in the
-        # window. It is also what keeps one region's frame choice from bleeding
-        # into a neighbouring region that weighed far less.
+    if coherence or slices:
+        # Both stages run on each frame's *share* of the blend rather than on its
+        # raw weight, which means the total has to be known before any frame can
+        # be touched - so the stack is measured twice. Shares are the only form
+        # either is well behaved on: they are bounded in [0, 1] and sum to 1, so
+        # working on them re-mixes a decision, whereas the raw weight is an
+        # eighth power of an energy ratio spanning three decades and a filter
+        # over it would simply propagate the largest value in the window. It is
+        # also what keeps one region's frame choice from bleeding into a
+        # neighbouring region that weighed far less.
         weight_total = np.zeros((rows, cols), dtype=np.float32)
         for _, weight in _map_in_order(
                 functools.partial(measure_energy_weight, baseline=baseline,
@@ -1157,12 +1243,16 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     else:
         weight_total = None
 
-    weigh = functools.partial(measure_weight, baseline=baseline, scale=scale,
-                              exponent=exponent, total=weight_total)
-
     weighted = None
     weight_sum = np.zeros((rows, cols), dtype=np.float32)
-    for _, (img, weight) in _map_in_order(weigh, num_images, max_workers):
+
+    def accumulate(img, weight):
+        """Fold one frame into the blend at the weight it ended up with.
+
+        `weight_sum` is only ever added into, but `+=` still binds a name, so it
+        has to be declared alongside the accumulator that genuinely is rebound.
+        """
+        nonlocal weighted, weight_sum
         if weighted is None:
             weighted = np.zeros_like(img)
         # The frame is this iteration's own buffer and is dead after the
@@ -1171,7 +1261,61 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
         img *= weight[:, :, np.newaxis] if img.ndim == 3 else weight
         weighted += img
         weight_sum += weight
-        del img, weight
+
+    if slices:
+        # Slice pooling has to happen before the spatial filter and needs the
+        # shares of the frames on either side, so the reduction runs a ring of
+        # them `2 * slices + 1` deep and emits the frame in the middle. The ring
+        # holds shares only - one plane each - and the frame it belongs to is
+        # re-read at emit time rather than held alongside them: converting a
+        # resident frame again is cheap next to the measurement, and holding
+        # nine of them as float32 is not.
+        share_of = functools.partial(measure_energy_weight, baseline=baseline,
+                                     scale=scale, exponent=exponent,
+                                     total=weight_total)
+        ring = collections.deque()
+        # Running total of the ring, so a window of nine costs two plane
+        # operations per frame instead of nine. It is carried rather than
+        # recomputed and so accumulates rounding, but every term is a
+        # non-negative share of order 1/N and the sequence of operations is
+        # fixed, so the drift is under a thousandth of a weight and - which is
+        # what this module actually promises - identical run to run.
+        running = np.zeros((rows, cols), dtype=np.float32)
+
+        def emit(centre):
+            """Blend frame `centre` at the mean of the shares now in the ring."""
+            pooled = running / len(ring)
+            np.maximum(pooled, 0.0, out=pooled)
+            img = load_float(centre)
+            if coherence:
+                pooled = _guided_filter(pooled, _guide_of(img), coherence,
+                                        COHERENCE_EPS)
+                np.maximum(pooled, 0.0, out=pooled)
+            accumulate(img, pooled)
+
+        for k, share in _map_in_order(share_of, num_images, max_workers):
+            ring.append(share)
+            running += share
+            if len(ring) > 2 * slices + 1:
+                running -= ring.popleft()
+            # The window for frame k - slices is complete as soon as k has
+            # arrived, and the ring holds exactly it: the last 2*slices+1 frames
+            # for a centre in the body of the stack, and everything so far for
+            # one near the start, which is the truncated window that centre
+            # should have.
+            if k >= slices:
+                emit(k - slices)
+        # The tail: no more frames are coming, so each remaining centre pools a
+        # window that shrinks from the left by one.
+        for centre in range(num_images - slices, num_images):
+            running -= ring.popleft()
+            emit(centre)
+    else:
+        weigh = functools.partial(measure_weight, baseline=baseline, scale=scale,
+                                  exponent=exponent, total=weight_total)
+        for _, (img, weight) in _map_in_order(weigh, num_images, max_workers):
+            accumulate(img, weight)
+            del img, weight
 
     # Unfiltered, every weight is at least (baseline / scale) ** exponent and the
     # sum is positive by construction. Filtered, the shares summed to 1 before

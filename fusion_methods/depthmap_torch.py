@@ -57,6 +57,7 @@ from fusion_methods.depthmap import (
     _probe_indices,
     _regularise_index,
     _resolve_coherence_radius,
+    _resolve_slice_radius,
     _resolve_halo_radius,
     _resolve_kernel,
     _resolve_percent,
@@ -389,7 +390,7 @@ def _resolve_device(device):
 
 def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
                     channels, img_resize, smoothing=0, exponent=1.0,
-                    coherence=0):
+                    coherence=0, slices=0):
     """One full pass over the stack on `dev`, returning a (C, H, W) tensor."""
     coherent = mode == MODE_MAX and smoothing > 0
     lap_kernel = _laplacian_kernel(channels, dev)
@@ -480,41 +481,88 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
             energy.pow_(exponent)
         return energy
 
-    # The coherence filter runs on each frame's share of the blend, so the total
-    # has to be summed before any frame can be filtered and the stack is walked
-    # twice. See DEFAULT_COHERENCE_RADIUS in depthmap.py for what this is for
-    # and why the share, rather than the raw weight, is the thing to filter.
+    # Both coherence stages run on each frame's share of the blend, so the total
+    # has to be summed before any frame can be touched and the stack is walked
+    # twice. See DEFAULT_COHERENCE_RADIUS and DEFAULT_SLICE_RADIUS in
+    # depthmap.py for what they are for and why the share, rather than the raw
+    # weight, is the thing they act on.
     weight_total = None
-    if coherence:
+    coherence_kernel = None
+    if coherence or slices:
         weight_total = torch.zeros((rows, cols), device=dev)
         for start in range(0, count, chunk):
             batch = upload(stack[start:start + chunk])
             weight_total += weigh(batch).sum(dim=(0, 1))
             del batch
         weight_total.clamp_(min=_WEIGHT_FLOOR)
-        coherence_kernel = _box_kernel(2 * coherence + 1, dev)
+        if coherence:
+            coherence_kernel = _box_kernel(2 * coherence + 1, dev)
 
     weighted = torch.zeros((channels, rows, cols), device=dev)
     weight_sum = torch.zeros((rows, cols), device=dev)
 
-    for start in range(0, count, chunk):
-        batch = upload(stack[start:start + chunk])
-        energy = weigh(batch)
-        if weight_total is not None:
-            energy /= weight_total
-            energy = _guided_filter(energy, _grey(batch), 2 * coherence + 1,
-                                    coherence_kernel)
+    def fold(frames, share):
+        """Fold a batch into the blend at the shares it ended up with."""
+        nonlocal weighted, weight_sum
+        if coherence:
+            share = _guided_filter(share, _grey(frames), 2 * coherence + 1,
+                                   coherence_kernel)
             # The linear model is fitted, not constrained, so a share can come
             # back a little negative where the guide has an edge it does not
             # follow; a negative weight would subtract a frame from the blend.
-            energy.clamp_(min=0.0)
-        weight_sum += energy.sum(dim=(0, 1))
-        # The chunk is this iteration's own upload and is dead after the
-        # weighting, so it doubles as the scratch - `(batch * energy).sum(0)`
+            share = share.clamp(min=0.0)
+        weight_sum += share.sum(dim=(0, 1))
+        # The batch is this iteration's own upload and is dead after the
+        # weighting, so it doubles as the scratch - `(frames * share).sum(0)`
         # would allocate a second copy of the whole chunk at the peak.
-        batch *= energy
-        weighted += batch.sum(dim=0)
-        del batch, energy
+        frames *= share
+        weighted += frames.sum(dim=0)
+
+    if slices:
+        # The frame-axis window straddles chunk boundaries, so the shares are
+        # buffered by frame index rather than by chunk: `buffered` holds the
+        # shares for [first, first + len) and a centre is emitted as soon as its
+        # whole window is inside that range. The buffer carries shares only -
+        # one plane each - and the frames a centre needs are uploaded again at
+        # emit time, which is cheaper than keeping 2*slices+1 chunks of BGR
+        # alive to avoid it.
+        buffered = []
+        first = 0
+        centre = 0
+
+        def emit_ready(limit):
+            """Blend every centre whose window is complete, up to `limit`."""
+            nonlocal centre, first, buffered
+            while centre < limit:
+                lo, hi = max(0, centre - slices), min(count - 1, centre + slices)
+                if hi >= first + len(buffered):
+                    break
+                share = torch.stack(buffered[lo - first:hi - first + 1]).mean(dim=0)
+                frames = upload(stack[centre:centre + 1])
+                fold(frames, share.unsqueeze(0))
+                del frames, share
+                centre += 1
+                # Nothing below the next centre's window is wanted again.
+                keep = max(0, centre - slices) - first
+                if keep > 0:
+                    buffered = buffered[keep:]
+                    first += keep
+
+        for start in range(0, count, chunk):
+            batch = upload(stack[start:start + chunk])
+            share = weigh(batch) / weight_total
+            buffered.extend(share[i] for i in range(share.shape[0]))
+            del batch, share
+            emit_ready(count)
+        emit_ready(count)
+    else:
+        for start in range(0, count, chunk):
+            batch = upload(stack[start:start + chunk])
+            share = weigh(batch)
+            if weight_total is not None:
+                share /= weight_total
+            fold(batch, share)
+            del batch, share
 
     # Unfiltered, every weight is at least (baseline / scale) ** exponent and
     # the sum is positive by construction; filtered, the shares summed to 1
@@ -527,7 +575,8 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
 def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
                         kernel_size=None, halo_radius=None, device=None,
                         chunk_size=None, depth_smoothing=None,
-                        selectivity=None, coherence_radius=None):
+                        selectivity=None, coherence_radius=None,
+                        slice_radius=None):
     """
     Depth-map fusion on a torch device.
 
@@ -544,6 +593,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         selectivity: Focus-weight selectivity, 0-100 (MODE_AVERAGE)
         coherence_radius: Weight-coherence radius in pixels; 0 disables it
                           (MODE_AVERAGE)
+        slice_radius: Slice-coherence radius in frames; 0 disables it
+                      (MODE_AVERAGE)
 
     Every dial means what it means on the CPU path; see
     fusion_methods/depthmap.py for what each one is for.
@@ -567,6 +618,9 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
     stack_ori = _load_stack(input_source)
     if not stack_ori:
         raise ValueError("No image data was loaded")
+
+    slices = (_resolve_slice_radius(slice_radius, len(stack_ori))
+              if mode == MODE_AVERAGE else 0)
 
     first = stack_ori[0]
     if first.ndim != 3 or first.shape[2] != 3:
@@ -602,7 +656,7 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
             with torch.no_grad():
                 fused = _fuse_on_device(stack_ori, mode, window, radius, dev,
                                         chunk, rows, cols, channels, img_resize,
-                                        smoothing, exponent, coherence)
+                                        smoothing, exponent, coherence, slices)
             break
         except torch.cuda.OutOfMemoryError:
             # Sizing from free VRAM can still be beaten by another process

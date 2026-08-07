@@ -133,12 +133,14 @@ def _depthmap_max(stack, kernel_size=9, halo_radius=0, img_resize=None,
 
 
 def _depthmap_average(stack, kernel_size=9, halo_radius=0, selectivity=None,
-                      coherence_radius=None, img_resize=None, thread_count=None):
+                      coherence_radius=None, slice_radius=None,
+                      img_resize=None, thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_AVERAGE
     return depthmap_impl(stack, img_resize, mode=MODE_AVERAGE,
                          kernel_size=kernel_size, halo_radius=halo_radius,
                          selectivity=selectivity, thread_count=thread_count,
-                         coherence_radius=coherence_radius)
+                         coherence_radius=coherence_radius,
+                         slice_radius=slice_radius)
 
 
 def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
@@ -151,12 +153,13 @@ def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
 
 def _depthmap_average_torch(stack, kernel_size=9, halo_radius=0,
                             selectivity=None, coherence_radius=None,
-                            img_resize=None, device=None):
+                            slice_radius=None, img_resize=None, device=None):
     from fusion_methods.depthmap_torch import depthmap_torch_impl, MODE_AVERAGE
     return depthmap_torch_impl(stack, img_resize, mode=MODE_AVERAGE,
                                kernel_size=kernel_size, halo_radius=halo_radius,
                                selectivity=selectivity, device=device,
-                               coherence_radius=coherence_radius)
+                               coherence_radius=coherence_radius,
+                               slice_radius=slice_radius)
 
 
 def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
@@ -353,6 +356,21 @@ METHODS = [
              "those choices where the picture is featureless and leaves them "
              "alone where it is not. 0 is off, and costs nothing; anything else "
              "walks the stack twice."),
+            ("slice_radius", [0, 2, 3, 4, 6],
+             "The same coherence along the frame axis, in slices. The spatial "
+             "filter above is edge-aware, so in the regions that hold detail it "
+             "follows the guide and leaves the pixel rendered from about one "
+             "frame - and no spatial setting reaches those. A stack that "
+             "oversamples its depth of field resolves each pixel about equally "
+             "well in the several frames around its focus peak, which differ "
+             "mostly in their grain, so averaging across that band divides the "
+             "grain at no cost in sharpness. Set it to about half the "
+             "half-maximum width of the focus curve; 0 on a stack that steps a "
+             "full depth of field per frame, where the neighbours are the worst "
+             "frames that resolve the pixel at all. Unlike every other dial "
+             "here it averages different frames into one pixel, so it needs a "
+             "registered stack - unregistered, it averages a subject that "
+             "moved."),
         ),
         min_psnr=30.0,      # measured 39.6 at selectivity 0, 43.9 at the
                             # default; blends rather than selects, so it still
