@@ -46,6 +46,10 @@ folder rather than a disk. `--bit-depth` and `--format` move either.
 the differences a sweep is looking for. Three regions are picked automatically
 from where the stack has the most detail to offer, the same regions for every
 candidate, and written both individually and as a labelled montage per region.
+Given a `--reference-render`, that render is fitted onto the run's geometry,
+saved beside the results and cropped to the same regions - so it opens every
+montage as the yardstick, and each candidate also gets a `vs_reference_` sheet
+of its own crops beside the reference's, which is the pair to read at 1:1.
 
 ## Reading the numbers
 
@@ -170,6 +174,13 @@ CLEANLINESS_TERMS = ("flat_noise", "defocus_seam_visible", "block_speckle")
 # sharpness 2.5x apart, which is enough to break a tie and not enough to
 # outrank a visibly sharper result.
 CLEANLINESS_FLOOR = 0.4
+
+# The reference render, saved into the run folder on the render's own grid. A
+# copy rather than a path in the report, because the fitted version is not the
+# file on disk - it has been warped onto this stack's geometry - and because a
+# run folder that still means something in a year cannot depend on a path
+# outside it.
+REFERENCE_FILE = "reference.png"
 
 
 # ---------------------------------------------------------------------------
@@ -595,6 +606,31 @@ def build_montage(tiles: Sequence[np.ndarray], labels: Sequence[str],
         cv2.putText(sheet, label, (x + 2, y + tile.shape[0] + label_height - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (235, 235, 235), 1, cv2.LINE_AA)
     return sheet
+
+
+def build_comparison(tiles: Sequence[np.ndarray],
+                     reference_tiles: Sequence[np.ndarray],
+                     label: str, reference_name: str) -> Optional[np.ndarray]:
+    """One candidate against the reference render, region by region.
+
+    Two columns, one row per crop region: ours on the left, the other program's
+    on the right. The region montage puts thirty candidates side by side and is
+    the right sheet for ranking them; this one is for the question that comes
+    after - what is this render doing that the reference is not - and at a
+    thirtieth of the width it can be read at 1:1.
+
+    The reference has already been fitted onto the render's grid, so the two
+    halves of a row are the same part of the scene. What the fit cannot remove
+    is the last few pixels of local drift - focus breathing is a different
+    magnification per frame, so no single warp relates two programs' output -
+    which is why these are read as pictures and not differenced.
+    """
+    pairs: List[np.ndarray] = []
+    labels: List[str] = []
+    for index, (ours, theirs) in enumerate(zip(tiles, reference_tiles), start=1):
+        pairs += [ours, theirs]
+        labels += [f"r{index}  {label}", f"r{index}  {reference_name}"]
+    return build_montage(pairs, labels, columns=2) if pairs else None
 
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1067,33 @@ def write_report(path: str, plan: Plan, suite: Suite, rows: Sequence[Dict[str, A
     else:
         lines.append("- The frame was too small for a crop region.")
 
+    if plan.reference:
+        name = os.path.basename(plan.reference)
+        lines += [
+            "",
+            "## Against the reference render",
+            "",
+            f"![{name}]({REFERENCE_FILE})",
+            "",
+            f"`{REFERENCE_FILE}` is `{name}` warped onto this run's geometry by a",
+            "similarity fit, which is what makes a crop of it the same part of the",
+            "scene as the same crop of a render. It is a copy rather than a link,",
+            "because the fitted version is not the file it came from.",
+            "",
+            "- `crops/reference_rN.png` - the reference's own crop of each region",
+            "- `crops/vs_reference_<variant>.png` - one candidate beside the",
+            "  reference, region by region, at 1:1. This is the sheet for *what is",
+            "  this render doing that the reference is not*; the region montages",
+            "  above, which now open with the reference tile, are the sheet for",
+            "  ranking candidates against each other.",
+            "",
+            "Neither is differenced, and the numbers above are not read pixel by",
+            "pixel either. The two programs aligned the stack against different",
+            "frames and focus breathing means the magnification each removed varies",
+            "frame to frame, so the fit leaves several pixels of local drift that",
+            "nothing rigid removes - see `fusion_metrics.fit_reference`.",
+        ]
+
     failed = [row for row in rows if not row.get("metrics")]
     if failed:
         lines += ["", "## Failures", ""]
@@ -1042,6 +1105,9 @@ def write_report(path: str, plan: Plan, suite: Suite, rows: Sequence[Dict[str, A
               "- `manifest.json` - every number, per candidate",
               "- `settings.json` - what to repeat this run with",
               "- `run.log` - the console output"]
+    if plan.reference:
+        lines.append(f"- `{REFERENCE_FILE}` - the reference render, on this "
+                     f"run's geometry")
 
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -1078,8 +1144,10 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
         # reference has to be put on, and no frame of the stack carries it.
         raw_reference = load_reference(plan.reference)
         reference, bands = None, None
+        reference_tiles: List[np.ndarray] = []
+        reference_name = os.path.basename(plan.reference) if plan.reference else ""
         if raw_reference is not None:
-            print(f"[Metrics] Reference render {os.path.basename(plan.reference)} "
+            print(f"[Metrics] Reference render {reference_name} "
                   f"at {raw_reference.shape[1]}x{raw_reference.shape[0]}", flush=True)
         # The frames go in at their own depth: focus_energy_map brings 16-bit
         # onto the 8-bit scale itself, so the ceiling matches the 8-bit renders
@@ -1112,6 +1180,25 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
 
             if raw_reference is not None and reference is None:
                 reference, bands = fit_reference(raw_reference, fused)
+                # Written out on the render's own grid, and cropped to the same
+                # regions, so every comparison below is the same pixels of the
+                # same scene rather than two programs' idea of where it is.
+                cv2.imwrite(os.path.join(run_dir, REFERENCE_FILE), reference)
+                cropped = [crop(reference, region) for region in regions]
+                # Only when the fit succeeded does the reference share the
+                # render's geometry; the uncropped fallback can be smaller than
+                # a region, and a short tile would slide every label in the
+                # montage along by one.
+                if all(tile.shape[:2] == (h, w)
+                       for tile, (_, _, w, h) in zip(cropped, regions)):
+                    reference_tiles = cropped
+                    for region_index, tile in enumerate(reference_tiles, start=1):
+                        cv2.imwrite(os.path.join(crops_dir,
+                                                 f"reference_r{region_index}.png"),
+                                    tile)
+                else:
+                    print("[Crops] Reference render does not cover the crop "
+                          "regions; leaving it out of the montages.", flush=True)
 
             image_path = os.path.join(run_dir, label + plan.output_format)
             write_image(image_path, fused)
@@ -1126,6 +1213,13 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
                 cv2.imwrite(
                     os.path.join(crops_dir, f"{label}_r{region_index + 1}.png"),
                     bitdepth.prepare_for_write(tile, ".png"))
+
+            if reference_tiles:
+                sheet = build_comparison(tiles[label], reference_tiles, label,
+                                         reference_name)
+                if sheet is not None:
+                    cv2.imwrite(os.path.join(crops_dir, f"vs_reference_{label}.png"),
+                                sheet)
 
             row["metrics"] = {k: float(v) for k, v in
                               measure(fused, sources, ceiling,
@@ -1149,11 +1243,19 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
             key=lambda r: (r.get("metrics") or {}).get("score", float("-inf")),
             reverse=True)
         for region_index in range(len(regions)):
-            sheet = build_montage(
-                [tiles[row["label"]][region_index] for row in montage_order],
-                [f"{index}. {row['label']}"
-                 f"  ret {(row.get('metrics') or {}).get('focus_retention', 0):.3f}"
-                 for index, row in enumerate(montage_order, start=1)])
+            region_tiles = [tiles[row["label"]][region_index]
+                            for row in montage_order]
+            region_labels = [
+                f"{index}. {row['label']}"
+                f"  ret {(row.get('metrics') or {}).get('focus_retention', 0):.3f}"
+                for index, row in enumerate(montage_order, start=1)]
+            # The reference leads the sheet rather than trailing it: it is the
+            # thing every other tile is being read against, and a yardstick
+            # thirty tiles down is one nobody looks at.
+            if reference_tiles:
+                region_tiles.insert(0, reference_tiles[region_index])
+                region_labels.insert(0, f"REFERENCE  {reference_name}")
+            sheet = build_montage(region_tiles, region_labels)
             if sheet is not None:
                 cv2.imwrite(os.path.join(crops_dir,
                                          f"region{region_index + 1}_montage.png"), sheet)
