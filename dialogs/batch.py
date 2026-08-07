@@ -824,6 +824,7 @@ class BatchProcessingDialog(QDialog):
                 fusion_params["halo_radius"] = _slider_radius("slider_halo")
                 fusion_params["depth_smoothing"] = _slider_percent(
                     "slider_depth_smooth", DEPTH_SMOOTHING_DEFAULT)
+                fusion_params["slice_radius"] = _slider_radius("slider_avg_slice")
             elif getattr(self.parent_window, 'rb_dmap_avg', None) and self.parent_window.rb_dmap_avg.isChecked():
                 fusion_method = "depthmap_average"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()

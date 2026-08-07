@@ -351,27 +351,39 @@ class ExportManager:
                 else f"_sel{selectivity}")
 
     def _avg_coherence_suffix(self) -> str:
-        """Return the Depth Map (Avg) weight-coherence radii, for the filename.
+        """Return a '_wc<n>' suffix for the Depth Map (Avg) weight coherence.
 
-        Both are off by default, so the halo suffix's rule applies rather than
-        the selectivity one above: named only when they are on, which keeps the
-        name a render used to get and still separates two renders that differ
-        only in how far the weights were pooled.
+        Off by default, so the halo suffix's rule applies rather than the
+        selectivity one above: named only when it is on, which keeps the name a
+        render used to get and still separates two renders that differ only in
+        how far the weights were pooled.
         """
         window = self.window
         if not window.rb_dmap_avg.isChecked():
             return ""
-        parts = []
         try:
             coherence = int(window.slider_avg_coherence.value())
-            if coherence > 0:
-                parts.append(f"wc{coherence}")
-            slices = int(window.slider_avg_slice.value())
-            if slices > 0:
-                parts.append(f"sc{slices}")
         except Exception:
             return ""
-        return f"_{'+'.join(parts)}" if parts else ""
+        return f"_wc{coherence}" if coherence > 0 else ""
+
+    def _slice_suffix(self) -> str:
+        """Return a '_sc<n>' suffix for the slice-coherence radius.
+
+        Both depth-map modes read this one - the average pools each frame's
+        share of the blend over the band, the hard select renders its depth map
+        through a tent that wide - so the suffix follows the dial rather than the
+        mode. Same rule as the coherence suffix above: off by default, so it is
+        named only when it is on.
+        """
+        window = self.window
+        if not (window.rb_dmap_max.isChecked() or window.rb_dmap_avg.isChecked()):
+            return ""
+        try:
+            slices = int(window.slider_avg_slice.value())
+        except Exception:
+            return ""
+        return f"_sc{slices}" if slices > 0 else ""
 
     def _fusion_suffix(self) -> str:
         """Describe the fusion stages in the name: method, kernel, refinement."""
@@ -403,6 +415,7 @@ class ExportManager:
         fusion_method += self._coherent_suffix()
         fusion_method += self._selectivity_suffix()
         fusion_method += self._avg_coherence_suffix()
+        fusion_method += self._slice_suffix()
 
         # The IFCNN stage runs on top of the method above, so it reads as an addition
         if getattr(window, "cb_ifcnn", None) is not None and window.cb_ifcnn.isChecked():

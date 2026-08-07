@@ -97,6 +97,7 @@ class RightPanelComponents:
     slider_avg_slice: QSlider
     avg_slice_value_label: QLabel
     avg_coherence_widget: QWidget
+    slice_widget: QWidget
     lbl_avg_coherence: QLabel
     lbl_avg_slice: QLabel
     combo_dct_block: QComboBox
@@ -333,10 +334,10 @@ def create_right_panel() -> RightPanelComponents:
     config_layout.addWidget(selectivity_widget)
 
     # Weight coherence (Depth Map (Avg) only) ----------------
-    # Selectivity above decides how sharply the blend leans on one frame; these
-    # two decide how far that decision is pooled before it is applied. Both are
-    # off by default and both cost a second measurement pass over the stack when
-    # they are not - see the constants for what each one is worth and when.
+    # Selectivity above decides how sharply the blend leans on one frame; this
+    # decides how far that decision is pooled across the frame before it is
+    # applied. Off by default, and costs a second measurement pass over the stack
+    # when it is not - see the constants for what it is worth and when.
     avg_coherence_widget = QWidget()
     avg_coherence_layout = QVBoxLayout(avg_coherence_widget)
     avg_coherence_layout.setContentsMargins(0, 5, 0, 5)
@@ -355,6 +356,19 @@ def create_right_panel() -> RightPanelComponents:
     avg_coherence_layout.addLayout(coherence_top)
     avg_coherence_layout.addWidget(slider_avg_coherence)
 
+    avg_coherence_widget.setVisible(False)  # only the average has weights to pool
+    config_layout.addWidget(avg_coherence_widget)
+
+    # Slice coherence (both depth-map modes) -----------------
+    # The other axis, and its own block because it is the one dial the two modes
+    # share: the average pools each frame's share of the blend over the band, the
+    # hard select renders its depth map through a tent that wide. One number, set
+    # from how densely the capture sampled its depth of field rather than from
+    # anything about the scene, so a stack that wants 4 wants 4 in either mode.
+    slice_widget = QWidget()
+    slice_layout = QVBoxLayout(slice_widget)
+    slice_layout.setContentsMargins(0, 5, 0, 5)
+
     slice_top = QHBoxLayout()
     lbl_avg_slice = QLabel(trans.t('label_avg_slice'))
     slice_top.addWidget(lbl_avg_slice)
@@ -366,11 +380,11 @@ def create_right_panel() -> RightPanelComponents:
     slider_avg_slice.setSingleStep(1)
     slider_avg_slice.setPageStep(2)
     slider_avg_slice.setValue(SLICE_RADIUS_DEFAULT)
-    avg_coherence_layout.addLayout(slice_top)
-    avg_coherence_layout.addWidget(slider_avg_slice)
+    slice_layout.addLayout(slice_top)
+    slice_layout.addWidget(slider_avg_slice)
 
-    avg_coherence_widget.setVisible(False)  # only the average has weights to pool
-    config_layout.addWidget(avg_coherence_widget)
+    slice_widget.setVisible(False)  # only the depth-map methods pool slices
+    config_layout.addWidget(slice_widget)
 
     # DCT tuning (DCT only) ---------------------------------
     dct_widget = QWidget()
@@ -653,6 +667,7 @@ def create_right_panel() -> RightPanelComponents:
         slider_avg_slice=slider_avg_slice,
         avg_slice_value_label=lbl_avg_slice_value,
         avg_coherence_widget=avg_coherence_widget,
+        slice_widget=slice_widget,
         lbl_avg_coherence=lbl_avg_coherence,
         lbl_avg_slice=lbl_avg_slice,
         combo_dct_block=combo_dct_block,

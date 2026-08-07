@@ -244,7 +244,60 @@ PYRAMID_MIN_SIDE = 4
 # every pixel is genuinely resolved by exactly one frame. Sub-slice accuracy
 # belongs to a depth map that is being exported as depth; it does not belong to
 # one that is being used to gather pixels.
+#
+# That argument bounds the *floor*, not the dial above it: it is about a peak
+# whose neighbours are the worst frames that resolve the pixel at all, which is
+# a statement about how densely the stack samples its own depth of field. See
+# the block below for the capture where it does not hold.
 BLEND_WIDTH_FLOOR = 0.75
+
+# ---------------------------------------------------------------------------
+# Slice coherence, MODE_MAX
+# ---------------------------------------------------------------------------
+# What the hard select could not do at all, and the reason its residual against
+# another program's depth map is the shape it is.
+#
+# Everything MODE_MAX has been given so far acts on the *depth field* - the
+# median, the trust map, the fill. None of them touches the rendering rule, and
+# the rendering rule is that a pixel comes from one frame whole. Which is the
+# mode's whole appeal in the regions that resolve: every output pixel is an
+# input pixel, at the sharpness the lens actually delivered. It is also why the
+# mode cannot do the one thing a stack of 333 frames is otherwise free to do.
+#
+# Measured on the reference ant capture against Helicon Focus method B at radius
+# 30 - the same algorithm, by somebody who shipped it - across a 31-render sweep
+# of kernel, depth smoothing and halo radius: `focus_retention` is 1.000 in every
+# single row, because a hard select cannot lose local contrast it was handed, and
+# the grain left where the picture holds no detail is 3.1 at the shipped defaults
+# against the average mode's 1.5-1.9 on the same capture. In fifths of the frame
+# ordered by how much detail Helicon found there, the busiest fifth sits at
+# 1.04-1.09 of Helicon's own energy in all 31 rows - every kernel, every
+# smoothing, every halo radius. None of that is a tuning miss: no setting of a
+# dial that only moves the depth field can divide grain, because every pixel
+# still comes from one frame and one frame's grain is what it is.
+#
+# So the dial is the rendering rule, and it is item 26's, transplanted. This
+# capture oversamples its depth of field about sevenfold, so the frames around a
+# pixel's winner resolve it almost as well and differ mostly in their grain;
+# widening the tent `_gather_blended` already builds from BLEND_WIDTH_FLOOR to
+# BLEND_WIDTH_FLOOR + radius renders the pixel from that band instead, divides
+# the grain by roughly the square root of the effective count, and costs no
+# spatial resolution whatsoever.
+#
+# It is the same number as MODE_AVERAGE's `slice_radius` and it is set from the
+# same property of the capture - about half the half-maximum width of the focus
+# curve - which is why the two modes share one dial rather than having one each.
+# What differs is what it is worth: the average mode already pools frames by
+# construction, so slice pooling there is a refinement, while here it is the only
+# access the mode has to the frame axis at all.
+#
+# Off by default, for both of item 26's reasons. It assumes the stack
+# oversamples - on one that steps a full depth of field per frame the
+# neighbouring slices are the ones that resolve the pixel *worst*, which is
+# exactly what BLEND_WIDTH_FLOOR above refuses - and it averages different frames
+# into one pixel, so it is only free while the stack is registered. The default,
+# the ceiling and the clamp against a short stack are all DEFAULT_SLICE_RADIUS's,
+# below; `_blend_width` is the whole of the difference between the two modes.
 
 # In MODE_AVERAGE every frame is given a small baseline weight on top of its
 # focus measure, set to this fraction of the stack's mean energy. It is what
@@ -901,15 +954,31 @@ def _coherent_depth(despeckled, trust, strength):
     return (trust * measured + (1.0 - trust) * smoothed).astype(np.float32)
 
 
-def _gather_blended(load_float, count, depth, out_dtype, rows, cols):
-    """Render the stack at a continuous depth, one narrow tent per pixel.
+def _blend_width(slices):
+    """Half-width of the render tent, in slices, at this slice radius.
 
-    The tent is BLEND_WIDTH_FLOOR wide for every pixel in the frame - the rule
-    does not vary, only the depth it is applied at. A depth that landed on a
-    whole slice takes that slice outright; one that landed between two takes
-    both, weighted towards the nearer. Since the depth is only ever fractional
-    where the measurement had nothing to say, the frames that carry real detail
-    are still selected rather than mixed.
+    The floor plus the radius rather than the radius alone, so 0 is the rule
+    BLEND_WIDTH_FLOOR describes - a confident pixel selected outright - and every
+    setting above it widens that same tent rather than switching to another rule.
+    A radius of r puts the outermost frame of the band at a weight of
+    0.75 / (r + 0.75) of the centre's, so the band tapers rather than ending, and
+    the effective number of frames averaged is a little under 2r + 1.
+    """
+    return BLEND_WIDTH_FLOOR + max(0, int(slices))
+
+
+def _gather_blended(load_float, count, depth, out_dtype, rows, cols,
+                    width=BLEND_WIDTH_FLOOR):
+    """Render the stack at a continuous depth, one tent per pixel.
+
+    The tent is `width` wide for every pixel in the frame - the rule does not
+    vary, only the depth it is applied at. At the default width a depth that
+    landed on a whole slice takes that slice outright and one that landed between
+    two takes both, weighted towards the nearer; since the depth is only ever
+    fractional where the measurement had nothing to say, the frames that carry
+    real detail are still selected rather than mixed. A caller that widens it
+    past a slice is asking for the frames around the winner as well, which is
+    what `slice_radius` means here - see DEFAULT_SLICE_RADIUS and _blend_width.
 
     Frames are visited in index order and only loaded when some pixel is
     actually asking for them, so a stack whose depths cluster does not pay to
@@ -922,7 +991,7 @@ def _gather_blended(load_float, count, depth, out_dtype, rows, cols):
         # which is this divided by a constant; the normalisation at the end
         # cancels it, so the division is never taken.
         tent = np.abs(depth - k)
-        np.subtract(BLEND_WIDTH_FLOOR, tent, out=tent)
+        np.subtract(width, tent, out=tent)
         np.maximum(tent, 0.0, out=tent)
         if not tent.any():
             continue
@@ -985,14 +1054,19 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     has to be known before a share can be formed - so it is one of the two dials
     here that change what the mode costs; see DEFAULT_COHERENCE_RADIUS.
 
-    `slice_radius` (slices, MODE_AVERAGE only) is the same idea along the frame
-    axis, and reaches what the spatial filter by design cannot: it pools each
-    pixel's share over this many slices either side before that filter runs, so
-    a stack which oversamples its own depth of field averages the frames that
-    resolve a pixel equally well and divides their grain at no cost in spatial
-    resolution. 0 disables it. It shares the second pass with `coherence_radius`,
-    so both on cost no more than either alone. See DEFAULT_SLICE_RADIUS for how
-    to pick it - it follows the stack's focus sampling, not the scene.
+    `slice_radius` (slices) is the same idea along the frame axis, and reaches
+    what no spatial stage in either mode can: a stack which oversamples its own
+    depth of field resolves a pixel about equally well in the several frames
+    around its focus peak, which differ mostly in their grain, so averaging
+    across that band divides the grain at no cost in spatial resolution. 0
+    disables it. Both modes read it and both set it from the same property of
+    the capture, but each carries it in the only form it can - MODE_AVERAGE pools
+    each pixel's share over the band before the spatial filter runs, sharing the
+    second pass with `coherence_radius` so both on cost no more than either
+    alone; MODE_MAX widens the tent it renders its depth map through, which is
+    the only access that mode has to the frame axis at all. See
+    DEFAULT_SLICE_RADIUS for how to pick it - it follows the stack's focus
+    sampling, not the scene - and BLEND_WIDTH_FLOOR for what it is opting out of.
 
     The stack's own depth is preserved end to end: an 8-bit stack returns
     uint8, a 16-bit stack returns uint16.
@@ -1010,7 +1084,7 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     coherent = mode == MODE_MAX and smoothing > 0
     # And the converse: MODE_MAX gathers whole pixels from one frame, so it has
     # no weight field for this to filter. The two modes get the same fix in the
-    # only form each can carry it.
+    # only form each can carry it - and along the frame axis, below, both can.
     coherence = (_resolve_coherence_radius(coherence_radius)
                  if mode == MODE_AVERAGE else 0)
     slices = 0      # resolved once the stack is loaded and its depth is known
@@ -1040,8 +1114,7 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     out_dtype = bitdepth.stack_dtype(stack_ori)
     num_images = len(stack_ori)
     channels = stack_ori[0].shape[2] if stack_ori[0].ndim == 3 else 1
-    if mode == MODE_AVERAGE:
-        slices = _resolve_slice_radius(slice_radius, num_images)
+    slices = _resolve_slice_radius(slice_radius, num_images)
 
     if img_resize:
         cols, rows = int(img_resize[0]), int(img_resize[1])
@@ -1169,14 +1242,24 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
         # instead of tearing away from it.
         despeckled = _regularise_index(best_index)
 
-        if coherent:
+        # Either dial renders the depth map through a tent rather than copying
+        # from it: one because the depth is no longer an integer, the other
+        # because the pixel is wanted from a band of frames. They meet in the
+        # same gather, so having both on costs no more than having either.
+        if coherent or slices:
             del best_energy, best_index
-            trust = _trust_map(energy_sum, energy_sq_sum, num_images, smoothing)
-            del energy_sum, energy_sq_sum
-            depth = _coherent_depth(despeckled, trust, smoothing)
-            del trust, despeckled
+            if coherent:
+                trust = _trust_map(energy_sum, energy_sq_sum, num_images,
+                                   smoothing)
+                depth = _coherent_depth(despeckled, trust, smoothing)
+                del trust
+            else:
+                # Slice pooling alone: the depth is still exactly the frame each
+                # pixel's argmax named, and only the width around it changes.
+                depth = despeckled.astype(np.float32)
+            del energy_sum, energy_sq_sum, despeckled
             return _gather_blended(load_float, num_images, depth,
-                                   out_dtype, rows, cols)
+                                   out_dtype, rows, cols, _blend_width(slices))
 
         del best_energy
         best_index = despeckled

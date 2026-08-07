@@ -53,12 +53,17 @@ COHERENT_DEPTH_METHODS = {"depthmap_max"}
 # whatever the weights look like.
 AVERAGE_SELECTIVITY_METHODS = {"depthmap_average"}
 
-# The two weight-coherence radii pool that same weighting before it is applied,
-# across the frame and along the stack. Same reasoning as selectivity above -
-# there are no weights to pool where the pixel comes from one frame whole - so
-# the same methods, named separately because they are a separate stage and one
-# could move without the other.
+# The weight-coherence radius pools that same weighting across the frame before
+# it is applied. Same reasoning as selectivity above - there are no weights to
+# pool where the pixel comes from one frame whole - so the same methods, named
+# separately because it is a separate stage and one could move without the other.
 AVERAGE_COHERENCE_METHODS = {"depthmap_average"}
+
+# The slice radius pools along the stack instead, and that axis both modes can
+# reach: the average pools each frame's share of the blend over the band, the
+# hard select widens the tent it renders its depth map through. One dial, set
+# from the same property of the capture, so it is reported for both.
+SLICE_COHERENCE_METHODS = {"depthmap_max", "depthmap_average"}
 
 _CONTRAST_NAMES = {"auto": "Auto", "clahe": "Local (CLAHE)"}
 _REFERENCE_NAMES = {"first": "First", "middle": "Middle", "last": "Last"}
@@ -257,6 +262,7 @@ def describe(
         if algorithm in AVERAGE_COHERENCE_METHODS:
             options["WeightCoherenceRadius"] = (
                 f"{int(coherence_radius)} px" if coherence_radius else _OFF)
+        if algorithm in SLICE_COHERENCE_METHODS:
             # What the render asked for. depthmap_impl narrows this to what the
             # stack depth can carry, and does not report back what it settled
             # on, so a value here larger than half the frame count was not

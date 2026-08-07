@@ -58,9 +58,15 @@ mitigation shipped but the underlying issue remains.
 | 22 | Depth Map | Quality | The argmax has no spatial prior, so a region nothing resolves tears into confetti - *fixed in 1.34.0* | High | Low | 100% |
 | 23 | Depth Map (Max) | Quality | Still hard-selects where the measurement supports no selection, leaving item 22's confetti as coarse patches - *fixed in 1.35.0, corrected in 1.36.0* | High | Medium | 100% |
 | 24 | Depth Map (Average) | Quality | Linear contrast weighting stops selecting as the stack deepens, so the blend collapses into the plain mean of every frame and hazes over - *fixed in 1.37.0* | High | Low | 100% |
-| 25 | Depth Map | Quality | Halo radius unbounded by the pooling window, so a radius meant for a wide kernel fills a band around every contour with defocus - *ranged in 1.37.0* | Medium | Trivial | 100% |
+| 24b | Depth Map | Quality | Halo radius unbounded by the pooling window, so a radius meant for a wide kernel fills a band around every contour with defocus - *ranged in 1.37.0* | Medium | Trivial | 100% |
+| 25 | Depth Map (Average) | Quality | The blend selects hard once it selects at all, and had nothing to make that selection coherent, so a region no frame resolves broke into blotches - *fixed in 1.38.0* | High | Medium | 100% |
+| 26 | Depth Map (Average) | Quality | No coherence along the frame axis, so the busiest fifth of the frame stayed 18% above the reference at every spatial setting - *fixed in 1.39.0* | Medium | Medium | 100% |
+| 27 | Depth Map (Max) | Quality | Every pixel comes from one frame, so no dial could divide its grain and the residual against the reference was pinned - *fixed in 1.42.0* | Medium | Low | 100% |
 
-**Overall: 88% done** - 22 of 25 items fully fixed, item 8 partially (the GPU
+Row 24b is numbered that way because it is a sub-finding of item 24 and is
+documented inside it; every other row matches its `## N` section below.
+
+**Overall: 89% done** - 25 of 28 rows fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
 pairwise fold was not what made it grow), 2 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
@@ -2292,6 +2298,183 @@ are already equal and the blend already averages (36.7 dB at radius 0 against
 34.4 at radius 1, all of it boundary spill). One with a smooth focus ramp has too
 few frames for the exponent to concentrate at all. What produces the regime is a
 deep sweep of real defocus, which is a capture and not a fixture.
+
+---
+
+## 27. Depth Map (Max) renders every pixel from exactly one frame
+
+**Method:** Depth Map (Max) | **Category:** Quality | **Impact:** Medium |
+**Effort:** Low | **Fixed in 1.42.0**
+
+Items 21 to 23 gave this mode three stages, and every one of them acts on the
+*depth field*: the two-scale measure decides it, the median despeckles it, the
+trust map and fill repair it. None touches the rendering rule, and the rendering
+rule is that a pixel comes from one frame whole. That is the mode's whole appeal
+where the stack resolves - every output pixel is an input pixel, at the sharpness
+the lens delivered - and it is also a ceiling nothing above it can lift.
+
+Measured against Helicon Focus method B at radius 30, which is the same algorithm
+by somebody who shipped it, over a 31-render sweep of kernel x depth smoothing x
+halo on the 333-frame ant capture (`tests/render_matrix_suites.depthmap_max`):
+
+- `focus_retention` is **1.000 in every row**, because a hard select cannot lose
+  local contrast it was handed.
+- grain where the picture holds no detail is **3.1** at the shipped defaults
+  against the average mode's 1.5 to 1.9 on the same capture, and the only rows
+  that reach the average's range are the ones smoothing the depth field flat.
+- in fifths of the frame ordered by how much detail *Helicon* found there, the
+  busiest fifth sits at **1.04 to 1.09** in all 31 rows - every kernel from 5 to
+  51, every smoothing from 0 to 100, every halo radius.
+
+That last number is item 26's finding mirrored. `depth_smoothing` is trust-gated,
+so it acts hardest exactly where the measurement had nothing to say and declines
+to act where it did: it takes the quiet fifth from 2.90 down to 1.19 and leaves
+the busy one where it found it. No dial that moves the depth field can do better
+there, because the pixel still comes from one frame and one frame's grain is what
+it is.
+
+**Fix.** Let `slice_radius` widen the tent `_gather_blended` already renders the
+depth map through, from `BLEND_WIDTH_FLOOR` to `BLEND_WIDTH_FLOOR + radius`, so a
+pixel is taken from the band of frames around its own depth rather than from the
+single winner. It is item 26's dial, transplanted: this capture oversamples its
+depth of field about sevenfold, so those neighbours resolve the pixel almost as
+well and differ mostly in their grain, and averaging them divides that grain by
+roughly the square root of the effective count at no cost in spatial resolution.
+
+Swept against the smoothing dial rather than instead of it, because the two act
+in opposite halves of the frame (`depthmap_max_slices`, kernel 25):
+
+| Setting | RefGap | RefAgree | FlatNoise | band 1..5 |
+|---|---:|---:|---:|---|
+| ds50 slice0 (the shipped default) | 0.240 | 0.9622 | 3.15 | 1.52 1.27 1.20 1.13 1.07 |
+| ds50 slice2 | 0.158 | 0.9610 | 2.88 | 1.31 1.19 1.14 1.06 1.01 |
+| **ds50 slice4** | **0.108** | 0.9580 | 2.71 | 1.22 1.11 1.06 0.99 0.94 |
+| ds50 slice5 | 0.097 | 0.9558 | 2.61 | 1.18 1.07 1.02 0.95 0.90 |
+| ds50 slice8 | 0.162 | 0.9469 | 2.32 | 1.06 0.94 0.89 0.82 0.77 |
+
+The gap more than halves for 0.004 of agreement, and the busy fifth finally moves
+- 1.07 to 0.99 - which is the column no setting in the previous sweep could
+touch. Radius 8 overshoots exactly as it does on the other mode: every fifth
+lands under the reference at once and the gap climbs back.
+
+**It costs nothing, which is the difference from item 26.** MODE_AVERAGE pays a
+second measurement pass to form the shares its pooling reduces over. Here the
+gather already walks the whole stack once the depth field is continuous, so a
+wider tent asks the same frames for the same pixels with different weights:
+11.7 s at slice 0 against 11.9 s at slice 4 on the 333-frame capture. The one
+case that does change cost is `depth_smoothing 0` with a radius set, where the
+mode leaves the plain copy for the tent gather - and that is the setting asking
+for it.
+
+**What it argues against, and why that is not a contradiction.**
+`BLEND_WIDTH_FLOOR` has refused sub-slice blending since 1.35.0, on the grounds
+that the frames either side of a peak are the two that resolve the pixel *worst*
+among those that resolve it at all - and it cost 8 dB on `long_stack` to prove
+it. That bounds the floor, not the dial above it: it is a statement about a stack
+that steps a full depth of field per frame, which `long_stack` does and this
+capture does not. The two coexist because the dial is off by default and is set
+from the capture's sampling.
+
+**It also corrects the previous sweep's own answer.** Read alone, that run says
+to raise `depth_smoothing` to 100: gap 0.240 -> 0.086 at kernel 25. With the
+frame axis available it is plainly the wrong route. ds100 buys the number by
+flattening the depth field - agreement falls to 0.9477 against ds50's 0.9622, and
+the crops show the ant's leg scales going with it - and once slice pooling is
+also removing energy the two over-correct together, taking the gap back up to
+0.173 at slice 2 and 0.376 at slice 8. `DEPTH_SMOOTHING_DEFAULT` stays at 50.
+
+**Guarded by** `tests/test_depthmap_coherence.py` - radius 0 reproducing both of
+MODE_MAX's rendering paths byte for byte, the grain falling while the textured
+half both keeps its contrast and moves *closer* to the truth, and the overshoot
+past the band pinned as a failure rather than left implied. CPU/GPU parity for
+this dial and for `depth_smoothing` at both ends of its range in
+`tests/test_depthmap_gpu.py`, plus a check that radius 0 leaves the device path
+copying source pixels rather than gathering a tent.
+
+**Why this claim *can* be made on a fixture.** Item 26 could not: the average
+needs the blend to be concentrating on one frame before the dial has anything to
+do, and a stack whose frames are identical within a focus band already averages
+there. A hard select renders from one frame by definition, whatever the energies
+look like - so the fixture that was useless for the average is precisely the one
+that isolates the dial here.
+
+---
+
+## Tuning Depth Map
+
+What the two modes expose, what each dial was measured to do, and what is
+deliberately left internal. Numbers are from the 333-frame 1.7 MP ant capture,
+registered, scored against Helicon Focus method B for Max and method A for
+Average - `RefGap` is how far our fine-detail energy sits from theirs (0 is
+exact), `RefAgree` whether we found detail in the same places, and both are read
+together because either alone is easy to satisfy.
+
+**`kernel_size` (Kernel, default 9).** The window the focus measure is pooled
+over. Since item 21 the measure is pooled at two scales and combined, so a wide
+kernel no longer rings every subject and the dial is safe across its range: on
+Max the gap moves from 0.261 at 9 to 0.240 at 25 and agreement from 0.9587 to
+0.9622, which is small enough that the choice belongs to the picture. Small
+follows fine detail and speckles on grain; large is a steadier measure and rounds
+off narrow in-focus structures.
+
+**`halo_radius` (Halo suppression, default off).** Item 24b's ceiling applies:
+the slider stops at `min(kernel, 30)` because the radius is a claim on ground the
+measurement has to be able to speak for. On this capture it buys little that the
+two-scale measure has not already taken - 0.261 to 0.248 at kernel 9, radius 8 -
+and past that it is filling a band around every contour with defocus. Reach for
+it only when a glow visibly survives.
+
+**`depth_smoothing` (Depth coherence, default 50, Max only).** Item 23's dial:
+how readily a pixel's own decision is given up as unfounded, with the depth of
+every pixel given up on interpolated from the ones that were not.
+
+| setting | 0 | 25 | 50 | 75 | 100 |
+|---|---:|---:|---:|---:|---:|
+| RefGap (kernel 25) | 0.505 | 0.320 | 0.240 | 0.096 | 0.091 |
+| RefAgree | 0.9486 | 0.9588 | 0.9619 | 0.9515 | 0.9477 |
+| FlatNoise | 4.36 | 3.58 | 3.15 | 1.81 | 1.51 |
+
+0 is the plain hard select and its torn background. The gap keeps falling to the
+top of the range and agreement peaks at 50 and then goes with it, because past
+that the fill is flattening depth structure that is real - the crops show it as
+the subject losing its own surface texture. 50 is where those two part company,
+and item 27 is why it stays there rather than following the gap.
+
+**`selectivity` (Selectivity, default 50, Average only).** Item 24's dial, and
+the one that makes the mode work at all on a deep stack. Below it the blend is
+the arithmetic mean of every frame; every setting from 50 up is within a few
+hundredths of a dB of the others on the report scenarios, and 100 is where item
+26's sweep put all of its best rows once the coherence stages existed.
+
+**`coherence_radius` (Weight coherence, default off, Average only).** Item 25's
+stage: each frame's share of the blend through an edge-aware filter before the
+pixels are gathered. Measured best at **16** on this capture and at **0 to 4** on
+the banded synthetic stacks in `tests/fusion_scenarios.py`, which step depth every
+27 px - the reach is the whole risk, and the disagreement between those two is
+the scene and not the number. Costs a second pass over the stack.
+
+**`slice_radius` (Slice coherence, default off, both modes).** Items 26 and 27:
+pooling along the frame axis, in the only form each mode can carry it. **4 to 5**
+on this capture, which oversamples its depth of field about sevenfold; **0** on a
+stack that steps a full depth of field per frame, where the neighbouring slices
+are the ones that resolve the pixel worst. It follows the sampling and not the
+scene - the same capture at every third frame wants 1, not 5 - and overshooting
+is not subtle, with every fifth of the frame getting worse at once by 8 slices.
+It is also the one dial in the module that depends on the registration, because
+it is the only one that averages different frames into one pixel.
+
+**`INDEX_MEDIAN_PASSES`, `INDEX_MEDIAN_KSIZE`, `NEAR_WINDOW_DIVISOR`,
+`MEASURE_SIGMA`, `BLEND_WIDTH_FLOOR`, `TRUST_LO_MIN` and the fill's levels stay
+internal.** Item 22's median and item 21's narrow window are corrections rather
+than preferences - there is no picture that wants the ring back - and the trust
+anchors are the `depth_smoothing` dial's own calibration, which is what the dial
+slides. `BLEND_WIDTH_FLOOR` is the one a reader of item 27 will look for: it is
+the floor `slice_radius` is added to, and lowering it would reintroduce the
+sub-slice interpolation that cost 8 dB on `long_stack`.
+
+Everything above is inherited by batch jobs from the main window, and anything
+not at its default goes into the output filename, the way DCT's and the pyramid's
+tuning already does.
 
 ---
 

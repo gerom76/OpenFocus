@@ -124,11 +124,13 @@ def _pyramid_torch(stack, levels=None, img_resize=None, device=None, **tuning):
                               **tuning)
 
 
-def _depthmap_max(stack, kernel_size=9, halo_radius=0, img_resize=None,
-                  thread_count=None):
+def _depthmap_max(stack, kernel_size=9, halo_radius=0, depth_smoothing=None,
+                  slice_radius=None, img_resize=None, thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_MAX
     return depthmap_impl(stack, img_resize, mode=MODE_MAX,
                          kernel_size=kernel_size, halo_radius=halo_radius,
+                         depth_smoothing=depth_smoothing,
+                         slice_radius=slice_radius,
                          thread_count=thread_count)
 
 
@@ -143,11 +145,14 @@ def _depthmap_average(stack, kernel_size=9, halo_radius=0, selectivity=None,
                          slice_radius=slice_radius)
 
 
-def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
-                        device=None):
+def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0,
+                        depth_smoothing=None, slice_radius=None,
+                        img_resize=None, device=None):
     from fusion_methods.depthmap_torch import depthmap_torch_impl, MODE_MAX
     return depthmap_torch_impl(stack, img_resize, mode=MODE_MAX,
                                kernel_size=kernel_size, halo_radius=halo_radius,
+                               depth_smoothing=depth_smoothing,
+                               slice_radius=slice_radius,
                                device=device)
 
 
@@ -325,6 +330,28 @@ METHODS = [
              "also claims the band its defocused glow contaminates in the other "
              "frames. 0 is off; set it to roughly the visible halo width. The "
              "cost is genuine detail from other frames within the band."),
+            ("depth_smoothing", [0, 25, 50, 75, 100],
+             "How readily a pixel's focus decision is given up as unfounded, "
+             "with the depth of every pixel given up on interpolated from the "
+             "ones that were not. 0 is the plain hard select: over a region no "
+             "frame ever resolves every frame measures the same and the winner "
+             "is decided by noise, so neighbouring pixels take frames from "
+             "opposite ends of the stack and the region tears into a mosaic of "
+             "hard-edged patches. Higher declines to select over more of the "
+             "frame; too high and real depth structure is flattened with it."),
+            ("slice_radius", [0, 2, 3, 4, 6],
+             "Slices either side of its own depth each pixel is rendered from. "
+             "0 is the select this mode is named for - one frame, whole - which "
+             "is also the one thing no other dial here can change, because a "
+             "dial that moves the depth field cannot divide grain. A stack that "
+             "oversamples its depth of field resolves a pixel about equally "
+             "well in the frames around its peak, which differ mostly in their "
+             "grain, so rendering from that band divides the grain at no cost "
+             "in sharpness. Set it to about half the half-maximum width of the "
+             "focus curve; 0 on a stack that steps a full depth of field per "
+             "frame, where the neighbours are the worst frames that resolve the "
+             "pixel at all. It averages different frames into one pixel, so it "
+             "needs a registered stack."),
         ),
         min_psnr=36.0,      # measured 44.6
     ),
@@ -466,7 +493,14 @@ METHODS = [
                  "Same dial as the CPU depth map."),
                 ("halo_radius", [0, 2, 4, 8, 12],
                  "Same dial as the CPU depth map; the elliptical element is "
-                 "reproduced span by span, so a radius means the same thing.")),
+                 "reproduced span by span, so a radius means the same thing."),
+                ("depth_smoothing", [0, 25, 50, 75, 100],
+                 "Same dial as the CPU depth map; the depth field itself is "
+                 "settled by the host's own helpers, so the two agree on it "
+                 "exactly and only the gather runs on the device."),
+                ("slice_radius", [0, 2, 3, 4, 6],
+                 "Same dial as the CPU depth map; it widens the same tent the "
+                 "device already gathers the depth map through.")),
         min_psnr=36.0,      # matches the CPU path away from the frame border
     ),
     FusionMethod(

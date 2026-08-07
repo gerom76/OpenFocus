@@ -149,6 +149,61 @@ def test_coherence_radius_matches_the_cpu_path(stack):
     assert _psnr(gpu[inner], cpu[inner]) > 55.0
 
 
+@pytest.mark.parametrize("smoothing", [0, 100])
+def test_depth_smoothing_matches_the_cpu_path(stack, smoothing):
+    """The hard select's own coherence dial, at both ends of its range.
+
+    0 is the plain copy and 100 the fully filled depth field, which are two
+    different code paths on the device - one gathers whole pixels, the other
+    renders a tent - so both ends have to be pinned rather than the default only.
+    """
+    cpu = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                        depth_smoothing=smoothing)
+    gpu = depthmap_torch_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                              depth_smoothing=smoothing, device=DEV)
+    assert gpu.shape == cpu.shape and gpu.dtype == cpu.dtype
+    inner = (slice(KERNEL, -KERNEL), slice(KERNEL, -KERNEL))
+    assert _psnr(gpu[inner], cpu[inner]) > 55.0
+
+
+@pytest.mark.parametrize("mode", [MODE_MAX, MODE_AVERAGE])
+def test_slice_radius_matches_the_cpu_path(mode):
+    """The frame-axis dial, on a stack deep enough for the clamp to leave it alone.
+
+    Its own stack rather than the module fixture: `_resolve_slice_radius` narrows
+    the radius to (frames - 1) // 2, so on four frames every setting collapses to
+    the same one and the two paths would agree without either running the stage.
+
+    Where they could drift is different in each mode, which is why both are here:
+    the average buffers shares by frame index so a window can straddle a device
+    chunk, and the hard select widens a tent whose reach also decides which chunks
+    are skipped before they are uploaded at all.
+    """
+    deep = _stack(frames=9)
+    radius = 2
+    cpu = depthmap_impl(list(deep), mode=mode, kernel_size=KERNEL,
+                        slice_radius=radius)
+    gpu = depthmap_torch_impl(list(deep), mode=mode, kernel_size=KERNEL,
+                              slice_radius=radius, device=DEV, chunk_size=2)
+    assert gpu.shape == cpu.shape and gpu.dtype == cpu.dtype
+    inner = (slice(KERNEL, -KERNEL), slice(KERNEL, -KERNEL))
+    assert _psnr(gpu[inner], cpu[inner]) > 55.0
+
+
+def test_slice_radius_zero_leaves_the_hard_select_copying_pixels():
+    """Off has to keep MODE_MAX on the path that copies, not on the tent gather.
+
+    Checked through the device path because that is where the two are separate
+    code, and checked as an exact copy because that is the property the mode is
+    chosen for: every output pixel is some input pixel.
+    """
+    deep = _stack(frames=9)
+    gpu = depthmap_torch_impl(list(deep), mode=MODE_MAX, kernel_size=KERNEL,
+                              depth_smoothing=0, slice_radius=0, device=DEV)
+    sources = np.stack(deep)
+    assert np.all((sources == gpu[None]).any(axis=0))
+
+
 # ---------------------------------------------------------------------------
 # The chunking is an implementation detail and must stay one
 # ---------------------------------------------------------------------------

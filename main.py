@@ -150,16 +150,19 @@ class OpenFocus(QMainWindow):
             "pyramid", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_PYRAMID),
             ("pyramid_widget",)),
         # Both depth-map modes pool the focus measure over the same window, so
-        # they share a kernel mode. What they do with the result differs: the
-        # hard select builds an index map the coherent-depth dials regularise,
-        # the average blends the stack on weights selectivity shapes, and
-        # neither dial has anything to act on in the other mode.
+        # they share a kernel mode. What they do with the result mostly differs:
+        # the hard select builds an index map the coherent-depth dial
+        # regularises, the average blends the stack on weights selectivity
+        # shapes, and neither of those has anything to act on in the other mode.
+        # Slice coherence is the exception - it pools along the stack rather than
+        # inside a frame, which both modes can carry - so both rows show it.
         _MethodControls("rb_dmap_max", _KernelSpec(
             "dmap", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_DMAP),
-            ("halo_widget", "coherent_widget")),
+            ("halo_widget", "coherent_widget", "slice_widget")),
         _MethodControls("rb_dmap_avg", _KernelSpec(
             "dmap", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_DMAP),
-            ("halo_widget", "selectivity_widget", "avg_coherence_widget")),
+            ("halo_widget", "selectivity_widget", "avg_coherence_widget",
+             "slice_widget")),
         _MethodControls("rb_d", None),
     )
 
@@ -167,7 +170,7 @@ class OpenFocus(QMainWindow):
     # name only what it uses and still have the rest hidden.
     _METHOD_BLOCKS = ("smooth_widget", "halo_widget", "coherent_widget",
                       "selectivity_widget", "avg_coherence_widget",
-                      "dct_widget", "pyramid_widget")
+                      "slice_widget", "dct_widget", "pyramid_widget")
 
     def __init__(self):
         super().__init__()
@@ -399,6 +402,7 @@ class OpenFocus(QMainWindow):
         self.slider_avg_slice = right_panel_components.slider_avg_slice
         self.lbl_avg_slice_value = right_panel_components.avg_slice_value_label
         self.avg_coherence_widget = right_panel_components.avg_coherence_widget
+        self.slice_widget = right_panel_components.slice_widget
         self.combo_dct_block = right_panel_components.combo_dct_block
         self.combo_dct_plateau = right_panel_components.combo_dct_plateau
         self.cb_dct_blend = right_panel_components.cb_dct_blend

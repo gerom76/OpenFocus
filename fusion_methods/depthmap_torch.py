@@ -40,7 +40,6 @@ import torch.nn.functional as F
 
 from fusion_methods import torch_depth
 from fusion_methods.depthmap import (
-    BLEND_WIDTH_FLOOR,
     COHERENCE_EPS,
     DEFAULT_DEPTH_SMOOTHING,
     DEFAULT_SELECTIVITY,
@@ -51,6 +50,7 @@ from fusion_methods.depthmap import (
     MODE_MAX,
     _BASELINE_FRACTION,
     _WEIGHT_FLOOR,
+    _blend_width,
     _index_dtype,
     _near_window,
     _coherent_depth,
@@ -326,7 +326,7 @@ def _repair_index(stack, fused, index, count, chunk, upload):
 
 
 def _gather_coherent(stack, index, energy_sum, energy_sq_sum, count, chunk,
-                     upload, smoothing, rows, cols, channels, dev):
+                     upload, smoothing, width, rows, cols, channels, dev):
     """Settle the depth map on the host, then gather the pixels on the device.
 
     The depth map and the trust map it is smoothed by are one plane each, so the
@@ -337,19 +337,26 @@ def _gather_coherent(stack, index, energy_sum, energy_sq_sum, count, chunk,
 
     Only the gather itself, which touches every pixel of every frame, is left
     on the device.
+
+    `width` is the tent's half-width in slices; with the smoothing dial off it is
+    the only reason this path runs at all, and the depth is then the index map
+    itself - see depthmap._blend_width.
     """
     raw = index.to("cpu").numpy().astype(_index_dtype(count), copy=False)
     despeckled = _regularise_index(raw)
-    trust = _trust_map(energy_sum.to("cpu").numpy(),
-                       energy_sq_sum.to("cpu").numpy(), count, smoothing)
-    depth = _coherent_depth(despeckled, trust, smoothing)
+    if smoothing > 0:
+        trust = _trust_map(energy_sum.to("cpu").numpy(),
+                           energy_sq_sum.to("cpu").numpy(), count, smoothing)
+        depth = _coherent_depth(despeckled, trust, smoothing)
+    else:
+        depth = despeckled.astype(np.float32)
 
     depth_dev = torch.from_numpy(np.ascontiguousarray(depth)).to(dev)
 
     # The tent's reach over the whole frame, so a chunk of frames no pixel can
     # be asking for is skipped before it is uploaded rather than after.
-    lowest = float(depth.min()) - BLEND_WIDTH_FLOOR
-    highest = float(depth.max()) + BLEND_WIDTH_FLOOR
+    lowest = float(depth.min()) - width
+    highest = float(depth.max()) + width
 
     accum = torch.zeros((channels, rows, cols), device=dev)
     weight_sum = torch.zeros((rows, cols), device=dev)
@@ -363,7 +370,7 @@ def _gather_coherent(stack, index, energy_sum, energy_sq_sum, count, chunk,
                               dtype=torch.float32).view(-1, 1, 1)
         # max(0, width - |depth - k|), the same unnormalised tent the CPU path
         # builds; the constant 1/width both omit cancels in the division below.
-        tent = (BLEND_WIDTH_FLOOR - (depth_dev - slices).abs()).clamp_min(0.0)
+        tent = (width - (depth_dev - slices).abs()).clamp_min(0.0)
         weight_sum += tent.sum(dim=0)
         # The chunk is this iteration's own upload and is dead after the
         # weighting, so it doubles as the scratch - `(batch * tent).sum(0)`
@@ -393,6 +400,9 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
                     coherence=0, slices=0):
     """One full pass over the stack on `dev`, returning a (C, H, W) tensor."""
     coherent = mode == MODE_MAX and smoothing > 0
+    # Either dial sends MODE_MAX through the tent gather instead of the copy;
+    # see the branch in depthmap.depthmap_impl this mirrors.
+    blended = mode == MODE_MAX and (coherent or slices > 0)
     lap_kernel = _laplacian_kernel(channels, dev)
     box_kernel = _box_kernel(window, dev) if window > 1 else None
     near = _near_window(window)
@@ -415,11 +425,11 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
     if mode == MODE_MAX:
         best = torch.full((rows, cols), float("-inf"), device=dev)
         index = torch.zeros((rows, cols), dtype=torch.int32, device=dev)
-        # The coherent path gathers its pixels in a second pass, once the depth
+        # The gather paths take their pixels in a second pass, once the depth
         # map is settled, so the running fused frame is not built at all and
         # its C planes of device memory pay for the two energy sums instead.
-        fused = None if coherent else torch.zeros((channels, rows, cols),
-                                                  device=dev)
+        fused = None if blended else torch.zeros((channels, rows, cols),
+                                                 device=dev)
         energy_sum = torch.zeros((rows, cols), device=dev) if coherent else None
         energy_sq_sum = torch.zeros((rows, cols), device=dev) if coherent else None
 
@@ -445,9 +455,10 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
             del batch, energy
         del best
 
-        if coherent:
+        if blended:
             return _gather_coherent(stack, index, energy_sum, energy_sq_sum,
                                     count, chunk, upload, smoothing,
+                                    _blend_width(slices),
                                     rows, cols, channels, dev)
 
         return _repair_index(stack, fused, index, count, chunk, upload)
@@ -593,8 +604,10 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         selectivity: Focus-weight selectivity, 0-100 (MODE_AVERAGE)
         coherence_radius: Weight-coherence radius in pixels; 0 disables it
                           (MODE_AVERAGE)
-        slice_radius: Slice-coherence radius in frames; 0 disables it
-                      (MODE_AVERAGE)
+        slice_radius: Slice-coherence radius in frames; 0 disables it. Both
+                      modes read it - MODE_AVERAGE pools each frame's share of
+                      the blend over the band, MODE_MAX widens the tent it
+                      renders its depth map through
 
     Every dial means what it means on the CPU path; see
     fusion_methods/depthmap.py for what each one is for.
@@ -619,8 +632,7 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
     if not stack_ori:
         raise ValueError("No image data was loaded")
 
-    slices = (_resolve_slice_radius(slice_radius, len(stack_ori))
-              if mode == MODE_AVERAGE else 0)
+    slices = _resolve_slice_radius(slice_radius, len(stack_ori))
 
     first = stack_ori[0]
     if first.ndim != 3 or first.shape[2] != 3:

@@ -14,6 +14,13 @@ filter before the pixels are gathered. These tests pin what that has to mean:
 off is off, a featureless region gets averaged, a region the picture explains
 does not, and the shares still add up to a blend.
 
+`slice_radius` pools along the other axis and both modes read it - the average
+over each frame's share, MODE_MAX over the tent it renders its depth map
+through - so its tests cover both. On MODE_MAX it is the only dial that touches
+the rendering rule at all, which is why it is also the only one whose quality
+claim can be made on a fixture rather than on a capture; see the frame-axis
+section below.
+
 Thresholds are loose regression guards, not a leaderboard.
 
 Run with:  python -m pytest tests/test_depthmap_coherence.py -v
@@ -179,17 +186,25 @@ def test_guided_filter_smooths_a_featureless_guide_but_follows_a_structured_one(
 # carry the same detail and independent grain, and averaging them is free. A
 # stack can be built that way exactly.
 
-# The quality claim is not made on a rendered stack, and the reason is sharper
-# than it was for `coherence_radius`. Two things have to be true at once before
-# this dial has anything to do: the blend must be concentrating on a single
-# frame, and that frame's neighbours must carry nearly - but not exactly - the
-# same detail. Every fixture that can be built here fails one of them. A stack
-# whose frames are identical within a focus band measures the same energy across
-# it, so the weights are already equal there and the blend already averages
-# (measured: 36.7 dB at radius 0 against 34.4 at radius 1, all of it boundary
-# spill). A stack with a smooth focus ramp instead has too few frames for the
-# exponent to concentrate at all. What produces the regime is a deep sweep of
-# real defocus, and that is a capture.
+# For MODE_AVERAGE the quality claim is still not made on a rendered stack, and
+# the reason is sharper than it was for `coherence_radius`. Two things have to be
+# true at once before the dial has anything to do there: the blend must be
+# concentrating on a single frame, and that frame's neighbours must carry nearly
+# - but not exactly - the same detail. Every fixture that can be built here fails
+# one of them. A stack whose frames are identical within a focus band measures
+# the same energy across it, so the weights are already equal there and the blend
+# already averages (measured: 36.7 dB at radius 0 against 34.4 at radius 1, all
+# of it boundary spill). A stack with a smooth focus ramp instead has too few
+# frames for the exponent to concentrate at all. What produces the regime is a
+# deep sweep of real defocus, and that is a capture.
+#
+# MODE_MAX is the exception, and it is the same fixture that makes it one. The
+# first of those two conditions is not something the fixture has to arrange: a
+# hard select renders from exactly one frame by definition, whatever the energies
+# across the band look like. So the stack that was useless for the average -
+# frames identical within a band, differing only in their grain - is precisely
+# the one that isolates this dial for the hard select, because there the blend
+# the average was already getting for free is the whole of what is being added.
 
 OVERSAMPLE = 8      # frames per depth band, i.e. how far the stack oversamples
 
@@ -242,13 +257,101 @@ def test_slice_zero_reproduces_the_unpooled_blend_exactly(oversampled):
     assert np.array_equal(plain, off)
 
 
-def test_the_slice_dial_does_nothing_to_the_hard_select(oversampled):
+def test_slice_zero_reproduces_the_hard_select_exactly(oversampled):
+    """The dial that changes MODE_MAX's rendering rule must not change it at 0.
+
+    Both ways round the mode can render: the plain copy, and the tent gather the
+    smoothing dial already sends it through. Setting the radius to 0 has to leave
+    each of them byte for byte where it was, or every stack rendered before this
+    existed silently moved.
+    """
     stack, _ = oversampled
-    low = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
-                        slice_radius=0)
-    high = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
-                         slice_radius=4)
-    assert np.array_equal(low, high)
+    for smoothing in (0, 50):
+        plain = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                              depth_smoothing=smoothing)
+        off = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                            depth_smoothing=smoothing, slice_radius=0)
+        assert np.array_equal(plain, off), f"smoothing {smoothing}"
+
+
+def _band_scores(img, reference):
+    """(grain, detail, error) inside the first focus band of the fixture.
+
+    Read away from the band's edges so what is measured is the rendering rule and
+    not a boundary: `grain` is the deviation from the truth over the flat half,
+    `detail` the local contrast surviving in the textured half, and `error` how
+    far that half sits from the truth - which is the one that sees both at once.
+    """
+    band = SIZE // 5
+    rows = slice(4, band - 4)
+    flat = img[rows, :SIZE // 2].astype(np.float32)
+    sharp = img[rows, SIZE // 2:].astype(np.float32)
+    grey = cv2.cvtColor(img[rows, SIZE // 2:], cv2.COLOR_BGR2GRAY)
+    return (
+        float((flat - reference[rows, :SIZE // 2]).std()),
+        float(np.abs(cv2.Laplacian(grey.astype(np.float32),
+                                   cv2.CV_32F, ksize=3)).mean()),
+        float(np.sqrt(((sharp - reference[rows, SIZE // 2:]) ** 2).mean())),
+    )
+
+
+def test_the_slice_dial_divides_the_hard_select_s_grain(oversampled):
+    """The one thing no other MODE_MAX dial can do, on a stack built to allow it.
+
+    Every frame inside a band of this fixture carries the same picture and its
+    own grain, which is what a capture that oversamples its depth of field looks
+    like - so a pixel rendered from the band instead of from one frame keeps its
+    detail and averages its noise away.
+
+    All three readings are taken, because two of them alone would be satisfied by
+    simply softening the picture: the grain has to fall, the textured half's local
+    contrast has to survive, and that half has to end up *closer* to the truth
+    rather than merely smoother.
+    """
+    stack, reference = oversampled
+    hard = _band_scores(depthmap_impl(list(stack), mode=MODE_MAX,
+                                      kernel_size=KERNEL, depth_smoothing=0),
+                        reference)
+    pooled = _band_scores(depthmap_impl(list(stack), mode=MODE_MAX,
+                                        kernel_size=KERNEL, depth_smoothing=0,
+                                        slice_radius=1), reference)
+
+    assert pooled[0] < 0.75 * hard[0]       # measured 0.62
+    assert pooled[1] > 0.93 * hard[1]       # measured 0.96
+    assert pooled[2] < 0.9 * hard[2]        # measured 0.79
+
+
+def test_the_slice_dial_overshoots_past_the_band_it_was_given(oversampled):
+    """Turning it past the sampling costs, and the fixture has to show that too.
+
+    A band here is OVERSAMPLE frames wide with a cliff at each end rather than a
+    focus curve that tapers, so its usable radius is smaller than the half-of-the-
+    half-maximum rule of thumb would suggest - which makes it a sharp test of the
+    failure rather than a calibration of the dial. At radius 4 the window reaches
+    outside the band for most pixels and pulls in frames that do not resolve them
+    at all: the grain keeps falling and the picture gets further from the truth,
+    which is exactly the trade BLEND_WIDTH_FLOOR refuses by default.
+    """
+    stack, reference = oversampled
+    hard = _band_scores(depthmap_impl(list(stack), mode=MODE_MAX,
+                                      kernel_size=KERNEL, depth_smoothing=0),
+                        reference)
+    far = _band_scores(depthmap_impl(list(stack), mode=MODE_MAX,
+                                     kernel_size=KERNEL, depth_smoothing=0,
+                                     slice_radius=4), reference)
+
+    assert far[0] < hard[0]                 # grain still falling: measured 0.36
+    assert far[2] > hard[2]                 # and the detail paying for it: 1.17
+
+
+def test_the_slice_dial_still_renders_from_the_frames_it_pooled(oversampled):
+    """A wider tent is still a blend of source pixels, not an extrapolation."""
+    stack, _ = oversampled
+    pooled = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                           depth_smoothing=50, slice_radius=4)
+    lo = np.min(np.stack(stack), axis=0)
+    hi = np.max(np.stack(stack), axis=0)
+    assert np.all(pooled >= lo) and np.all(pooled <= hi)
 
 
 def test_it_pools_across_the_whole_stack_including_both_ends(oversampled):

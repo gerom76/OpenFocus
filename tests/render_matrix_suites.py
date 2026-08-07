@@ -42,6 +42,17 @@ WORK = r"F:\Media\MacroTest07\work"
 HELICON_A30 = (r"F:\Media\MacroTest07\_frames\electronics_ant"
                r"\electronics_ant-HF-A-30-1.png")
 
+# Helicon Focus method B - its depth map, the like-for-like counterpart of
+# depthmap_max - at radius 30, smoothing 1. Same standing as HELICON_A30 above:
+# a reference and not an answer, and for the same reason. What makes it the
+# right one for this mode is that it is the render that first showed the hard
+# select's failure was fixable at all: over a region no frame resolves Helicon
+# renders a smooth surface where our argmax rendered a mosaic, which is the
+# observation the whole coherent-depth path in fusion_methods/depthmap.py came
+# out of.
+HELICON_B30 = (r"F:\Media\MacroTest07\_frames\electronics_ant"
+               r"\electronics_ant-HF-B-30-1.png")
+
 # The app's shipped registration, and what every suite here uses unless it is
 # asking a question about registration itself: homography then ECC, measured on
 # 1024 px reductions, against the middle frame so chain drift is halved.
@@ -248,6 +259,12 @@ def depthmap_max() -> Plan:
     region no frame resolves from tearing into patches, and the halo radius.
     Kept alongside the average suite so the two modes can be rendered from one
     load of the stack and compared directly.
+
+    Scored against Helicon's method B, which is the same algorithm rather than
+    merely the same picture, so the residual columns say something the
+    no-reference metrics cannot: `focus_retention` rewards whichever render kept
+    the most local contrast and cannot tell recovered texture from kept grain,
+    and a hard select keeps a great deal of grain.
     """
     variants = _grid(
         "depthmap_max",
@@ -264,11 +281,68 @@ def depthmap_max() -> Plan:
     return Plan(
         stack=StackSpec(source=ELECTRONICS_ANT),
         destination=WORK,
+        reference=HELICON_B30,
         suites=[Suite(
             name="Depth Map (Max) - kernel x smoothing x halo",
             fusion="depthmap_max",
             registration=ECC_HOMOGRAPHY,
             variants=variants,
+            note="Halo rows are appended after the kernel x smoothing grid; "
+                 "rows without a `_h` tag ran at halo_radius 0. Scored against "
+                 "Helicon Focus method B at radius 30 - see RefGap and RefAgree "
+                 "in the table, and read them against Retention rather than "
+                 "instead of it.",
+        )],
+    )
+
+
+def depthmap_max_slices() -> Plan:
+    """Depth Map (Max): the frame axis, against the dial that owns the other one.
+
+    The follow-up to `depthmap_max`, and the answer to what that run could not
+    reach. Its residual against Helicon's method B is the same shape at all 31 of
+    its settings, and it is item 26's shape mirrored: `depth_smoothing` is
+    trust-gated, so it acts hardest exactly where the measurement had nothing to
+    say and declines to act where it did. That fixes the quiet fifths of the
+    frame and pins the busy one - quintile 5 sits at 1.06 to 1.09 in every row of
+    that sweep, at every kernel, every smoothing and every halo radius.
+
+    Nothing that moves the depth field can do better, because the rendering rule
+    is that a pixel comes from one frame whole and one frame's grain is what it
+    is. `slice_radius` changes the rule, so it is the axis this run sweeps, and
+    it is swept against `depth_smoothing` rather than instead of it: the two act
+    in opposite halves of the frame and the question is whether they compose.
+
+    Kernel is carried along at the default and at the wide setting that won the
+    previous run's gap, since a kernel freed from making the decision coherent is
+    what item 26 found on the other mode. Slice 0 rows are the controls, and they
+    are the previous run's grid exactly.
+    """
+    variants = _grid(
+        "depthmap_max",
+        kernel_size=[9, 25],
+        # 50 is the shipped default and where agreement peaked; 100 is where the
+        # gap did. The previous run put nothing useful below 50.
+        depth_smoothing=[50, 100],
+        # 4-5 is half the half-maximum width of this stack's focus curve, which
+        # is what the dial should be set from; 0, 2 and 8 bracket it.
+        slice_radius=[0, 2, 4, 5, 8],
+    )
+
+    return Plan(
+        stack=StackSpec(source=ELECTRONICS_ANT),
+        destination=WORK,
+        reference=HELICON_B30,
+        suites=[Suite(
+            name="Depth Map (Max) - slice coherence x depth smoothing",
+            fusion="depthmap_max",
+            registration=ECC_HOMOGRAPHY,
+            variants=variants,
+            note="`slice_radius` averages different frames into one pixel, so "
+                 "unlike every other dial here it needs the stack registered - "
+                 "which it is in this run. It rides on the gather the smoothing "
+                 "dial already walks the whole stack for, so on this mode it is "
+                 "the one coherence stage that costs nothing.",
         )],
     )
 
@@ -304,6 +378,7 @@ SUITES = {
     "depthmap_average_slices": depthmap_average_slices,
     "depthmap_average_halo": depthmap_average_halo,
     "depthmap_max": depthmap_max,
+    "depthmap_max_slices": depthmap_max_slices,
     "depthmap_modes": depthmap_modes,
 }
 

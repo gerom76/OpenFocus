@@ -53,20 +53,32 @@ class TestParameterRelevance:
 
     def test_weight_coherence_is_only_reported_for_the_average(self):
         options = render_options.describe(
-            algorithm="depthmap_average", coherence_radius=16, slice_radius=4)
+            algorithm="depthmap_average", coherence_radius=16)
         assert options["WeightCoherenceRadius"] == "16 px"
-        assert options["SliceCoherenceRadius"] == "4 slices"
         # Off is stated rather than omitted, same as the halo radius above: the
-        # average reads both dials whether or not they were moved.
+        # average reads the dial whether or not it was moved.
         off = render_options.describe(algorithm="depthmap_average")
         assert off["WeightCoherenceRadius"] == "Off"
-        assert off["SliceCoherenceRadius"] == "Off"
-        # The hard select has no weights to pool, so quoting a radius for it
-        # would claim a stage that never ran.
+        # The hard select has no weight field to filter, so quoting a radius for
+        # it would claim a stage that never ran.
         hard = render_options.describe(
-            algorithm="depthmap_max", coherence_radius=16, slice_radius=4)
+            algorithm="depthmap_max", coherence_radius=16)
         assert "WeightCoherenceRadius" not in hard
-        assert "SliceCoherenceRadius" not in hard
+
+    def test_slice_coherence_is_reported_for_both_depth_map_modes(self):
+        """The one dial the two modes share, so the one both have to report.
+
+        They carry it differently - the average pools each frame's share of the
+        blend, the hard select widens the tent it renders its depth map through -
+        but it is the same number, set from the same property of the capture.
+        """
+        for algorithm in ("depthmap_max", "depthmap_average"):
+            options = render_options.describe(algorithm=algorithm, slice_radius=4)
+            assert options["SliceCoherenceRadius"] == "4 slices"
+            assert render_options.describe(
+                algorithm=algorithm)["SliceCoherenceRadius"] == "Off"
+        assert "SliceCoherenceRadius" not in render_options.describe(
+            algorithm="pyramid", slice_radius=4)
 
     def test_batch_size_is_only_reported_for_stackmff(self):
         assert render_options.describe(
