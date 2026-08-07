@@ -279,6 +279,144 @@ def detail_agreement(fused, reference, block=64):
     return agreement, float(ours.mean() / max(theirs.mean(), 1e-6))
 
 
+def fit_reference(reference, fused, min_inliers=40):
+    """Warp another program's render onto ours by a similarity fit, or None.
+
+    Needed because the two are not the same size and cropping does not relate
+    them: each program aligned the stack against its own choice of reference
+    frame, and focus breathing means the magnification each removed differs. On
+    the ant capture the two renders sit 9% apart in scale, so a crop leaves the
+    corners over a hundred pixels out and a zone taken off one lands nowhere
+    near the same content in the other.
+
+    A similarity - scale, rotation, translation, no perspective - is deliberately
+    the most that is fitted. The residual is real: focus breathing is not one
+    global magnification but a different one per frame, so no single warp can
+    remove it, and after this fit the fine detail still correlates at only about
+    0.35 with several pixels of local drift. That is why the metrics built on
+    the result stay pooled - `band_ratios` over zones and `detail_agreement` over
+    tiles - rather than becoming a per-pixel comparison. What the fit buys is
+    that those pools now cover the same content: tile agreement on the ant
+    capture rises from about 0.49 unfitted to about 0.95 fitted, which is the
+    difference between a number that ranks candidates and one that ranks how
+    badly each is misaligned.
+
+    Returns the warped reference on the render's grid, or None when too few
+    features match to trust the fit.
+    """
+    detector = getattr(cv2, "SIFT_create", None)
+    if detector is None:                       # very old OpenCV build
+        return None
+    sift = detector(8000)
+
+    grey_ref = _grey8(reference).astype(np.uint8)
+    grey_ours = _grey8(fused).astype(np.uint8)
+    key_ref, desc_ref = sift.detectAndCompute(grey_ref, None)
+    key_ours, desc_ours = sift.detectAndCompute(grey_ours, None)
+    if desc_ref is None or desc_ours is None or len(key_ref) < 2 or len(key_ours) < 2:
+        return None
+
+    matches = cv2.BFMatcher().knnMatch(desc_ref, desc_ours, k=2)
+    # Lowe's ratio test: a descriptor that matches two places about equally well
+    # has matched neither, and a focus stack is full of repeated texture.
+    good = [m for m, n in matches if m.distance < 0.75 * n.distance]
+    if len(good) < min_inliers:
+        return None
+
+    src = np.float32([key_ref[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst = np.float32([key_ours[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    matrix, inliers = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC,
+                                                  ransacReprojThreshold=3.0)
+    if matrix is None or inliers is None or int(inliers.sum()) < min_inliers:
+        return None
+    return cv2.warpAffine(reference, matrix, (fused.shape[1], fused.shape[0]),
+                          flags=cv2.INTER_LANCZOS4)
+
+
+def reference_bands(reference, sigma=1.5, zones=5):
+    """Split another program's render into activity zones, once for a whole sweep.
+
+    The companion to `band_ratios` below, kept separate because it walks the
+    reference rather than the candidate: a sweep computes it once and hands the
+    same zoning to every render, which is also what makes the candidates
+    comparable - they are scored over the same pixels rather than each over its
+    own idea of where the detail is.
+
+    Returns (band, masks): the reference's own high-pass, and the pixel sets its
+    local activity splits into, quietest first.
+    """
+    grey = _grey8(reference)
+    band = grey - cv2.GaussianBlur(grey, (0, 0), sigma)
+    activity = cv2.blur(np.abs(band), (33, 33))
+    edges = np.percentile(activity, np.linspace(0, 100, zones + 1))
+    masks = [(activity >= edges[i]) & (activity <= edges[i + 1])
+             for i in range(zones)]
+    return band, masks
+
+
+def band_ratios(fused, reference, bands, sigma=1.5):
+    """Fine-detail energy against another program's, by how busy that region is.
+
+    The reading that separates "sharper" from "grainier" as far as anything can
+    when the two images are not registered to each other. Energy in a band is
+    shift-tolerant where a correlation is not - see `detail_map` - so this is
+    measured as a ratio of standard deviations inside each zone rather than as
+    any kind of per-pixel agreement.
+
+    Splitting by the reference's activity is what makes it say something. One
+    number over the whole frame cannot tell a render that kept more texture from
+    one that kept more grain, because both read high; a render that is grainier
+    stands above the reference *hardest where the reference found nothing*,
+    which is the first zone, while one that is genuinely sharper stands above it
+    in the last. 1.0 in every zone is the reference exactly.
+
+    `fused` is tone-matched onto the reference first, so a different exposure or
+    contrast curve - which is not a fusion property - cannot move the result.
+    """
+    band_ref, masks = bands
+    graded = match_tone(to_display8(fused), to_display8(reference))
+    grey = _grey8(graded)
+    band = grey - cv2.GaussianBlur(grey, (0, 0), sigma)
+
+    height = min(band.shape[0], band_ref.shape[0])
+    width = min(band.shape[1], band_ref.shape[1])
+    band, band_ref = band[:height, :width], band_ref[:height, :width]
+    return [float(band[m[:height, :width]].std()
+                  / max(band_ref[m[:height, :width]].std(), 1e-6))
+            for m in masks]
+
+
+def reference_gap(ratios):
+    """One number for a whole `band_ratios` curve: distance from the reference.
+
+    Root-mean-square of the log ratios, so being twice as grainy and half as
+    sharp cost the same - which they should, since neither is the render the
+    reference made. 0 is the reference exactly.
+
+    A gap and nothing else would be satisfied by any render that is uniformly
+    wrong in both directions at once, so it is reported next to
+    `detail_agreement` rather than instead of it.
+    """
+    if not ratios:
+        return 0.0
+    logs = np.log(np.maximum(np.asarray(ratios, dtype=np.float64), 1e-6))
+    return float(np.sqrt(np.mean(logs ** 2)))
+
+
+def to_display8(img):
+    """8-bit view of a render, whatever depth it carries.
+
+    A local copy of utils.bitdepth.to_display8's behaviour for the two dtypes
+    these metrics see, so tests/fusion_metrics.py keeps depending on numpy and
+    OpenCV alone.
+    """
+    if img.dtype == np.uint8:
+        return img
+    if img.dtype == np.uint16:
+        return (img.astype(np.float32) / 257.0).round().clip(0, 255).astype(np.uint8)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
 def block_seams(fused, block=8, factor=3.0):
     """
     How much of the image's gradient sits on the block lattice, and how badly.

@@ -41,6 +41,7 @@ import torch.nn.functional as F
 from fusion_methods import torch_depth
 from fusion_methods.depthmap import (
     BLEND_WIDTH_FLOOR,
+    COHERENCE_EPS,
     DEFAULT_DEPTH_SMOOTHING,
     DEFAULT_SELECTIVITY,
     ENERGY_PROBE_FRAMES,
@@ -55,6 +56,7 @@ from fusion_methods.depthmap import (
     _coherent_depth,
     _probe_indices,
     _regularise_index,
+    _resolve_coherence_radius,
     _resolve_halo_radius,
     _resolve_kernel,
     _resolve_percent,
@@ -90,11 +92,14 @@ def _frame_bytes(rows, cols, channels, radius):
     response carry `channels` planes each and the padded copy each convolution
     makes carries a little more; the energy map and the two pooled outputs the
     measure combines are single-channel, as are the row maxima the halo
-    dilation builds.
+    dilation builds and the six planes the coherence filter's linear fit needs.
     """
     planes = 4.5 * channels + 4.0
     if radius > 0:
         planes += 3.0
+    # Charged unconditionally, like the CPU path's own estimate: sizing the
+    # batch from a dial would give two runs of the same stack different chunks.
+    planes += 6.0
     return max(1, int(4 * rows * cols * planes))
 
 
@@ -218,6 +223,36 @@ def _pool(energy, window, kernel):
         return energy
     pad = window // 2
     return F.conv2d(F.pad(energy, (pad,) * 4, mode="reflect"), kernel)
+
+
+def _guided_filter(share, guide, window, kernel):
+    """The twin of depthmap._guided_filter, batched over (B, 1, H, W).
+
+    Same four windowed means and the same local linear fit; only the pooling
+    differs, and it differs the way every other filter here does - a padded
+    conv2d against cv2.boxFilter, both reflecting at the border.
+    """
+    mean_guide = _pool(guide, window, kernel)
+    mean_share = _pool(share, window, kernel)
+    cov = _pool(guide * share, window, kernel) - mean_guide * mean_share
+    var = _pool(guide * guide, window, kernel) - mean_guide * mean_guide
+
+    slope = cov / (var + COHERENCE_EPS)
+    offset = mean_share - slope * mean_guide
+    return _pool(slope, window, kernel) * guide + _pool(offset, window, kernel)
+
+
+def _grey(batch):
+    """(B, 1, H, W) luminance of a (B, C, H, W) BGR chunk.
+
+    cv2.COLOR_BGR2GRAY's own coefficients, so the guide the device fits against
+    is the same picture the CPU path fits against.
+    """
+    if batch.shape[1] == 1:
+        return batch
+    weights = torch.tensor([0.114, 0.587, 0.299], dtype=batch.dtype,
+                           device=batch.device).view(1, 3, 1, 1)
+    return (batch * weights).sum(dim=1, keepdim=True)
 
 
 def _focus_energy(batch, window, near, lap_kernel, box_kernel, near_kernel,
@@ -353,7 +388,8 @@ def _resolve_device(device):
 
 
 def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
-                    channels, img_resize, smoothing=0, exponent=1.0):
+                    channels, img_resize, smoothing=0, exponent=1.0,
+                    coherence=0):
     """One full pass over the stack on `dev`, returning a (C, H, W) tensor."""
     coherent = mode == MODE_MAX and smoothing > 0
     lap_kernel = _laplacian_kernel(channels, dev)
@@ -429,20 +465,49 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
     scale = max(probe_mean, _WEIGHT_FLOOR)
     baseline = scale * _BASELINE_FRACTION
 
+    def weigh(batch):
+        """The chunk's weights, w = ((E + baseline) / scale) ** exponent.
+
+        Folded in place: the energy is this iteration's own measurement, so the
+        whole weight is built where it already sits. torch's pow is a device
+        kernel either way, so the CPU path's squaring chain buys nothing here
+        and the exponent is taken directly.
+        """
+        energy = measure(batch)
+        energy += baseline
+        energy /= scale
+        if exponent != 1.0:
+            energy.pow_(exponent)
+        return energy
+
+    # The coherence filter runs on each frame's share of the blend, so the total
+    # has to be summed before any frame can be filtered and the stack is walked
+    # twice. See DEFAULT_COHERENCE_RADIUS in depthmap.py for what this is for
+    # and why the share, rather than the raw weight, is the thing to filter.
+    weight_total = None
+    if coherence:
+        weight_total = torch.zeros((rows, cols), device=dev)
+        for start in range(0, count, chunk):
+            batch = upload(stack[start:start + chunk])
+            weight_total += weigh(batch).sum(dim=(0, 1))
+            del batch
+        weight_total.clamp_(min=_WEIGHT_FLOOR)
+        coherence_kernel = _box_kernel(2 * coherence + 1, dev)
+
     weighted = torch.zeros((channels, rows, cols), device=dev)
     weight_sum = torch.zeros((rows, cols), device=dev)
 
     for start in range(0, count, chunk):
         batch = upload(stack[start:start + chunk])
-        energy = measure(batch)
-        # Folded in place: the energy is this iteration's own measurement, so
-        # the whole weight is built where it already sits. torch's pow is a
-        # device kernel either way, so the CPU path's squaring chain buys
-        # nothing here and the exponent is taken directly.
-        energy += baseline
-        energy /= scale
-        if exponent != 1.0:
-            energy.pow_(exponent)
+        energy = weigh(batch)
+        if weight_total is not None:
+            energy /= weight_total
+            energy = _guided_filter(energy, _grey(batch), 2 * coherence + 1,
+                                    coherence_kernel)
+            # The linear model is fitted, not constrained, so a share can come
+            # back a little negative where the guide has an edge it does not
+            # follow; a negative weight would subtract a frame from the blend.
+            energy.clamp_(min=0.0)
         weight_sum += energy.sum(dim=(0, 1))
         # The chunk is this iteration's own upload and is dead after the
         # weighting, so it doubles as the scratch - `(batch * energy).sum(0)`
@@ -451,16 +516,18 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
         weighted += batch.sum(dim=0)
         del batch, energy
 
-    # Every weight is at least (baseline / scale) ** exponent, so the sum is
-    # positive everywhere and needs no floor of its own.
-    weighted /= weight_sum.unsqueeze(0)
+    # Unfiltered, every weight is at least (baseline / scale) ** exponent and
+    # the sum is positive by construction; filtered, the shares summed to 1
+    # before the filter and only the clamp above can have taken any away, so
+    # that path needs a floor of its own.
+    weighted /= weight_sum.clamp_min(_WEIGHT_FLOOR).unsqueeze(0)
     return weighted
 
 
 def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
                         kernel_size=None, halo_radius=None, device=None,
                         chunk_size=None, depth_smoothing=None,
-                        selectivity=None):
+                        selectivity=None, coherence_radius=None):
     """
     Depth-map fusion on a torch device.
 
@@ -475,6 +542,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         chunk_size: Frames per device batch; None sizes it from free VRAM
         depth_smoothing: Depth-map coherence strength, 0-100 (MODE_MAX)
         selectivity: Focus-weight selectivity, 0-100 (MODE_AVERAGE)
+        coherence_radius: Weight-coherence radius in pixels; 0 disables it
+                          (MODE_AVERAGE)
 
     Every dial means what it means on the CPU path; see
     fusion_methods/depthmap.py for what each one is for.
@@ -492,6 +561,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
     smoothing = _resolve_percent(depth_smoothing, DEFAULT_DEPTH_SMOOTHING)
     exponent = _selectivity_exponent(
         _resolve_percent(selectivity, DEFAULT_SELECTIVITY))
+    coherence = (_resolve_coherence_radius(coherence_radius)
+                 if mode == MODE_AVERAGE else 0)
 
     stack_ori = _load_stack(input_source)
     if not stack_ori:
@@ -513,8 +584,10 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
 
     # Reflect padding requires pad < dim; below this size the CPU path (whose
     # cv2 borders have no such limit) is the one that can do the work. The
-    # measurement prefilter pads too, so it sets the floor for small windows.
-    max_pad = max(1, window // 2, MEASURE_BLUR_KSIZE // 2 if MEASURE_SIGMA > 0 else 1)
+    # measurement prefilter and the coherence filter pad too, so either can set
+    # the floor when the pooling window is the smaller of the three.
+    max_pad = max(1, window // 2, coherence,
+                  MEASURE_BLUR_KSIZE // 2 if MEASURE_SIGMA > 0 else 1)
     if min(rows, cols) <= max_pad:
         raise ValueError(
             f"Image {cols}x{rows} too small for GPU depth-map fusion with a "
@@ -529,7 +602,7 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
             with torch.no_grad():
                 fused = _fuse_on_device(stack_ori, mode, window, radius, dev,
                                         chunk, rows, cols, channels, img_resize,
-                                        smoothing, exponent)
+                                        smoothing, exponent, coherence)
             break
         except torch.cuda.OutOfMemoryError:
             # Sizing from free VRAM can still be beaten by another process

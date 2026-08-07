@@ -304,6 +304,7 @@ class MultiFocusFusion:
                        halo_radius: Optional[int] = None,
                        depth_smoothing: Optional[int] = None,
                        average_selectivity: Optional[int] = None,
+                       coherence_radius: Optional[int] = None,
                        **kwargs) -> np.ndarray:
         """
         Depth-map fusion (per-pixel select or contrast-weighted average).
@@ -322,6 +323,9 @@ class MultiFocusFusion:
                          Spelled out rather than 'selectivity' because the
                          pyramid method already claims that key in the shared
                          kwargs the dispatcher forwards.
+            coherence_radius: Weight-coherence radius in pixels; 'average'
+                         only, and 0 disables it. Costs a second measurement
+                         pass over the stack when it is on.
 
         Returns:
             Fused image
@@ -333,7 +337,8 @@ class MultiFocusFusion:
                                            kernel_size=kernel_size,
                                            halo_radius=halo_radius,
                                            depth_smoothing=depth_smoothing,
-                                           selectivity=average_selectivity)
+                                           selectivity=average_selectivity,
+                                           coherence_radius=coherence_radius)
             except Exception as exc:
                 print(f"Warning: GPU depth-map fusion failed ({exc}); falling back to CPU.")
                 try:
@@ -348,7 +353,8 @@ class MultiFocusFusion:
                              kernel_size=kernel_size, thread_count=thread_count,
                              halo_radius=halo_radius,
                              depth_smoothing=depth_smoothing,
-                             selectivity=average_selectivity)
+                             selectivity=average_selectivity,
+                             coherence_radius=coherence_radius)
 
     def _validate_dct_environment(self) -> None:
         """Validate DCT fusion dependencies."""

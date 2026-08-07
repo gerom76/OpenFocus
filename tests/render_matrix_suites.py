@@ -27,6 +27,21 @@ from tests.render_matrix import Plan, RegistrationSpec, StackSpec, Suite, Varian
 ELECTRONICS_ANT = r"F:\Media\MacroTest07\_frames\electronics_ant\framesDNG_c"
 WORK = r"F:\Media\MacroTest07\work"
 
+# Helicon Focus method A - its own contrast-weighted average, the like-for-like
+# counterpart of depthmap_average - at radius 30, smoothing 1. The smoothest of
+# the three Method A settings shipped with the capture, and the render this
+# method is being asked to come closer to.
+#
+# It is a reference and not an answer. Helicon aligned the stack its own way, so
+# the two renders sit several pixels apart locally and nothing rigid relates
+# them; see samples/captures.py. What it is worth is that the no-reference
+# metrics cannot rank grain against texture - `focus_retention` rewards whichever
+# render kept the most local contrast, and on this capture that is the grainiest
+# one - while an independent implementation of the same algorithm has already
+# made that trade in a way somebody shipped.
+HELICON_A30 = (r"F:\Media\MacroTest07\_frames\electronics_ant"
+               r"\electronics_ant-HF-A-30-1.png")
+
 # The app's shipped registration, and what every suite here uses unless it is
 # asking a question about registration itself: homography then ECC, measured on
 # 1024 px reductions, against the middle frame so chain drift is halved.
@@ -83,6 +98,7 @@ def depthmap_average() -> Plan:
     return Plan(
         stack=StackSpec(source=ELECTRONICS_ANT),
         destination=WORK,
+        reference=HELICON_A30,
         suites=[Suite(
             name="Depth Map (Average) - kernel x selectivity x halo",
             fusion="depthmap_average",
@@ -90,6 +106,49 @@ def depthmap_average() -> Plan:
             variants=variants,
             note="Halo rows are appended after the kernel x selectivity grid; "
                  "rows without a `_h` tag ran at halo_radius 0.",
+        )],
+    )
+
+
+def depthmap_average_coherence() -> Plan:
+    """Depth Map (Average): the weight-coherence radius, against kernel and selectivity.
+
+    The suite the `coherence_radius` dial was added from. `depthmap_average`
+    found the shape of the problem and could not fix it: every setting in that
+    grid trades haze against grain along one line, and the only clean corner of
+    it (kernel 51) is clean because a 51 px pool blurs the focus decision itself.
+    The kernel was doing two jobs - resolving the detail and making the decision
+    coherent - and the second one is what the new stage takes over.
+
+    So the axes are the two the kernel was overloaded with, plus the dial that
+    unloads it. The expectation being tested is specifically that the radius
+    removes the kernel's second job: if it does, the small kernels should catch
+    the large ones up rather than merely improving alongside them.
+
+    Radius 0 rows are the controls, and they are the previous suite's grid
+    exactly, so the two runs can be read against each other.
+    """
+    variants = _grid(
+        "depthmap_average",
+        kernel_size=[5, 9, 25, 51],
+        average_selectivity=[50, 100],
+        coherence_radius=[0, 8, 16, 24],
+    )
+
+    return Plan(
+        stack=StackSpec(source=ELECTRONICS_ANT),
+        destination=WORK,
+        reference=HELICON_A30,
+        suites=[Suite(
+            name="Depth Map (Average) - weight coherence x kernel x selectivity",
+            fusion="depthmap_average",
+            registration=ECC_HOMOGRAPHY,
+            variants=variants,
+            note="`coherence_radius` 0 is the unfiltered blend, byte for byte, "
+                 "and costs one pass over the stack; anything else costs two. "
+                 "Scored against Helicon Focus method A at radius 30 - see "
+                 "RefGap and RefAgree in the table, and read them against "
+                 "Retention rather than instead of it.",
         )],
     )
 
@@ -193,6 +252,7 @@ def depthmap_modes() -> Plan:
 
 SUITES = {
     "depthmap_average": depthmap_average,
+    "depthmap_average_coherence": depthmap_average_coherence,
     "depthmap_average_halo": depthmap_average_halo,
     "depthmap_max": depthmap_max,
     "depthmap_modes": depthmap_modes,
@@ -225,6 +285,7 @@ def build(names: Sequence[str]) -> Plan:
         stack=head.stack,
         destination=head.destination,
         suites=suites,
+        reference=head.reference,
         thread_count=head.thread_count,
         output_format=head.output_format,
         preview_format=head.preview_format,

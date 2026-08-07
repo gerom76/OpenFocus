@@ -57,6 +57,23 @@ established no-reference fusion score; `defocus_seam_visible` and
 `block_speckle` catch a result that tore the background into patches. The
 `score` column is a within-run heuristic over those, useful for sorting the
 table and for nothing else. The crops decide.
+
+**None of those can tell recovered texture from kept grain**, and on a real
+capture that is the distinction a sweep of this method is usually looking for.
+`focus_retention` measures local contrast against the most any frame of the
+stack offered, so the render that kept the most sensor grain scores highest -
+which is not a subtle effect: on the ant capture it ranked the sharpest, most
+speckled candidate of 31 first and the one that actually looked closest to a
+shipped competitor's render eighth.
+
+`--reference-render` is the answer to that. Point it at another program's render
+of the same capture and every candidate is also scored against it, as `RefGap`
+(how far our fine-detail energy sits from that render's, measured separately in
+each fifth of the frame by how much detail *it* found there) and `RefAgree`
+(whether we found detail in the same places, over tiles). It is a reference and
+not a ground truth: the two programs aligned the stack differently, so they are
+fitted by a similarity and then compared only in pools - see
+fusion_metrics.fit_reference for what that fit does and does not remove.
 """
 
 import argparse
@@ -84,7 +101,7 @@ from core.registration import (                              # noqa: E402
 from tests import fusion_metrics as fm                       # noqa: E402
 from tests import xlsx                                       # noqa: E402
 from utils import bitdepth                                   # noqa: E402
-from utils.image_utils import write_image                    # noqa: E402
+from utils.image_utils import read_image_any_depth, write_image   # noqa: E402
 
 # Filename vocabulary, kept the same as the app's own export names
 # (controllers/export_manager.py) so a render from here and a render from the
@@ -127,6 +144,8 @@ COLUMNS: Sequence[Tuple[str, str, str, Optional[bool]]] = (
     ("score", "Score", "{:.3f}", True),
     ("focus_retention", "Retention", "{:.4f}", True),
     ("flat_noise", "FlatNoise", "{:.3f}", False),
+    ("reference_gap", "RefGap", "{:.3f}", False),
+    ("reference_agreement", "RefAgree", "{:.4f}", True),
     ("qabf", "Q_ABF", "{:.4f}", True),
     ("spatial_frequency", "SpatFreq", "{:.3f}", True),
     ("entropy", "Entropy", "{:.3f}", True),
@@ -294,6 +313,15 @@ class Plan:
     # subsampling it would raise the retention of every candidate at once.
     metric_source_limit: int = 24
     save_aligned: bool = False
+    # Another program's render of the same capture, to score every candidate
+    # against. Not a ground truth and not scored as one - the two are not
+    # registered to each other and no warp relates them, so the comparison is
+    # band energy and tile agreement only (see fusion_metrics.band_ratios). What
+    # it answers is the question the no-reference metrics cannot: `retention`
+    # rewards keeping the most local contrast, and on a real capture the most
+    # local contrast belongs to the render that kept the most grain. Left None,
+    # the reference columns are simply absent.
+    reference: Optional[str] = None
 
     @property
     def workers(self) -> int:
@@ -420,6 +448,56 @@ def register_stack(images: Sequence[np.ndarray], spec: RegistrationSpec,
                           reference_index=reference)
     print(f"[Register] Done in {time.perf_counter() - started:.1f} s", flush=True)
     return aligned
+
+
+def load_reference(path: Optional[str]) -> Optional[np.ndarray]:
+    """Another program's render of this capture, as 8-bit BGR, or None.
+
+    A path that is set but unreadable is a warning rather than a failure - the
+    sweep is still worth running without the reference columns, and a missing
+    file should not cost a twenty-minute render.
+    """
+    if not path:
+        return None
+    if not os.path.isfile(path):
+        print(f"[Metrics] Reference render not found, skipping those columns: {path}",
+              flush=True)
+        return None
+
+    image = read_image_any_depth(path)
+    if image is None:
+        print(f"[Metrics] Reference render could not be decoded, skipping those "
+              f"columns: {path}", flush=True)
+        return None
+
+    image = bitdepth.to_display8(image)
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    return image
+
+
+def fit_reference(reference: Optional[np.ndarray],
+                  fused: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[Tuple]]:
+    """Put the reference on the render's grid, and take its zoning off it.
+
+    Done once, against the first candidate that rendered, and reused for the
+    rest: every candidate in a run comes out of the same aligned stack and so
+    shares one geometry, and re-fitting per candidate would let the yardstick
+    move between two rows of the same table. Fitting at all is what makes the
+    zones cover the same content - see fusion_metrics.fit_reference.
+    """
+    if reference is None:
+        return None, None
+    fitted = fm.fit_reference(reference, bitdepth.to_display8(fused))
+    if fitted is None:
+        print("[Metrics] Could not fit the reference render to this stack's "
+              "geometry; scoring against it uncropped instead, which is only "
+              "meaningful if the two already share a scale.", flush=True)
+        fitted = reference
+    else:
+        print(f"[Metrics] Reference fitted onto the render grid "
+              f"({fitted.shape[1]}x{fitted.shape[0]})", flush=True)
+    return fitted, fm.reference_bands(fitted)
 
 
 def metric_sources(aligned: Sequence[np.ndarray], limit: int) -> List[np.ndarray]:
@@ -553,7 +631,9 @@ def render_variant(aligned: Sequence[np.ndarray], suite: Suite, variant: Variant
 
 
 def measure(fused: np.ndarray, sources: Sequence[np.ndarray],
-            ceiling: np.ndarray) -> Dict[str, float]:
+            ceiling: np.ndarray,
+            reference: Optional[np.ndarray] = None,
+            bands: Optional[Tuple] = None) -> Dict[str, float]:
     """Every metric this harness reports, for one render."""
     fused8 = bitdepth.to_display8(fused)
     fused8, matched, _ = fm.align_to_common_size(fused8, list(sources))
@@ -561,6 +641,16 @@ def measure(fused: np.ndarray, sources: Sequence[np.ndarray],
     scores = fm.evaluate(fused8, matched)
     scores["focus_retention"] = fm.focus_retention(fused8, ceiling)
     scores["flat_noise"] = fm.flat_noise(fused8)
+
+    if reference is not None and bands is not None:
+        ours, theirs, _ = fm.align_to_common_size(fused8, [reference])
+        ratios = fm.band_ratios(ours, theirs[0], bands)
+        scores["reference_gap"] = fm.reference_gap(ratios)
+        agreement, share = fm.detail_agreement(ours, theirs[0], block=32)
+        scores["reference_agreement"] = agreement
+        scores["reference_share"] = share
+        for index, ratio in enumerate(ratios, start=1):
+            scores[f"reference_band{index}"] = ratio
     return scores
 
 
@@ -672,6 +762,7 @@ def write_settings(path: str, plan: Plan, suite: Suite, frames: int,
                    "threshold": suite.tile_threshold},
         "thread_count": plan.workers,
         "output_format": plan.output_format,
+        "reference": plan.reference,
         "variants": [_jsonable(v.params) for v in suite.variants],
     }
     with open(path, "w", encoding="utf-8") as handle:
@@ -790,6 +881,47 @@ def _summary(ranked: Sequence[Dict[str, Any]], top: int = 5) -> List[str]:
         "weighting was right for this capture.",
         "",
     ]
+
+    # The same candidates, ranked the other way. Worth its own table whenever a
+    # reference was given, because the two orderings can disagree completely:
+    # `score` is carried by focus_retention, which measures local contrast
+    # against the best any frame offered and so cannot tell recovered texture
+    # from kept grain. Where they disagree it is the more interesting half of
+    # the run, and reading only the table above would miss it entirely.
+    referenced = [row for row in scored if "reference_agreement" in row["metrics"]]
+    if referenced:
+        by_reference = sorted(referenced,
+                              key=lambda r: -r["metrics"]["reference_agreement"])
+        lines += [f"Top {min(top, len(by_reference))} by agreement with the "
+                  f"reference render:", ""]
+        lines += ["| # | Variant | Settings | RefAgree | RefGap | Retention | Score |",
+                  "|---|---|---|---:|---:|---:|---:|"]
+        for rank, row in enumerate(by_reference[:top], start=1):
+            metrics = row["metrics"]
+            settings = ", ".join(f"{key} {_tag_value(value)}"
+                                 for key, value in row.get("params", {}).items()
+                                 if key != "thread_count") or "defaults"
+            lines.append(
+                f"| {rank} | `{row['label']}` | {settings} | "
+                f"{metrics['reference_agreement']:.4f} | "
+                f"{metrics['reference_gap']:.3f} | "
+                f"{metrics['focus_retention']:.4f} | {metrics['score']:.3f} |")
+
+        top_scored = {row["label"] for row in scored[:top]}
+        overlap = sum(1 for row in by_reference[:top] if row["label"] in top_scored)
+        lines += [
+            "",
+            f"{overlap} of {min(top, len(by_reference))} candidates appear in both "
+            f"tables. " + (
+                "The two rankings disagree, which is the run's finding rather "
+                "than a fault in either: retention rewards whichever render kept "
+                "the most local contrast, and on a real capture the grainiest "
+                "render keeps the most. The crops settle it."
+                if overlap <= top // 2 else
+                "The two rankings broadly agree, so the score is being carried "
+                "by something the reference also recognises."),
+            "",
+        ]
     return lines
 
 
@@ -866,6 +998,24 @@ def write_report(path: str, plan: Plan, suite: Suite, rows: Sequence[Dict[str, A
         "- **FlatNoise** - grain left where the picture holds no detail. Lower is",
         "  cleaner, and a blend beats a hard select here because averaging frames is",
         "  what removes grain.",
+    ]
+    if plan.reference:
+        lines += [
+            f"- **RefGap** / **RefAgree** - against `{os.path.basename(plan.reference)}`,",
+            "  which is another program's render of this capture and not a ground",
+            "  truth: the two are not registered to each other and no warp relates",
+            "  them, so nothing here is read pixel by pixel. RefGap is how far our",
+            "  fine-detail energy sits from that render's, measured separately in each",
+            "  fifth of the frame by how much detail *it* found there and combined as",
+            "  an RMS log ratio - 0 is the reference exactly. RefAgree is whether we",
+            "  found detail in the same places, over 32 px tiles. They are reported",
+            "  together because either alone is easy to satisfy: a uniformly blurred",
+            "  render keeps some agreement while recovering nothing, and a render that",
+            "  is grainy in the flat fifth and soft in the busy one can average out to",
+            "  a small gap. Read them against Retention, which cannot tell recovered",
+            "  texture from kept grain and rewards both.",
+        ]
+    lines += [
         "- **Score** - retention, scaled by how the cleanliness columns rank *within",
         f"  this run* (between {CLEANLINESS_FLOOR:g}x and 1x of it). A sorting aid, not a",
         "  verdict: it cannot see a halo, a stitching seam across a highlight, or a",
@@ -922,6 +1072,15 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
         sources = metric_sources(aligned, plan.metric_source_limit)
         print(f"[Metrics] Q_ABF against {len(sources)} of {len(aligned)} frame(s); "
               f"focus ceiling from all {len(aligned)}", flush=True)
+
+        # Loaded now so a bad path is reported before the first render, but
+        # fitted against the first result - it is the render's geometry the
+        # reference has to be put on, and no frame of the stack carries it.
+        raw_reference = load_reference(plan.reference)
+        reference, bands = None, None
+        if raw_reference is not None:
+            print(f"[Metrics] Reference render {os.path.basename(plan.reference)} "
+                  f"at {raw_reference.shape[1]}x{raw_reference.shape[0]}", flush=True)
         # The frames go in at their own depth: focus_energy_map brings 16-bit
         # onto the 8-bit scale itself, so the ceiling matches the 8-bit renders
         # it is compared against without a copy of the stack being made.
@@ -951,6 +1110,9 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
                 rows.append(row)
                 continue
 
+            if raw_reference is not None and reference is None:
+                reference, bands = fit_reference(raw_reference, fused)
+
             image_path = os.path.join(run_dir, label + plan.output_format)
             write_image(image_path, fused)
             if plan.preview_format and plan.preview_format != plan.output_format:
@@ -966,13 +1128,18 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
                     bitdepth.prepare_for_write(tile, ".png"))
 
             row["metrics"] = {k: float(v) for k, v in
-                              measure(fused, sources, ceiling).items()}
+                              measure(fused, sources, ceiling,
+                                      reference, bands).items()}
             row["metrics"]["seconds"] = seconds
             row["file"] = os.path.basename(image_path)
             rows.append(row)
-            print(f"    {seconds:.1f} s, retention {row['metrics']['focus_retention']:.4f}, "
-                  f"flat noise {row['metrics']['flat_noise']:.3f}, "
-                  f"Q_ABF {row['metrics']['qabf']:.4f}", flush=True)
+            line = (f"    {seconds:.1f} s, retention {row['metrics']['focus_retention']:.4f}, "
+                    f"flat noise {row['metrics']['flat_noise']:.3f}, "
+                    f"Q_ABF {row['metrics']['qabf']:.4f}")
+            if "reference_gap" in row["metrics"]:
+                line += (f", ref gap {row['metrics']['reference_gap']:.3f}, "
+                         f"ref agree {row['metrics']['reference_agreement']:.4f}")
+            print(line, flush=True)
             del fused
 
         add_scores(rows)
@@ -1151,6 +1318,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="frames the no-reference metrics are measured against")
     parser.add_argument("--save-aligned", action="store_true",
                         help="also write the registered frames")
+    parser.add_argument("--reference-render", default=None,
+                        help="another program's render of this capture, to score "
+                             "every candidate against; '' to drop a suite's own")
     return parser
 
 
@@ -1203,6 +1373,8 @@ def apply_overrides(plan: Plan, args: argparse.Namespace) -> Plan:
         metric_source_limit=(plan.metric_source_limit if args.metric_frames is None
                              else args.metric_frames),
         save_aligned=args.save_aligned or plan.save_aligned,
+        reference=(plan.reference if args.reference_render is None
+                   else (args.reference_render or None)),
     )
 
 

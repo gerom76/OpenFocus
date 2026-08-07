@@ -2073,6 +2073,140 @@ both ends of the dial in `tests/test_depthmap_gpu.py`.
 
 ---
 
+## 25. Depth Map (Average) selects hard, and has nothing to make that coherent
+
+**Method:** Depth Map (Average) | **Category:** Quality | **Impact:** High |
+**Effort:** Medium | **Fixed in 1.38.0**
+
+Item 24 stopped the blend collapsing into the mean, and in doing so turned it
+into something it was never given machinery for. Measured on the reference
+333-frame ant stack at kernel 9, selectivity 100:
+
+| | |
+|---|---|
+| Share of the weight the winning frame takes, median resolved pixel | **96%** |
+| Frames effectively mixed there (participation ratio) | **1.1** of 333 |
+
+So at any selectivity high enough to keep the haze off a deep stack, MODE_AVERAGE
+*is* a hard select - and it therefore inherits the hard select's failure without
+inheriting MODE_MAX's cure for it (items 22 and 23). Local spread of the depth
+the blend actually renders from, over a 9x9 window:
+
+| Region | Detail | Mid | No frame resolves it |
+|---|---:|---:|---:|
+| Spread, in slices of 333 | 0.24 | 0.57 | **7.59** |
+
+Quarter of a slice where the stack resolves something, and pixels side by side
+drawn from frames eight apart where it does not. Those frames do not carry the
+same local brightness - a defocused neighbour's glow has moved between them - so
+the region comes out as blotches, which is what this mode has always done to
+smooth dark surfaces.
+
+The only setting that suppressed it was a pooling window wide enough to average
+the incoherence away, and that window is also the thing deciding what counts as
+detail. The kernel was doing two jobs and could not do both: `k51` was the
+cleanest render of the previous sweep and it is soft, `k5` the sharpest and it
+blotches.
+
+**What did not work.** Two obvious fixes were measured and dropped, both
+recorded here because each looks right on paper:
+
+* **Raise the baseline** so flat regions average. It does exactly that - flat-zone
+  high-pass energy falls from 2.19x Helicon's to 1.02x - but the baseline is an
+  *absolute* level and a modest real focus peak in a dark region sits below it,
+  so tile agreement falls from 0.945 to 0.906 as the detail goes with the grain.
+* **Gate on trust**, the participation-ratio statistic MODE_MAX already uses. It
+  fixes the flat regions outright (7.59 slices to 0.38) and tears the mid zone
+  apart doing it (0.57 to **15.40**), because trust is bimodal - only 8.9% of
+  pixels land between 0.05 and 0.95 - so a rule that switches on it is a step and
+  not a ramp. This is the same failure `DEFAULT_DEPTH_SMOOTHING` documents from
+  1.35.0, reproduced in the other mode.
+
+**Fix.** Smooth the decision instead of the evidence. Each frame's *share* of the
+blend is passed through a guided filter (He et al., the one `gff.py` already
+carries) with that frame as its own guide, before the pixels are gathered -
+exposed as a **coherence radius** in pixels, 0 being off and byte-for-byte the
+old blend.
+
+Three properties make it the right shape where the two attempts above were not.
+It is applied uniformly to every pixel, so it draws no boundary: where the blend
+already agrees with itself over a neighbourhood the share is locally constant and
+filtering returns it unchanged. It runs *after* the exponent rather than before
+it, so unlike a wider pool it cannot leak a sharp contour's energy onto the
+background beside it - the ring item 21 removed. And guiding each share with its
+own frame is what keeps it from costing detail: where that frame is sharp its
+guide has edges and the share keeps them, and where it is defocused the guide is
+featureless and the share is simply smoothed, which is precisely the case where
+the choice was arbitrary.
+
+The share, rather than the raw weight, is what has to be filtered - the raw
+weight is an eighth power of an energy ratio spanning three decades, and a box
+over that propagates the largest value in the window. Shares are bounded in
+[0, 1] and sum to 1, so filtering them re-mixes a decision. That is also the cost:
+the total must be known before any frame can be normalised, so the stack is
+measured twice. Measured at 1.7 MP over 333 frames: **5.6 s to 10.3 s**.
+
+On the reference stack against Helicon Focus method A radius 30 - its own
+contrast-weighted average, and the render this mode is asked to come closer to -
+at the shipped kernel and selectivity (9, 50):
+
+| Radius | 0 | 4 | 8 | 16 | 24 |
+|---|---:|---:|---:|---:|---:|
+| Fine-band energy, quietest fifth of the frame | 2.19x | 1.60x | 1.15x | **0.97x** | - |
+| Fine-band energy, busiest fifth | 1.35x | 1.33x | 1.30x | 1.23x | - |
+| Tile detail agreement | 0.945 | 0.963 | 0.972 | **0.977** | 0.972 |
+
+0.977 is past every setting reachable without this - the best of the 31-render
+sweep that preceded it was 0.967 - and inside the spread of Helicon's own three
+methods against that render (0.963 to 0.988). It also unloads the kernel: with
+the filter on, agreement at radius 16 is 0.976 at kernel 5, 0.977 at 9, 0.975 at
+25 and 0.972 at 51, where without it the kernel had to be 51 to come close.
+
+**Off by default, and the reason is the assumption.** The filter assumes what the
+rest of the module assumes - depth piecewise-smooth, stepping only at an
+occlusion - and it assumes it out to `radius`. The scenario stacks in
+`tests/fusion_scenarios.py` are built the other way, one horizontal band per
+slice, so a 320 px frame of 12 slices steps depth every 27 px:
+
+| Scenario | coh 0 | coh 2 | coh 4 | coh 8 | coh 16 |
+|---|---:|---:|---:|---:|---:|
+| `fine_texture` | 35.81 | **37.75** | 36.11 | 32.89 | 29.83 |
+| `long_stack` | **38.41** | 34.83 | 32.18 | 29.37 | 25.23 |
+| `sensor_noise` | **49.49** | 46.09 | 43.73 | 41.01 | 38.14 |
+| `deep_stack` | 24.44 | 24.48 | **24.48** | 24.33 | 23.91 |
+
+Every one best at radius 0 to 4. They are not independent evidence of anything
+else - they share one mask builder, and that geometry is the one this stage
+cannot serve - but they are the geometry the suite guards, and short stacks do
+not want the filter regardless: the haze it descends from is what a defocused
+*majority* does to a blend, so a three-frame stack never had the disease. It
+earns its keep on a deep capture of a real surface, which is the regime to reach
+for it in.
+
+**Guarded by** `tests/test_depthmap_coherence.py` - 0 reproducing the unfiltered
+blend byte for byte, MODE_MAX proved indifferent, the filtered result held inside
+the envelope of the frames it blended (a fitted linear model can return a
+negative share, and a negative weight would subtract a frame), the filter itself
+shown to leave a constant untouched and to follow a structured guide where it
+smooths a featureless one, and the quality claim made where it is true: against
+the bundled `samples/electronics_ant` capture and its Helicon render, since a
+rendered stack's flat region is flat and its unfiltered blend already averages it
+correctly. CPU/GPU parity in `tests/test_depthmap_gpu.py`.
+
+**The harness could not have found this.** `focus_retention` is the sweep's
+headline metric and it rewards whichever render kept the most local contrast -
+which on a real capture is the one that kept the most grain. It ranked
+`k5_sel100`, the worst match to Helicon of the 31, **first**, and `k51_sel25`,
+the best, **eighth**. So `tests/render_matrix.py` gained a foreign reference:
+`--reference-render` scores every candidate against another program's render of
+the same capture, as `RefGap` and `RefAgree`. Neither is read pixel by pixel -
+the two programs aligned the stack differently and no warp relates them - but
+they are fitted by a similarity first, which is worth doing: tile agreement on
+this capture reads 0.49 unfitted and 0.95 fitted, and the unfitted number ranks
+misalignment rather than fusion.
+
+---
+
 ## Tuning Pyramid
 
 Everything item 19 added is exposed, because every one of them is a judgement

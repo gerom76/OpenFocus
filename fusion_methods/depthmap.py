@@ -259,6 +259,79 @@ _BASELINE_FRACTION = 0.1
 _WEIGHT_FLOOR = 1e-8
 
 # ---------------------------------------------------------------------------
+# Weight coherence
+# ---------------------------------------------------------------------------
+# What MODE_AVERAGE was missing, and the counterpart of the depth fill that
+# MODE_MAX was given above.
+#
+# At any selectivity high enough to keep the haze off a deep stack, the blend is
+# a hard select in all but name: measured on the reference 333-frame ant stack
+# at k=9 and selectivity 100, the winning frame takes 96% of the weight at the
+# median pixel in every part of the picture that resolves anything. So the mode
+# gets neither of the two things it exists for - it does not average, and it
+# inherits the hard select's failure without inheriting its cure.
+#
+# That failure is spatial. The depth the blend renders from varies by a quarter
+# of a slice across a resolved region, which is coherent, but by 7.6 slices over
+# a region no frame resolves - neighbouring pixels drawn from frames eight apart,
+# which at this magnification are not registered to each other to better than a
+# fraction of a pixel and do not carry the same local brightness. That is the
+# blotching this mode has always shown on smooth surfaces.
+#
+# Until now the only setting that suppressed it was a pooling window wide enough
+# to average the incoherence away (51 px), which works because it blurs the
+# *evidence* - and blurs the detail out of the decision with it, since the
+# argument for a wide window is exactly the argument against it. The kernel was
+# doing two jobs and could not do both.
+#
+# So the coherence is taken off the kernel and given its own stage: the weights
+# are smoothed, after the exponent rather than before it, and guided by the
+# frame they belong to. Each frame's share of the blend is filtered with that
+# frame as the guide (He et al.), so where the frame is sharp its guide has
+# edges and the share keeps them - the frame still contributes its detail
+# crisply - while where the frame is defocused the guide is featureless and the
+# share is simply smoothed, which is precisely where the choice was arbitrary.
+# Nothing is switched on or off per pixel, so no boundary is drawn: over a
+# region the blend already agreed with itself the share is locally constant and
+# filtering it changes nothing.
+#
+# Measured on the 333-frame ant capture against Helicon Focus method A at
+# radius 30, at the shipped defaults (k=9, selectivity 50): the high-pass energy
+# ratio over Helicon's falls from 2.19x to 0.97x in the quietest fifth of the
+# frame while the busiest fifth holds at 1.23x, and tile-level detail agreement
+# rises from 0.945 to 0.977 at radius 16 - past every setting reachable without
+# this, and inside the spread of Helicon's own methods against each other
+# (0.963 to 0.988). Radius 8 carries most of that (0.972) at half the reach.
+#
+# Off by default all the same, because the reach is the whole risk. The filter
+# assumes what the rest of this module assumes - that depth is piecewise-smooth,
+# varying continuously across a surface and stepping only at an occlusion - and
+# it assumes it out to `radius`. Where that holds, filtering a share is free:
+# the field is locally constant and the filter returns it unchanged. Where the
+# correct frame changes every few pixels it is not free at all, and the scenario
+# stacks in tests/fusion_scenarios.py are built exactly that way - horizontal
+# bands one slice each, so a 320 px frame of 12 slices steps depth every 27 px.
+# Every one of them is best at radius 0 to 4 and falls off past that
+# (long_stack: 38.4 dB at 0, 34.8 at 2, 29.4 at 8), and they are not independent
+# evidence of anything else: they share one mask builder, and that geometry is
+# the one this stage cannot serve.
+#
+# Short stacks do not want it either, for a plainer reason - the haze this mode
+# fights is what a defocused *majority* does to a blend, so a three-frame stack
+# never had the disease and the filter is all cost. It earns its keep on a deep
+# capture of a real surface, which is the regime the dial exists for and the one
+# it should be reached for in.
+DEFAULT_COHERENCE_RADIUS = 0
+
+# Regularisation of that filter, on the guide's own [0, 1] scale. It sets how
+# much local contrast a frame must have before its share is allowed to follow
+# it: below roughly sqrt(eps) in local standard deviation the filter degrades to
+# a plain box, which is the intended behaviour on a defocused guide. Measured
+# across 1e-4 to 1e-2 the agreement moves by 0.004 and rises throughout, so the
+# top of that range is taken and the number is not delicate.
+COHERENCE_EPS = 1e-2
+
+# ---------------------------------------------------------------------------
 # Average selectivity
 # ---------------------------------------------------------------------------
 # What stops MODE_AVERAGE from collapsing into a plain mean of the whole stack,
@@ -371,6 +444,58 @@ def _resolve_halo_radius(halo_radius):
         return DEFAULT_HALO_RADIUS
 
 
+def _resolve_coherence_radius(radius):
+    """Coerce the weight-coherence radius to a non-negative integer."""
+    if radius is None:
+        return DEFAULT_COHERENCE_RADIUS
+    try:
+        return max(0, int(radius))
+    except (TypeError, ValueError):
+        return DEFAULT_COHERENCE_RADIUS
+
+
+def _guide_of(img):
+    """The single-channel picture a frame's weight share is filtered against."""
+    if img.ndim == 2:
+        return img
+    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+
+def _guided_filter(share, guide, radius, eps):
+    """He et al. guided filter of `share` under `guide`, both float32 planes.
+
+    The local linear model the filter fits - share ~ a*guide + b over each
+    window - is what makes this edge-aware: where the guide has structure the
+    fit follows it, and where the guide is flat `a` collapses to 0 and the
+    result is the windowed mean. That is the whole reason it is used here rather
+    than a blur; see DEFAULT_COHERENCE_RADIUS.
+
+    Written out rather than taken from cv2.ximgproc, which is an opencv-contrib
+    module the project does not depend on - gff.py carries its own copy for the
+    same reason.
+    """
+    ksize = (2 * radius + 1, 2 * radius + 1)
+
+    def box(plane):
+        return cv2.boxFilter(plane, cv2.CV_32F, ksize, normalize=True,
+                             borderType=cv2.BORDER_REFLECT)
+
+    mean_guide = box(guide)
+    mean_share = box(share)
+    # cov = E[gs] - E[g]E[s], var = E[gg] - E[g]E[g], both folded in place so
+    # this costs the four box filters and no full-frame temporaries beyond them.
+    cov = box(guide * share)
+    cov -= mean_guide * mean_share
+    var = box(guide * guide)
+    var -= mean_guide * mean_guide
+
+    slope = cov
+    slope /= var + eps
+    offset = mean_share
+    offset -= slope * mean_guide
+    return box(slope) * guide + box(offset)
+
+
 @functools.lru_cache(maxsize=16)
 def _halo_element(radius):
     """Elliptical structuring element covering `radius` pixels, or None for 0.
@@ -397,8 +522,14 @@ def _worker_bytes(rows, cols, channels):
     one running product and one square root. MODE_MAX does not allocate those,
     and is charged for them anyway rather than splitting the estimate in two
     over a tenth of a task.
+
+    Six more for the coherence filter, which runs inside the task on the weight
+    it just built: a grey guide, the two windowed means, the covariance and
+    variance the linear fit is taken from, and the fit itself. Charged to every
+    task for the same reason - the alternative is a memory bound that depends on
+    a dial, which would size the pool differently for two runs of the same stack.
     """
-    return 4 * rows * cols * (3 * channels + 5)
+    return 4 * rows * cols * (3 * channels + 11)
 
 
 def _resolve_workers(thread_count, rows, cols, channels, num_images):
@@ -745,7 +876,8 @@ def _gather_blended(load_float, count, depth, out_dtype, rows, cols):
 
 def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
                   kernel_size=None, thread_count=None, halo_radius=None,
-                  depth_smoothing=None, selectivity=None):
+                  depth_smoothing=None, selectivity=None,
+                  coherence_radius=None):
     """Depth-map multi-focus fusion (per-pixel select or contrast-weighted avg).
 
     A local Laplacian-energy focus measure is computed for every frame. In
@@ -774,6 +906,15 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     the linear weighting it always used. See the block above
     DEFAULT_SELECTIVITY.
 
+    `coherence_radius` (pixels, MODE_AVERAGE only) is what stops a region no
+    frame resolves from breaking into blotches: each frame's share of the blend
+    is passed through an edge-aware filter of this radius before the pixels are
+    gathered, so neighbouring pixels can no longer draw the same smooth surface
+    from frames eight slices apart. 0 disables it and reproduces the unfiltered
+    blend exactly. It costs a second measurement pass over the stack - the total
+    has to be known before a share can be formed - so it is the one dial here
+    that changes what the mode costs; see DEFAULT_COHERENCE_RADIUS.
+
     The stack's own depth is preserved end to end: an 8-bit stack returns
     uint8, a 16-bit stack returns uint16.
     """
@@ -788,6 +929,11 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     # MODE_AVERAGE is already a blend of every frame by construction; there is
     # no index map to fill, so the dial has nothing to act on.
     coherent = mode == MODE_MAX and smoothing > 0
+    # And the converse: MODE_MAX gathers whole pixels from one frame, so it has
+    # no weight field for this to filter. The two modes get the same fix in the
+    # only form each can carry it.
+    coherence = (_resolve_coherence_radius(coherence_radius)
+                 if mode == MODE_AVERAGE else 0)
 
     # ---------- Data loading ----------
     if isinstance(input_source, str):
@@ -852,13 +998,38 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
             energy = cv2.dilate(energy, halo_element)
         return energy
 
-    def measure_weight(k, baseline, scale, exponent):
+    def _weigh(energy, baseline, scale, exponent):
+        """Turn a measured energy map into a MODE_AVERAGE weight, in place."""
+        energy += baseline
+        energy /= scale
+        return _powered(energy, exponent) if exponent != 1.0 else energy
+
+    def measure_energy_weight(k, baseline, scale, exponent):
+        """The MODE_AVERAGE weight of frame k, without keeping the frame.
+
+        The totalling pass the coherence filter needs. It differs from
+        `measure_weight` only in not holding the pixels: nothing downstream of
+        the total wants them, and at this depth a stack of frames left alive
+        until the reduction consumes them is what the memory bound is about.
+        """
+        energy = _focus_energy(load_float(k), window)
+        if halo_element is not None:
+            energy = cv2.dilate(energy, halo_element)
+        return _weigh(energy, baseline, scale, exponent)
+
+    def measure_weight(k, baseline, scale, exponent, total=None):
         """Frame k and the MODE_AVERAGE weight it carries, w = ((E+b)/s)**p.
 
         The weight is built here rather than in the reduction below so that the
         exponent is taken on the pool alongside the measurement it belongs to;
         the reduction is then a multiply-accumulate that cannot be parallelised
         anyway, because its order is what makes the run reproducible.
+
+        `total` turns the weight into this frame's share of the blend and runs
+        the coherence filter over it, and it happens here for the same reason:
+        the filter is six box passes over a full plane, which is more work than
+        the measurement it follows, and the serial reduction is the one place in
+        this function that cannot absorb it.
         """
         img = load_float(k)
         energy = _focus_energy(img, window)
@@ -866,11 +1037,17 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
             energy = cv2.dilate(energy, halo_element)
         # Folded in place: the energy map is this task's own buffer, so the
         # whole weight is built where the measurement already sits.
-        energy += baseline
-        energy /= scale
-        if exponent != 1.0:
-            energy = _powered(energy, exponent)
-        return img, energy
+        weight = _weigh(energy, baseline, scale, exponent)
+        if total is not None:
+            weight /= total
+            weight = _guided_filter(weight, _guide_of(img), coherence,
+                                    COHERENCE_EPS)
+            # The linear model is fitted, not constrained, so a share can come
+            # back a little negative where the guide has a strong edge the share
+            # does not follow. A negative weight would subtract a frame from the
+            # blend, which is not a thing this rule can mean.
+            np.maximum(weight, 0.0, out=weight)
+        return img, weight
 
     # Frames are measured on a thread pool but reduced in index order, so both
     # the strict-'>' tie-break (MODE_MAX) and the float accumulation
@@ -955,10 +1132,36 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     baseline = scale * _BASELINE_FRACTION
     exponent = _selectivity_exponent(selectivity)
 
+    if coherence:
+        # The filter has to run on each frame's *share* of the blend rather than
+        # on its raw weight, which means the total has to be known before any
+        # frame can be filtered - so the stack is measured twice. Shares are the
+        # only form the smoothing is well behaved on: they are bounded in [0, 1]
+        # and sum to 1, so filtering them re-mixes a decision, whereas the raw
+        # weight is an eighth power of an energy ratio spanning three decades and
+        # a filter over it would simply propagate the largest value in the
+        # window. It is also what keeps one region's frame choice from bleeding
+        # into a neighbouring region that weighed far less.
+        weight_total = np.zeros((rows, cols), dtype=np.float32)
+        for _, weight in _map_in_order(
+                functools.partial(measure_energy_weight, baseline=baseline,
+                                  scale=scale, exponent=exponent),
+                num_images, max_workers):
+            weight_total += weight
+            del weight
+        # Every weight is at least (baseline / scale) ** exponent, so the total
+        # is positive everywhere; the floor is only against an underflow to zero
+        # at the top of the dial, where that lower bound is an eighth power of a
+        # tenth.
+        np.maximum(weight_total, _WEIGHT_FLOOR, out=weight_total)
+    else:
+        weight_total = None
+
+    weigh = functools.partial(measure_weight, baseline=baseline, scale=scale,
+                              exponent=exponent, total=weight_total)
+
     weighted = None
     weight_sum = np.zeros((rows, cols), dtype=np.float32)
-    weigh = functools.partial(measure_weight, baseline=baseline, scale=scale,
-                              exponent=exponent)
     for _, (img, weight) in _map_in_order(weigh, num_images, max_workers):
         if weighted is None:
             weighted = np.zeros_like(img)
@@ -970,7 +1173,11 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
         weight_sum += weight
         del img, weight
 
-    # Every weight is at least (baseline / scale) ** exponent, so the sum is
-    # positive everywhere and needs no floor of its own.
+    # Unfiltered, every weight is at least (baseline / scale) ** exponent and the
+    # sum is positive by construction. Filtered, the shares summed to 1 before
+    # the filter and the filter preserves a windowed mean, so they still sum to
+    # about 1 - but "about" is not "at least", and the clamp above can only have
+    # taken weight away, so this one needs a floor.
+    np.maximum(weight_sum, _WEIGHT_FLOOR, out=weight_sum)
     weighted /= weight_sum[:, :, np.newaxis] if weighted.ndim == 3 else weight_sum
     return bitdepth.from_float01(weighted, out_dtype)

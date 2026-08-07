@@ -133,11 +133,12 @@ def _depthmap_max(stack, kernel_size=9, halo_radius=0, img_resize=None,
 
 
 def _depthmap_average(stack, kernel_size=9, halo_radius=0, selectivity=None,
-                      img_resize=None, thread_count=None):
+                      coherence_radius=None, img_resize=None, thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_AVERAGE
     return depthmap_impl(stack, img_resize, mode=MODE_AVERAGE,
                          kernel_size=kernel_size, halo_radius=halo_radius,
-                         selectivity=selectivity, thread_count=thread_count)
+                         selectivity=selectivity, thread_count=thread_count,
+                         coherence_radius=coherence_radius)
 
 
 def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
@@ -149,11 +150,13 @@ def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0, img_resize=None,
 
 
 def _depthmap_average_torch(stack, kernel_size=9, halo_radius=0,
-                            selectivity=None, img_resize=None, device=None):
+                            selectivity=None, coherence_radius=None,
+                            img_resize=None, device=None):
     from fusion_methods.depthmap_torch import depthmap_torch_impl, MODE_AVERAGE
     return depthmap_torch_impl(stack, img_resize, mode=MODE_AVERAGE,
                                kernel_size=kernel_size, halo_radius=halo_radius,
-                               selectivity=selectivity, device=device)
+                               selectivity=selectivity, device=device,
+                               coherence_radius=coherence_radius)
 
 
 def _dct(stack, block_size=8, kernel_size=7, img_resize=None):
@@ -339,6 +342,17 @@ METHODS = [
              "Higher trades the multi-frame noise reduction of regions that "
              "genuinely have nothing to choose between for detail in the ones "
              "that do."),
+            ("coherence_radius", [0, 4, 8, 16, 24],
+             "Radius of the edge-aware filter each frame's share of the blend "
+             "is passed through before the pixels are gathered. At any useful "
+             "selectivity the blend is a hard select in all but name, and over "
+             "a region no frame resolves its choice is decided by noise: "
+             "neighbouring pixels draw the same smooth surface from frames "
+             "eight slices apart, which do not carry the same local brightness, "
+             "and the region breaks into blotches. Filtering the shares averages "
+             "those choices where the picture is featureless and leaves them "
+             "alone where it is not. 0 is off, and costs nothing; anything else "
+             "walks the stack twice."),
         ),
         min_psnr=30.0,      # measured 39.6 at selectivity 0, 43.9 at the
                             # default; blends rather than selects, so it still
