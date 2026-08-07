@@ -81,7 +81,7 @@ def depthmap_average() -> Plan:
     )
 
     return Plan(
-        stack=StackSpec(source=ELECTRONICS_ANT, bit_depth_mode="auto"),
+        stack=StackSpec(source=ELECTRONICS_ANT),
         destination=WORK,
         suites=[Suite(
             name="Depth Map (Average) - kernel x selectivity x halo",

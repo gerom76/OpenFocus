@@ -29,10 +29,18 @@ what makes a 25-candidate sweep affordable at all, and what makes the candidates
 comparable: they differ by their settings and by nothing else.
 
 **Each run gets its own folder**, named `<timestamp>_<registration>_<fusion>`
-under the destination, holding the renders, the crops, `manifest.json` with
-every number, `settings.json` with everything needed to repeat it, `report.md`,
-and the console log. Nothing is overwritten and nothing is cleaned up: two runs
-a minute apart are two folders.
+under the destination, holding the renders, the crops, `results.xlsx` (one row
+per rendered image, every setting in a column of its own), `manifest.json` with
+every number, `settings.json` with everything needed to repeat it, `report.md`
+opening with the top five, and the console log. Nothing is overwritten and
+nothing is cleaned up: two runs a minute apart are two folders.
+
+**The stack is 16-bit and the renders are JPEG XL**, by default and regardless
+of what the source folder holds. Both are properties of the test set rather than
+of the input: a sweep that ran at whatever depth its files happened to carry
+cannot be read against one that ran at another, and JPEG XL is what the app
+saves - full depth at a fifth of a PNG, which is what makes thirty renders a
+folder rather than a disk. `--bit-depth` and `--format` move either.
 
 **The crops are the point.** A 2 MP render shown at screen size hides exactly
 the differences a sweep is looking for. Three regions are picked automatically
@@ -74,6 +82,7 @@ from core.registration import (                              # noqa: E402
     align_stack, resolve_reference_index, resolve_stages,
 )
 from tests import fusion_metrics as fm                       # noqa: E402
+from tests import xlsx                                       # noqa: E402
 from utils import bitdepth                                   # noqa: E402
 from utils.image_utils import write_image                    # noqa: E402
 
@@ -166,7 +175,13 @@ class StackSpec:
     limit: Optional[int] = None
     scale: float = 1.0
     long_edge: Optional[int] = None
-    bit_depth_mode: str = "auto"
+    # 16-bit rather than 'auto', so the depth is a property of the test set and
+    # not of whatever the source folder happens to hold: an 8-bit stack and a
+    # RAW one otherwise run through different arithmetic, and two sweeps that
+    # differ in their headroom cannot be read against each other. It also keeps
+    # the blending headroom the average mode needs, which is the mode most of
+    # these suites are about.
+    bit_depth_mode: str = bitdepth.MODE_16
 
     def select(self, paths: Sequence[str]) -> List[str]:
         chosen = list(paths)[self.start::max(1, int(self.step))]
@@ -261,8 +276,13 @@ class Plan:
     destination: str
     suites: Sequence[Suite]
     thread_count: int = 0                 # 0 = every core
-    output_format: str = ".png"           # the render, at full depth
-    preview_format: str = ".jpg"          # an 8-bit copy for quick flicking
+    # JPEG XL, which is what the app saves and what these renders are compared
+    # against: it keeps all 16 bits, and a 2 MP result costs a fifth of the PNG
+    # - which matters when one sweep is thirty of them.
+    output_format: str = ".jxl"
+    # An 8-bit copy beside each render, because JPEG XL still opens in very
+    # little. Set to "" to skip it.
+    preview_format: str = ".jpg"
     crop_count: int = 3
     crop_size: int = 448
     # Sources Q_ABF is measured against. It is the one metric that walks the
@@ -658,6 +678,121 @@ def write_settings(path: str, plan: Plan, suite: Suite, frames: int,
         json.dump(payload, handle, indent=2)
 
 
+def _parameter_columns(rows: Sequence[Dict[str, Any]]) -> List[str]:
+    """Every settings key any candidate carried, in the order they first appear."""
+    names: List[str] = []
+    for row in rows:
+        for key in row.get("params", {}):
+            if key != "thread_count" and key not in names:
+                names.append(key)
+    return names
+
+
+def write_workbook(path: str, plan: Plan, suite: Suite,
+                   rows: Sequence[Dict[str, Any]], frames: int,
+                   elapsed: float) -> None:
+    """The run as a spreadsheet: one row per rendered image, sortable.
+
+    The same numbers as report.md and manifest.json, in the form that is
+    actually used to pick a setting - sorted by one column, filtered on another,
+    two runs pasted under each other. Each candidate's settings get a column of
+    their own rather than being folded into its name, so the sweep can be
+    re-sorted by the dial being studied.
+    """
+    parameters = _parameter_columns(rows)
+    header = (["Rank", "Variant", "File"] + parameters
+              + [head for _, head, _, _ in COLUMNS] + ["Status"])
+
+    ranked = sorted(rows, key=lambda r: ((r.get("metrics") or {}).get("score", float("-inf"))),
+                    reverse=True)
+    results: List[List[Any]] = [header]
+    for rank, row in enumerate(ranked, start=1):
+        metrics = row.get("metrics")
+        line: List[Any] = [rank if metrics else None, row["label"],
+                           row.get("file", "")]
+        line += [row.get("params", {}).get(name) for name in parameters]
+        for key, _, _, _ in COLUMNS:
+            value = (metrics or {}).get(key)
+            line.append(round(float(value), 6)
+                        if value is not None and np.isfinite(value) else None)
+        line.append(row.get("error") or row.get("note") or "ok")
+        results.append(line)
+
+    stages = " -> ".join(suite.registration.stages) or "none"
+    settings: List[List[Any]] = [
+        ["Setting", "Value"],
+        ["Suite", suite.name or suite.fusion_slug],
+        ["Source", plan.stack.source],
+        ["Frames", frames],
+        ["Frame selection", plan.stack.describe()],
+        ["Bit depth", f"{plan.stack.bit_depth_mode}-bit"
+            if plan.stack.bit_depth_mode != bitdepth.MODE_AUTO else "auto"],
+        ["Registration", stages],
+        ["Reference frame", suite.registration.reference_mode],
+        ["Detection width", suite.registration.downscale_width],
+        ["ECC parallel", suite.registration.ecc_parallel],
+        ["Fusion", suite.fusion],
+        ["Device", "GPU" if suite.use_gpu else "CPU"],
+        ["Contrast", contrast_module.describe(
+            suite.contrast_method, suite.contrast_strength / 100.0) or "off"],
+        ["Tiling", f"{suite.tile_block_size} px blocks, {suite.tile_overlap} px overlap, "
+                   f"above {suite.tile_threshold} px" if suite.tile_enabled else "off"],
+        ["Threads", plan.workers],
+        ["Output format", plan.output_format],
+        ["Preview format", plan.preview_format or "none"],
+        ["Q_ABF source frames", min(plan.metric_source_limit or frames, frames)],
+        ["Candidates", len(rows)],
+        ["Rendered", sum(1 for row in rows if row.get("metrics"))],
+        ["Total minutes", round(elapsed / 60.0, 2)],
+    ]
+
+    xlsx.write(path, [("Results", results), ("Settings", settings)])
+
+
+def _summary(ranked: Sequence[Dict[str, Any]], top: int = 5) -> List[str]:
+    """The top few candidates, and the ends of the trade-off they sit on.
+
+    First thing in the report because it is the thing being asked for. The two
+    extremes are named alongside the ranking because the score is one weighting
+    of a trade-off, and the sharpest and the cleanest render are both answers to
+    somebody's question even when neither tops the table.
+    """
+    scored = [row for row in ranked if row.get("metrics")]
+    if not scored:
+        return ["## Summary", "", "Nothing rendered.", ""]
+
+    lines = ["## Summary", "",
+             f"Top {min(top, len(scored))} of {len(ranked)} by within-run score:", ""]
+    lines += ["| # | Variant | Settings | Score | Retention | FlatNoise | Q_ABF |",
+              "|---|---|---|---:|---:|---:|---:|"]
+    for rank, row in enumerate(scored[:top], start=1):
+        metrics = row["metrics"]
+        settings = ", ".join(f"{key} {_tag_value(value)}"
+                             for key, value in row.get("params", {}).items()
+                             if key != "thread_count") or "defaults"
+        lines.append(
+            f"| {rank} | `{row['label']}` | {settings} | {metrics['score']:.3f} | "
+            f"{metrics['focus_retention']:.4f} | {metrics['flat_noise']:.3f} | "
+            f"{metrics['qabf']:.4f} |")
+
+    sharpest = max(scored, key=lambda r: r["metrics"]["focus_retention"])
+    cleanest = min(scored, key=lambda r: r["metrics"]["flat_noise"])
+    lines += [
+        "",
+        f"- Sharpest: `{sharpest['label']}` "
+        f"(retention {sharpest['metrics']['focus_retention']:.4f}, "
+        f"flat noise {sharpest['metrics']['flat_noise']:.3f})",
+        f"- Cleanest: `{cleanest['label']}` "
+        f"(flat noise {cleanest['metrics']['flat_noise']:.3f}, "
+        f"retention {cleanest['metrics']['focus_retention']:.4f})",
+        "",
+        "The score weights those two one way; the crops are what settle which "
+        "weighting was right for this capture.",
+        "",
+    ]
+    return lines
+
+
 def _table(rows: Sequence[Dict[str, Any]]) -> List[str]:
     """The report's ranked table, as markdown."""
     headers = ["Variant"] + [head for _, head, _, _ in COLUMNS]
@@ -709,12 +844,16 @@ def write_report(path: str, plan: Plan, suite: Suite, rows: Sequence[Dict[str, A
         f"- Fusion: `{suite.fusion}`"
         + (f", GPU" if suite.use_gpu else ", CPU"),
         f"- Contrast: {contrast_module.describe(suite.contrast_method, suite.contrast_strength / 100.0) or 'off'}",
+        f"- Bit depth: {plan.stack.bit_depth_mode}"
+        + ("" if plan.stack.bit_depth_mode == bitdepth.MODE_AUTO else "-bit")
+        + f", saved as {plan.output_format}",
         f"- Candidates: {len(rows)}, total {elapsed / 60.0:.1f} min",
         "",
     ]
     if suite.note:
         lines += [suite.note, ""]
 
+    lines += _summary(ranked)
     lines += [
         "## Results",
         "",
@@ -748,6 +887,8 @@ def write_report(path: str, plan: Plan, suite: Suite, rows: Sequence[Dict[str, A
         lines += [f"- `{row['label']}`: {row.get('error')}" for row in failed]
 
     lines += ["", "## Files", "",
+              "- `results.xlsx` - the table above as a spreadsheet, one row per "
+              "rendered image, with each setting in its own column",
               "- `manifest.json` - every number, per candidate",
               "- `settings.json` - what to repeat this run with",
               "- `run.log` - the console output"]
@@ -865,6 +1006,8 @@ def run_suite(plan: Plan, suite: Suite, aligned: Sequence[np.ndarray],
 
         write_report(os.path.join(run_dir, "report.md"), plan, suite, rows,
                      regions, len(aligned), elapsed)
+        write_workbook(os.path.join(run_dir, "results.xlsx"), plan, suite, rows,
+                       len(aligned), elapsed)
 
         ranked = sorted((r for r in rows if r.get("metrics")),
                         key=lambda r: r["metrics"]["score"], reverse=True)
@@ -984,6 +1127,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scale", type=float, default=None, help="decode scale factor")
     parser.add_argument("--long-edge", type=int, default=None,
                         help="decode with the long edge at this many pixels")
+    parser.add_argument("--bit-depth", default=None,
+                        choices=list(bitdepth.VALID_MODES),
+                        help="depth the stack is loaded and processed at (default 16)")
 
     parser.add_argument("--reference", default=None,
                         choices=["first", "middle", "last"], help="registration reference frame")
@@ -995,7 +1141,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-tiling", action="store_true")
 
     parser.add_argument("--threads", type=int, default=0, help="0 = every core")
-    parser.add_argument("--format", default=None, help="output format, e.g. .png .tif .jxl")
+    parser.add_argument("--format", default=None,
+                        help="output format (default .jxl), e.g. .jxl .png .tif .dng")
     parser.add_argument("--preview-format", default=None,
                         help="8-bit copy alongside each render; '' to skip")
     parser.add_argument("--crops", type=int, default=None, help="how many crop regions")
@@ -1017,6 +1164,8 @@ def apply_overrides(plan: Plan, args: argparse.Namespace) -> Plan:
     }
     if args.long_edge is not None:
         overrides["long_edge"] = args.long_edge
+    if args.bit_depth is not None:
+        overrides["bit_depth_mode"] = args.bit_depth
     if args.source:
         overrides["source"] = args.source
     if overrides:
