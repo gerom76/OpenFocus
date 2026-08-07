@@ -392,6 +392,104 @@ def block_speckle(fused, block=8, factor=4.0, quiet_percentile=40.0):
                  / quiet.sum() * 100.0)
 
 
+def _grey8(img):
+    """Grayscale float32 on the 0-255 scale, whatever depth the image carries.
+
+    The metrics below are defined in levels rather than in ratios, so a 16-bit
+    render has to be brought onto the same scale as an 8-bit one before it is
+    measured - otherwise the same picture scores 257 times worse for being
+    stored more precisely.
+    """
+    grey = _gray32(img)
+    return grey / 257.0 if img.dtype == np.uint16 else grey
+
+
+def focus_energy_map(img, window=9):
+    """Local Laplacian energy - the focus measure a depth-map select runs on.
+
+    Reproduced here rather than imported from fusion_methods so that a metric
+    keeps meaning the same thing when a method is retuned: a score that moves
+    because the thing measuring it moved cannot rank two releases.
+    """
+    grey = _grey8(img)
+    lap = cv2.Laplacian(grey, cv2.CV_32F, ksize=3)
+    return cv2.boxFilter(lap * lap, cv2.CV_32F, (window, window))
+
+
+def stack_focus_ceiling(sources, window=9):
+    """Per-pixel best focus energy the stack has to offer.
+
+    The ceiling every fused image is judged against by `focus_retention`, and
+    the expensive half of it: it walks the whole stack, so a sweep computes it
+    once and hands the same array to every candidate. Frames are consumed one
+    at a time, so this costs one energy map of memory, not one per frame.
+    """
+    ceiling = None
+    for src in sources:
+        energy = focus_energy_map(src, window)
+        ceiling = energy if ceiling is None else np.maximum(ceiling, energy, out=ceiling)
+    return ceiling
+
+
+def focus_retention(fused, ceiling, window=9, percentile=85.0):
+    """Share of the stack's available local contrast the fusion kept, ~[0, 1].
+
+    This is the metric for haze. Q_ABF asks whether the fused image has edges
+    where the sources had edges, and a veiled result still does - washed out,
+    but there. This asks the sharper question: in the places where some frame
+    resolved detail, how much of that frame's contrast survived? A hard select
+    approaches 1; a blend that averages a defocused majority into the answer
+    reads well below it, which is exactly what "the output looks hazy" is.
+
+    Scored only over the `percentile` of pixels where the stack has the most to
+    offer, since the ratio means nothing where no frame found anything. Energy
+    is squared contrast, so the square root is taken and the number reads as a
+    contrast ratio: 0.8 is "kept four fifths of the contrast that was there".
+
+    `ceiling` comes from `stack_focus_ceiling` over the same source stack. A
+    subsampled stack lowers the ceiling and so flatters every candidate equally
+    - fine for ranking a sweep, not comparable across different subsamples.
+    """
+    energy = focus_energy_map(fused, window)
+    height = min(energy.shape[0], ceiling.shape[0])
+    width = min(energy.shape[1], ceiling.shape[1])
+    energy, ceiling = energy[:height, :width], ceiling[:height, :width]
+
+    strong = ceiling >= np.percentile(ceiling, percentile)
+    if not strong.any():
+        return 0.0
+    eps = np.finfo(np.float32).eps
+    ratio = energy[strong] / np.maximum(ceiling[strong], eps)
+    # The median rather than the mean: a handful of pixels where the fusion
+    # sharpened past any source - a seam, a haloed edge - would otherwise pull
+    # the average up and report a cleaner result than the one on screen.
+    return float(np.median(np.sqrt(ratio)))
+
+
+def flat_noise(fused, sigma=2.0, quiet_percentile=30.0):
+    """Grain left in the parts of the picture that hold no detail, in levels.
+
+    The other half of "clean". A stack is many exposures of one scene, so a
+    method that blends where there is nothing to choose between recovers the
+    noise reduction that averaging gives and scores low here; a hard per-pixel
+    select takes one frame's grain whole and scores high. Measured on the
+    high-pass residual so a smooth tonal gradient is not counted as noise, and
+    restricted to the quietest `quiet_percentile` of the frame so real texture
+    is not either.
+
+    Lower is cleaner. It trades against `focus_retention` - the settings that
+    keep the most contrast are usually the ones that keep the most grain - and
+    the pair is the trade-off a sweep is looking for.
+    """
+    grey = _grey8(fused)
+    residual = grey - cv2.GaussianBlur(grey, (0, 0), sigma)
+    detail = cv2.blur(np.abs(residual), (33, 33))
+    quiet = detail <= np.percentile(detail, quiet_percentile)
+    if not quiet.any():
+        return 0.0
+    return float(np.std(residual[quiet]))
+
+
 def evaluate(fused, sources, reference=None, block=8):
     """Collect every applicable metric into one dict."""
     seam_excess, seam_visible = block_seams(fused, block)
