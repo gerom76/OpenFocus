@@ -51,6 +51,23 @@ class TestParameterRelevance:
         assert render_options.describe(algorithm="depthmap_average")["HaloRadius"] == "Off"
         assert "HaloRadius" not in render_options.describe(algorithm="dct")
 
+    def test_weight_coherence_is_only_reported_for_the_average(self):
+        options = render_options.describe(
+            algorithm="depthmap_average", coherence_radius=16, slice_radius=4)
+        assert options["WeightCoherenceRadius"] == "16 px"
+        assert options["SliceCoherenceRadius"] == "4 slices"
+        # Off is stated rather than omitted, same as the halo radius above: the
+        # average reads both dials whether or not they were moved.
+        off = render_options.describe(algorithm="depthmap_average")
+        assert off["WeightCoherenceRadius"] == "Off"
+        assert off["SliceCoherenceRadius"] == "Off"
+        # The hard select has no weights to pool, so quoting a radius for it
+        # would claim a stage that never ran.
+        hard = render_options.describe(
+            algorithm="depthmap_max", coherence_radius=16, slice_radius=4)
+        assert "WeightCoherenceRadius" not in hard
+        assert "SliceCoherenceRadius" not in hard
+
     def test_batch_size_is_only_reported_for_stackmff(self):
         assert render_options.describe(
             algorithm="stackmffv4", stackmffv4_batch_size=4)["StackMffBatchSize"] == "4"

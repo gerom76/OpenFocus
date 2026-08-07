@@ -114,6 +114,11 @@ class TranslationManager(QObject):
                 'halo_off': 'Off',
                 'label_depth_smooth': 'Depth coherence:',
                 'label_avg_selectivity': 'Selectivity:',
+                'label_avg_coherence': 'Weight coherence:',
+                'label_avg_slice': 'Slice coherence:',
+                # Slice coherence pools this many frames either side of each
+                # one, so the sign is part of the reading.
+                'slice_radius_unit': '±{} frames',
                 'label_dct_block': 'DCT block:',
                 'label_dct_plateau': 'Focus tolerance:',
                 'dct_plateau_crisp': 'Crisp',
@@ -716,6 +721,9 @@ class TranslationManager(QObject):
                 'halo_off': '关闭',
                 'label_depth_smooth': '深度一致性:',
                 'label_avg_selectivity': '选择性:',
+                'label_avg_coherence': '权重一致性:',
+                'label_avg_slice': '切片一致性:',
+                'slice_radius_unit': '±{} 帧',
                 'label_dct_block': 'DCT 分块:',
                 'label_dct_plateau': '对焦容差:',
                 'dct_plateau_crisp': '锐利',

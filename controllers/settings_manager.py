@@ -217,6 +217,8 @@ class SettingsManager:
             "halo_radius": window.slider_halo.value(),
             "depth_smoothing": window.slider_depth_smooth.value(),
             "average_selectivity": window.slider_avg_selectivity.value(),
+            "coherence_radius": window.slider_avg_coherence.value(),
+            "slice_radius": window.slider_avg_slice.value(),
             "dct_block_size": window.combo_dct_block.currentData(),
             "dct_plateau": window.combo_dct_plateau.currentData(),
             "dct_blend": window.cb_dct_blend.isChecked(),
@@ -461,6 +463,16 @@ class SettingsManager:
             try:
                 window.slider_avg_selectivity.setValue(
                     int(data["average_selectivity"]))
+            except (TypeError, ValueError):
+                pass
+        if "coherence_radius" in data:
+            try:
+                window.slider_avg_coherence.setValue(int(data["coherence_radius"]))
+            except (TypeError, ValueError):
+                pass
+        if "slice_radius" in data:
+            try:
+                window.slider_avg_slice.setValue(int(data["slice_radius"]))
             except (TypeError, ValueError):
                 pass
 

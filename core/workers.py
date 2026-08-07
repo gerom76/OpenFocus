@@ -132,6 +132,8 @@ class RenderWorker(QThread):
         halo_radius_value=0,
         depth_smoothing_value=None,
         average_selectivity_value=None,
+        coherence_radius_value=None,
+        slice_radius_value=None,
         rb_pyramid_checked=False,
         rb_dmap_max_checked=False,
         rb_dmap_avg_checked=False,
@@ -201,6 +203,13 @@ class RenderWorker(QThread):
         # Selectivity dial for Depth Map (Avg); None keeps the method's own
         # default, and 0 is the plain linear contrast weighting.
         self.average_selectivity_value = average_selectivity_value
+        # The two weight-coherence radii, also Depth Map (Avg) only: how far
+        # each frame's share of the blend is pooled across the frame and along
+        # the stack before it is applied. None defers to the method, 0 is off,
+        # and the engine narrows the slice radius again to what the stack depth
+        # can carry.
+        self.coherence_radius_value = coherence_radius_value
+        self.slice_radius_value = slice_radius_value
         # DCT tuning; None on any of them keeps the method's own default
         self.dct_block_size = dct_block_size
         self.dct_plateau = dct_plateau
@@ -509,6 +518,8 @@ class RenderWorker(QThread):
                 halo_radius=self.halo_radius_value,
                 depth_smoothing=self.depth_smoothing_value,
                 average_selectivity=self.average_selectivity_value,
+                coherence_radius=self.coherence_radius_value,
+                slice_radius=self.slice_radius_value,
                 thread_count=self.thread_count,
             )
         elif algorithm == "stackmffv4":
@@ -848,6 +859,8 @@ class BatchWorker(QThread):
                     halo_radius=fusion_params.get('halo_radius', 0),
                     depth_smoothing=fusion_params.get('depth_smoothing'),
                     average_selectivity=fusion_params.get('average_selectivity'),
+                    coherence_radius=fusion_params.get('coherence_radius'),
+                    slice_radius=fusion_params.get('slice_radius'),
                     thread_count=self.thread_count,
                 )
             elif fusion_method == "stackmffv4":
@@ -918,6 +931,8 @@ class BatchWorker(QThread):
                 halo_radius=fusion_params.get('halo_radius', 0),
                 depth_smoothing=fusion_params.get('depth_smoothing'),
                 average_selectivity=fusion_params.get('average_selectivity'),
+                coherence_radius=fusion_params.get('coherence_radius'),
+                slice_radius=fusion_params.get('slice_radius'),
                 ifcnn_refine=bool(settings.get('ifcnn_refine')),
                 align_scale="scale" in reg_methods,
                 align_homography="homography" in reg_methods,

@@ -53,6 +53,13 @@ COHERENT_DEPTH_METHODS = {"depthmap_max"}
 # whatever the weights look like.
 AVERAGE_SELECTIVITY_METHODS = {"depthmap_average"}
 
+# The two weight-coherence radii pool that same weighting before it is applied,
+# across the frame and along the stack. Same reasoning as selectivity above -
+# there are no weights to pool where the pixel comes from one frame whole - so
+# the same methods, named separately because they are a separate stage and one
+# could move without the other.
+AVERAGE_COHERENCE_METHODS = {"depthmap_average"}
+
 _CONTRAST_NAMES = {"auto": "Auto", "clahe": "Local (CLAHE)"}
 _REFERENCE_NAMES = {"first": "First", "middle": "Middle", "last": "Last"}
 
@@ -165,6 +172,8 @@ def describe(
     halo_radius: int = 0,
     depth_smoothing: Optional[int] = None,
     average_selectivity: Optional[int] = None,
+    coherence_radius: Optional[int] = None,
+    slice_radius: Optional[int] = None,
     ifcnn_refine: bool = False,
     align_scale: bool = False,
     align_homography: bool = False,
@@ -245,6 +254,15 @@ def describe(
         if algorithm in AVERAGE_SELECTIVITY_METHODS:
             options["AverageSelectivity"] = (
                 f"{int(average_selectivity)}%" if average_selectivity else _OFF)
+        if algorithm in AVERAGE_COHERENCE_METHODS:
+            options["WeightCoherenceRadius"] = (
+                f"{int(coherence_radius)} px" if coherence_radius else _OFF)
+            # What the render asked for. depthmap_impl narrows this to what the
+            # stack depth can carry, and does not report back what it settled
+            # on, so a value here larger than half the frame count was not
+            # necessarily the one that ran.
+            options["SliceCoherenceRadius"] = (
+                f"{int(slice_radius)} slices" if slice_radius else _OFF)
         if algorithm == "stackmffv4" and stackmffv4_batch_size:
             # The batch halves itself when the card runs out of memory, so what
             # was asked for is not always what inferred the tiles.

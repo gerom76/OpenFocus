@@ -87,6 +87,8 @@ from constants import (
     KERNEL_SIZE_DEFAULT_PYRAMID,
     DCT_PLATEAU_PRESETS,
     AVERAGE_SELECTIVITY_DEFAULT,
+    COHERENCE_RADIUS_DEFAULT,
+    SLICE_RADIUS_DEFAULT,
     HALO_RADIUS_MAX,
     halo_radius_ceiling,
     DEPTH_SMOOTHING_DEFAULT,
@@ -157,14 +159,15 @@ class OpenFocus(QMainWindow):
             ("halo_widget", "coherent_widget")),
         _MethodControls("rb_dmap_avg", _KernelSpec(
             "dmap", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_DMAP),
-            ("halo_widget", "selectivity_widget")),
+            ("halo_widget", "selectivity_widget", "avg_coherence_widget")),
         _MethodControls("rb_d", None),
     )
 
     # Every block the table above can show. Listing them here is what lets a row
     # name only what it uses and still have the rest hidden.
     _METHOD_BLOCKS = ("smooth_widget", "halo_widget", "coherent_widget",
-                      "selectivity_widget", "dct_widget", "pyramid_widget")
+                      "selectivity_widget", "avg_coherence_widget",
+                      "dct_widget", "pyramid_widget")
 
     def __init__(self):
         super().__init__()
@@ -391,6 +394,11 @@ class OpenFocus(QMainWindow):
         self.slider_avg_selectivity = right_panel_components.slider_avg_selectivity
         self.lbl_avg_selectivity_value = right_panel_components.avg_selectivity_value_label
         self.selectivity_widget = right_panel_components.selectivity_widget
+        self.slider_avg_coherence = right_panel_components.slider_avg_coherence
+        self.lbl_avg_coherence_value = right_panel_components.avg_coherence_value_label
+        self.slider_avg_slice = right_panel_components.slider_avg_slice
+        self.lbl_avg_slice_value = right_panel_components.avg_slice_value_label
+        self.avg_coherence_widget = right_panel_components.avg_coherence_widget
         self.combo_dct_block = right_panel_components.combo_dct_block
         self.combo_dct_plateau = right_panel_components.combo_dct_plateau
         self.cb_dct_blend = right_panel_components.cb_dct_blend
@@ -633,6 +641,10 @@ class OpenFocus(QMainWindow):
         # Average selectivity back to its default
         self.slider_avg_selectivity.setValue(AVERAGE_SELECTIVITY_DEFAULT)
 
+        # Both weight-coherence dials back to their defaults (off)
+        self.slider_avg_coherence.setValue(COHERENCE_RADIUS_DEFAULT)
+        self.slider_avg_slice.setValue(SLICE_RADIUS_DEFAULT)
+
         # Reset contrast to off (strength back to the 50% default)
         self.combo_contrast.setCurrentIndex(0)
         self.slider_contrast.setValue(50)
@@ -768,6 +780,25 @@ class OpenFocus(QMainWindow):
         strength = int(value)
         self.lbl_avg_selectivity_value.setText(
             trans.t('halo_off') if strength <= 0 else f"{strength}%")
+
+    def handle_avg_coherence_slider_change(self, value):
+        """Update the weight-coherence display label; 0 reads as Off."""
+        radius = int(value)
+        self.lbl_avg_coherence_value.setText(
+            trans.t('halo_off') if radius <= 0 else f"{radius} px")
+
+    def handle_avg_slice_slider_change(self, value):
+        """Update the slice-coherence display label; 0 reads as Off.
+
+        Reads as a span either side of each frame because that is what the
+        radius means; the engine narrows it again on a stack too short to pool
+        that far, which the panel cannot show because it does not know which
+        frames are ticked.
+        """
+        radius = int(value)
+        self.lbl_avg_slice_value.setText(
+            trans.t('halo_off') if radius <= 0
+            else trans.t('slice_radius_unit').format(radius))
 
     def _set_kernel_range(self, maximum):
         """Point the shared kernel slider at one method's usable range.
@@ -1424,6 +1455,8 @@ class OpenFocus(QMainWindow):
         c.lbl_halo.setText(trans.t('label_halo'))
         c.lbl_depth_smooth.setText(trans.t('label_depth_smooth'))
         c.lbl_avg_selectivity.setText(trans.t('label_avg_selectivity'))
+        c.lbl_avg_coherence.setText(trans.t('label_avg_coherence'))
+        c.lbl_avg_slice.setText(trans.t('label_avg_slice'))
         c.lbl_dct_block.setText(trans.t('label_dct_block'))
         c.lbl_dct_plateau.setText(trans.t('label_dct_plateau'))
         c.cb_dct_blend.setText(trans.t('label_dct_blend'))
@@ -1449,6 +1482,8 @@ class OpenFocus(QMainWindow):
         self.handle_halo_slider_change(self.slider_halo.value())
         self.handle_depth_smooth_slider_change(self.slider_depth_smooth.value())
         self.handle_avg_selectivity_slider_change(self.slider_avg_selectivity.value())
+        self.handle_avg_coherence_slider_change(self.slider_avg_coherence.value())
+        self.handle_avg_slice_slider_change(self.slider_avg_slice.value())
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))
         c.btn_stop.setText(trans.t('btn_stop'))

@@ -28,6 +28,10 @@ from constants import (
     DCT_PLATEAU_DEFAULT,
     DCT_PLATEAU_PRESETS,
     AVERAGE_SELECTIVITY_DEFAULT,
+    COHERENCE_RADIUS_DEFAULT,
+    COHERENCE_RADIUS_MAX,
+    SLICE_RADIUS_DEFAULT,
+    SLICE_RADIUS_MAX,
     HALO_RADIUS_MAX,
     DEPTH_SMOOTHING_DEFAULT,
     KERNEL_SIZE_MAX_DCT,
@@ -88,6 +92,13 @@ class RightPanelComponents:
     slider_avg_selectivity: QSlider
     avg_selectivity_value_label: QLabel
     selectivity_widget: QWidget
+    slider_avg_coherence: QSlider
+    avg_coherence_value_label: QLabel
+    slider_avg_slice: QSlider
+    avg_slice_value_label: QLabel
+    avg_coherence_widget: QWidget
+    lbl_avg_coherence: QLabel
+    lbl_avg_slice: QLabel
     combo_dct_block: QComboBox
     combo_dct_plateau: QComboBox
     cb_dct_blend: QCheckBox
@@ -320,6 +331,46 @@ def create_right_panel() -> RightPanelComponents:
 
     selectivity_widget.setVisible(False)  # only the average blends the stack
     config_layout.addWidget(selectivity_widget)
+
+    # Weight coherence (Depth Map (Avg) only) ----------------
+    # Selectivity above decides how sharply the blend leans on one frame; these
+    # two decide how far that decision is pooled before it is applied. Both are
+    # off by default and both cost a second measurement pass over the stack when
+    # they are not - see the constants for what each one is worth and when.
+    avg_coherence_widget = QWidget()
+    avg_coherence_layout = QVBoxLayout(avg_coherence_widget)
+    avg_coherence_layout.setContentsMargins(0, 5, 0, 5)
+
+    coherence_top = QHBoxLayout()
+    lbl_avg_coherence = QLabel(trans.t('label_avg_coherence'))
+    coherence_top.addWidget(lbl_avg_coherence)
+    coherence_top.addStretch()
+    lbl_avg_coherence_value = QLabel(trans.t('halo_off'))
+    coherence_top.addWidget(lbl_avg_coherence_value)
+    slider_avg_coherence = QSlider(Qt.Orientation.Horizontal)
+    slider_avg_coherence.setRange(0, COHERENCE_RADIUS_MAX)
+    slider_avg_coherence.setSingleStep(1)
+    slider_avg_coherence.setPageStep(4)
+    slider_avg_coherence.setValue(COHERENCE_RADIUS_DEFAULT)
+    avg_coherence_layout.addLayout(coherence_top)
+    avg_coherence_layout.addWidget(slider_avg_coherence)
+
+    slice_top = QHBoxLayout()
+    lbl_avg_slice = QLabel(trans.t('label_avg_slice'))
+    slice_top.addWidget(lbl_avg_slice)
+    slice_top.addStretch()
+    lbl_avg_slice_value = QLabel(trans.t('halo_off'))
+    slice_top.addWidget(lbl_avg_slice_value)
+    slider_avg_slice = QSlider(Qt.Orientation.Horizontal)
+    slider_avg_slice.setRange(0, SLICE_RADIUS_MAX)
+    slider_avg_slice.setSingleStep(1)
+    slider_avg_slice.setPageStep(2)
+    slider_avg_slice.setValue(SLICE_RADIUS_DEFAULT)
+    avg_coherence_layout.addLayout(slice_top)
+    avg_coherence_layout.addWidget(slider_avg_slice)
+
+    avg_coherence_widget.setVisible(False)  # only the average has weights to pool
+    config_layout.addWidget(avg_coherence_widget)
 
     # DCT tuning (DCT only) ---------------------------------
     dct_widget = QWidget()
@@ -597,6 +648,13 @@ def create_right_panel() -> RightPanelComponents:
         slider_avg_selectivity=slider_avg_selectivity,
         avg_selectivity_value_label=lbl_avg_selectivity_value,
         selectivity_widget=selectivity_widget,
+        slider_avg_coherence=slider_avg_coherence,
+        avg_coherence_value_label=lbl_avg_coherence_value,
+        slider_avg_slice=slider_avg_slice,
+        avg_slice_value_label=lbl_avg_slice_value,
+        avg_coherence_widget=avg_coherence_widget,
+        lbl_avg_coherence=lbl_avg_coherence,
+        lbl_avg_slice=lbl_avg_slice,
         combo_dct_block=combo_dct_block,
         combo_dct_plateau=combo_dct_plateau,
         cb_dct_blend=cb_dct_blend,
@@ -670,6 +728,10 @@ def bind_right_panel(window, components: RightPanelComponents) -> None:
         window.handle_depth_smooth_slider_change)
     components.slider_avg_selectivity.valueChanged.connect(
         window.handle_avg_selectivity_slider_change)
+    components.slider_avg_coherence.valueChanged.connect(
+        window.handle_avg_coherence_slider_change)
+    components.slider_avg_slice.valueChanged.connect(
+        window.handle_avg_slice_slider_change)
 
     # Contrast is a post-fusion output step, so both controls just re-apply it
     # to the already-rendered result via handle_contrast_change - no re-render.

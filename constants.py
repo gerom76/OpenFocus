@@ -162,6 +162,45 @@ DEPTH_SMOOTHING_DEFAULT = 50
 # choose between for detail in the regions that do.
 AVERAGE_SELECTIVITY_DEFAULT = 50
 
+# --- Depth Map (Avg) weight coherence exposed in the UI --------------------
+# Selectivity above decides how sharply the blend leans on the frame that holds
+# the detail; these two decide how far that decision is allowed to be pooled
+# before it is applied - one across the frame, one along the stack. See the
+# blocks above DEFAULT_COHERENCE_RADIUS and DEFAULT_SLICE_RADIUS in
+# fusion_methods/depthmap.py for what each was measured to fix.
+#
+# Both default to off, which is what every render did while they were reachable
+# only from the test harness, so exposing them changes no existing result.
+
+# Spatial reach, in pixels. The filter is edge-aware, so it costs nothing over a
+# region the blend already agreed with itself, and a great deal over one whose
+# correct frame changes every few pixels: measured best at 16 on a 333-frame
+# capture of a real surface, and best at 0-4 on the banded synthetic stacks in
+# tests/fusion_scenarios.py, which step depth every 27 px. The ceiling sits past
+# the measured optimum rather than past the point of harm, because where the
+# harm starts is a property of the scene and not of the number.
+COHERENCE_RADIUS_MAX = 32
+COHERENCE_RADIUS_DEFAULT = 0
+
+# Reach along the stack, in slices either side. The right value follows the
+# capture's sampling rather than its content - about half the half-maximum width
+# of the focus curve, so 4-5 on a sweep that oversamples its depth of field
+# sevenfold, and 0 on one that steps a full depth of field per frame, where the
+# neighbouring slices are the ones that resolve the pixel worst. Overshooting is
+# not subtle: at 8 slices on the stack it was measured on, every fifth of the
+# frame got worse at once. The ceiling is generous against that measurement
+# because a denser sweep wants proportionally more, not because 16 is safe.
+#
+# It is also the one dial here that depends on registration, since it averages
+# different frames into one pixel - see DEFAULT_SLICE_RADIUS.
+#
+# depthmap_impl clamps this to (frames - 1) // 2 on top of the ceiling, which is
+# what keeps it honest on a stack too short to pool over. That clamp is the
+# engine's rather than the slider's, so a subset render narrows it further
+# without the panel having to track the tick boxes.
+SLICE_RADIUS_MAX = 16
+SLICE_RADIUS_DEFAULT = 0
+
 # --- Depth Map halo-suppression ceiling ------------------------------------
 # The halo dial fills the band around a sharply focused region with that frame's
 # defocused pixels. Where there really was a glow that is the trade it is sold

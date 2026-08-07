@@ -350,6 +350,29 @@ class ExportManager:
         return ("" if selectivity == AVERAGE_SELECTIVITY_DEFAULT
                 else f"_sel{selectivity}")
 
+    def _avg_coherence_suffix(self) -> str:
+        """Return the Depth Map (Avg) weight-coherence radii, for the filename.
+
+        Both are off by default, so the halo suffix's rule applies rather than
+        the selectivity one above: named only when they are on, which keeps the
+        name a render used to get and still separates two renders that differ
+        only in how far the weights were pooled.
+        """
+        window = self.window
+        if not window.rb_dmap_avg.isChecked():
+            return ""
+        parts = []
+        try:
+            coherence = int(window.slider_avg_coherence.value())
+            if coherence > 0:
+                parts.append(f"wc{coherence}")
+            slices = int(window.slider_avg_slice.value())
+            if slices > 0:
+                parts.append(f"sc{slices}")
+        except Exception:
+            return ""
+        return f"_{'+'.join(parts)}" if parts else ""
+
     def _fusion_suffix(self) -> str:
         """Describe the fusion stages in the name: method, kernel, refinement."""
         window = self.window
@@ -379,6 +402,7 @@ class ExportManager:
         fusion_method += self._halo_suffix()
         fusion_method += self._coherent_suffix()
         fusion_method += self._selectivity_suffix()
+        fusion_method += self._avg_coherence_suffix()
 
         # The IFCNN stage runs on top of the method above, so it reads as an addition
         if getattr(window, "cb_ifcnn", None) is not None and window.cb_ifcnn.isChecked():

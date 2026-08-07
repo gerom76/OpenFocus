@@ -783,11 +783,18 @@ class BatchProcessingDialog(QDialog):
                     value = max(1, value - 1)
                 return value
 
-            def _halo_radius_value() -> int:
-                halo_widget = getattr(self.parent_window, "slider_halo", None)
-                if not halo_widget:
+            def _slider_radius(name: str) -> int:
+                """A non-negative slider value, for the dials measured in units.
+
+                Shared by halo suppression and both weight-coherence radii: all
+                three are counts rather than percentages, and all three read 0
+                as off, which is also what a build missing the control should
+                fall back to.
+                """
+                slider = getattr(self.parent_window, name, None)
+                if not slider:
                     return 0
-                return max(0, int(halo_widget.value()))
+                return max(0, int(slider.value()))
 
             def _slider_percent(name: str, default: int) -> int:
                 slider = getattr(self.parent_window, name, None)
@@ -814,15 +821,18 @@ class BatchProcessingDialog(QDialog):
             elif getattr(self.parent_window, 'rb_dmap_max', None) and self.parent_window.rb_dmap_max.isChecked():
                 fusion_method = "depthmap_max"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
-                fusion_params["halo_radius"] = _halo_radius_value()
+                fusion_params["halo_radius"] = _slider_radius("slider_halo")
                 fusion_params["depth_smoothing"] = _slider_percent(
                     "slider_depth_smooth", DEPTH_SMOOTHING_DEFAULT)
             elif getattr(self.parent_window, 'rb_dmap_avg', None) and self.parent_window.rb_dmap_avg.isChecked():
                 fusion_method = "depthmap_average"
                 fusion_params["kernel_size"] = _sanitized_kernel_value()
-                fusion_params["halo_radius"] = _halo_radius_value()
+                fusion_params["halo_radius"] = _slider_radius("slider_halo")
                 fusion_params["average_selectivity"] = _slider_percent(
                     "slider_avg_selectivity", AVERAGE_SELECTIVITY_DEFAULT)
+                fusion_params["coherence_radius"] = _slider_radius(
+                    "slider_avg_coherence")
+                fusion_params["slice_radius"] = _slider_radius("slider_avg_slice")
             elif rb_d and rb_d.isChecked():
                 fusion_method = "stackmffv4"
         
