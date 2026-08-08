@@ -1573,7 +1573,21 @@ class OpenFocus(QMainWindow):
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        # Without an explicit AppUserModelID, Windows groups this process
+        # under python.exe's taskbar entry/icon instead of giving it its
+        # own. Must be set before the window is shown.
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "OpenFocus.OpenFocus")
+        except Exception:
+            pass
+
     app = OpenFocusApplication(sys.argv)
+    app_icon_path = resource_path("assets", "OpenFocus.ico")
+    if os.path.exists(app_icon_path):
+        app.setWindowIcon(QIcon(app_icon_path))
     window = OpenFocus()
     app.set_main_window(window)
     
