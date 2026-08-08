@@ -311,6 +311,13 @@ METHODS = [
              "Compare frames in units of their own grain rather than "
              "absolutely. Off lets the brightest, grainiest frame win every "
              "region that holds no detail, and stamp its tone there."),
+            ("noise_percentile", [2.0, 5.0, 10.0, 20.0],
+             "What share of each band the gate above assumes holds nothing "
+             "that band can resolve - the percentile of its pooled energies "
+             "read as the frame's own noise level. Low takes the estimate from "
+             "the quietest corner and understates the grain everywhere else; "
+             "high takes it from pixels that do carry detail and divides some "
+             "of that away with the grain. Inert while the gate is off."),
             ("envelope", [False, True],
              "Clamp each pixel to the range its own frames span. Off is what a "
              "collapsed pyramid does unaided, which can reconstruct a value no "

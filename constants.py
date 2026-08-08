@@ -107,6 +107,13 @@ PYRAMID_LEVELS_DEFAULT = 0
 # How sharply each band's weights favour the sharpest frame. The last preset is
 # the published choose-max rule, kept because it is the published rule - it is
 # also what stitches a defocused background out of frames that disagree.
+#
+# 16 sits between Balanced and Strict and is deliberately not a rung: on the
+# whole reference capture it leaves the contrast bracket the method is held to,
+# and it does so by sharpening grain rather than detail. See SELECTIVITY in
+# fusion_methods/pyramid.py for the measurement. Strict (32) is past it and is
+# offered anyway, because a preset a user picks is a choice about their own
+# stack; a default is a claim about every stack.
 PYRAMID_SELECTIVITY_PRESETS = (
     ("average", 2.0), ("soft", 4.0), ("balanced", 8.0),
     ("strict", 32.0), ("winner", float("inf")),
@@ -126,14 +133,37 @@ PYRAMID_COHERENCE_DEFAULT = "off"
 # How hard the coarse base band follows the frames that won the detail bands.
 # "Mean" is the plain average of every frame, which hazes the base whenever
 # most of the stack is defocused.
+#
+# Same retune as selectivity above, and for the same reason: 8 was already on
+# the ladder as "Strong", and measuring it against the ant capture's own
+# fixtures showed it costs nothing anywhere and gains on the two the pyramid
+# rework was built for. It is now what "Balanced" names, so a saved 'strong'
+# resolves to the number it always meant.
 PYRAMID_BASE_PRESETS = (
-    ("mean", 0.0), ("gentle", 1.0), ("balanced", 3.0), ("strong", 8.0),
+    ("mean", 0.0), ("gentle", 1.0), ("moderate", 3.0), ("balanced", 8.0),
 )
 PYRAMID_BASE_DEFAULT = "balanced"
 
 # Compare frames in units of their own grain rather than absolutely, so a
 # bright noisy frame cannot win the regions where nothing is in focus.
 PYRAMID_NOISE_GATE_DEFAULT = True
+
+# What share of each band that gate assumes holds nothing the band can resolve.
+# The noise level is read off the picture as this percentile of the band's
+# pooled energies, so the number is a statement about the frame rather than
+# about the sensor - see NOISE_PERCENTILE in fusion_methods/pyramid.py.
+#
+# The range is bounded by what was measured on samples/electronics_ant, not by
+# what the arithmetic permits. Below 5 the estimate comes off the single
+# quietest corner and stops describing the rest of the frame: at 2 the
+# ground-truth fixtures lose 2.0 dB on depth_edge and 2.9 on fine_texture.
+# Above 20 it is read off pixels that are resolving something, and the gate
+# starts dividing away the signal a frame would have won with. 10 is the middle
+# of what held up and is where the sweep left it.
+PYRAMID_NOISE_PERCENTILE_PRESETS = (
+    ("minimal", 2.0), ("low", 5.0), ("balanced", 10.0), ("broad", 20.0),
+)
+PYRAMID_NOISE_PERCENTILE_DEFAULT = "balanced"
 
 # Hold every pixel inside the range its own frames span, so collapsing the
 # pyramid cannot reconstruct a value no frame had.

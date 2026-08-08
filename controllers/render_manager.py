@@ -9,6 +9,7 @@ from constants import (
     DCT_PLATEAU_DEFAULT, DCT_PLATEAU_PRESETS,
     PYRAMID_BASE_DEFAULT, PYRAMID_BASE_PRESETS,
     PYRAMID_COHERENCE_DEFAULT, PYRAMID_COHERENCE_PRESETS,
+    PYRAMID_NOISE_PERCENTILE_DEFAULT, PYRAMID_NOISE_PERCENTILE_PRESETS,
     PYRAMID_SELECTIVITY_DEFAULT, PYRAMID_SELECTIVITY_PRESETS,
 )
 from core import render_options
@@ -59,6 +60,9 @@ def pyramid_params(window) -> dict:
                                           PYRAMID_BASE_PRESETS,
                                           PYRAMID_BASE_DEFAULT),
         "noise_gate": window.cb_pyr_noise_gate.isChecked(),
+        "noise_percentile": _preset_value(window.combo_pyr_noise_pct,
+                                          PYRAMID_NOISE_PERCENTILE_PRESETS,
+                                          PYRAMID_NOISE_PERCENTILE_DEFAULT),
         "envelope": window.cb_pyr_envelope.isChecked(),
     }
 
@@ -208,6 +212,7 @@ class RenderManager:
             pyramid_coherence=worker.pyramid_coherence,
             pyramid_base=worker.pyramid_base,
             pyramid_noise_gate=worker.pyramid_noise_gate,
+            pyramid_noise_percentile=worker.pyramid_noise_percentile,
             pyramid_envelope=worker.pyramid_envelope,
             result_dtype=getattr(fusion_result, "dtype", None),
             device_name=device_name,
@@ -379,6 +384,7 @@ class RenderManager:
             pyramid_selectivity=pyramid["selectivity"],
             pyramid_coherence=pyramid["coherence"],
             pyramid_noise_gate=pyramid["noise_gate"],
+            pyramid_noise_percentile=pyramid["noise_percentile"],
             pyramid_base=pyramid["base_selectivity"],
             pyramid_envelope=pyramid["envelope"],
             rb_pyramid_checked=window.rb_pyramid.isChecked(),

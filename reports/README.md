@@ -26,6 +26,7 @@ reason instead of failing.
 | `fusion_method_guide.html` | Which method should I use, and what is each one bad at? Written for a non-specialist. |
 | `fusion_comparison_report.html` | How do all methods compare on one stack, at their default settings? |
 | `pyramid_quality_report.html` | What was wrong with the pyramid's published choose-max rule, and does the 1.19.0 rework fix it? Before and after on every fixture, with the faulty pixels drawn rather than asserted. |
+| `pyramid_reference_report.html` | How does the pyramid compare with Helicon Focus method C - the same algorithm, another implementation - on a photographed stack, and what did the 1.44.0 retune move against it? The only page here measured against a real reference rather than a generated ground truth. |
 | `guided_filter_kernel_size_report.html` | What does the Guided Filter kernel slider actually change? |
 | `gfgfgf_kernel_size_report.html` | Same question for GFG-FGF. |
 | `dct_block_size_report.html` | What does the DCT block size change? |
@@ -33,9 +34,10 @@ reason instead of failing.
 | `dtcwt_N_report.html` | What do extra DTCWT decomposition levels buy? |
 | `pyramid_selectivity_report.html` | What does the pyramid's Selectivity control change, from averaging to the published choose-max? |
 | `pyramid_energy_window_report.html` | What does the kernel slider change for the pyramid? |
+| `pyramid_noise_percentile_report.html` | What does the pyramid's Grain estimate change - how much of a band its noise gate reads its level off? |
 | `gff_ifcnn_kernel_size_report.html` | The kernel of the guided filter that IFCNN then refines. |
 
-The pyramid's other five controls are swept inside `pyramid_quality_report.html`
+The pyramid's other six controls are swept inside `pyramid_quality_report.html`
 rather than given a page each; `--all-params --method pyramid` writes those pages
 if you want them separately.
 
@@ -55,10 +57,16 @@ for m in guided_filter gfgfgf dct dtcwt gff_ifcnn; do
   python tests/visualize_fusion_quality.py --synthetic --size 320 --all-params --method $m
 done
 
-# 4. The pyramid: its two headline dials, then the before/after evidence page
+# 4. The pyramid: its three headline dials, then the before/after evidence page
 python tests/visualize_fusion_quality.py --synthetic --size 320 --method pyramid --param selectivity
 python tests/visualize_fusion_quality.py --synthetic --size 320 --method pyramid --param energy_window
+python tests/visualize_fusion_quality.py --synthetic --size 320 --method pyramid --param noise_percentile
 python tests/visualize_pyramid_quality.py
+
+# 5. The pyramid against Helicon Focus method C on the photographed stack.
+#    Needs samples/electronics_ant, which is photographed rather than
+#    generated; --full is the like-for-like (all 333 frames, ~2.2 GB).
+python tests/visualize_pyramid_reference.py --full
 ```
 
 On Windows `cmd`, step 3 is:
@@ -67,7 +75,7 @@ On Windows `cmd`, step 3 is:
 for %m in (guided_filter gfgfgf dct dtcwt gff_ifcnn) do python tests/visualize_fusion_quality.py --synthetic --size 320 --all-params --method %m
 ```
 
-Those four steps reproduce this folder exactly, from empty.
+Those five steps reproduce this folder exactly, from empty.
 
 ---
 

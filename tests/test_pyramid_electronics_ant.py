@@ -74,6 +74,7 @@ MODULE_DEFAULTS = {
     "coherence": pyramid_module.COHERENCE,
     "base_selectivity": pyramid_module.BASE_SELECTIVITY,
     "noise_gate": pyramid_module.NOISE_GATE,
+    "noise_percentile": pyramid_module.NOISE_PERCENTILE,
     "envelope": pyramid_module.ENVELOPE_CLIP,
 }
 
@@ -142,6 +143,32 @@ LIGHTEST_HELICON_PYRAMID = "HF-C-1"
 HEAVIEST_HELICON_PYRAMID = "HF-C-10"
 MAX_SHARE_AGAINST_LIGHTEST = 1.15    # measured 0.916
 MIN_SHARE_AGAINST_HEAVIEST = 0.85    # measured 1.168
+
+# The same bracket on the whole capture, which is a different pair of numbers.
+#
+# Recovered contrast rises with frame count - 0.916 of HF-C-1 over the 28 frames
+# above, 1.112 over all 333 - so the constants either side of this comment
+# describe two different measurements and neither set can stand in for the
+# other. They were one set until 1.44.0, and that hid two things: the full-stack
+# assertion was holding by 0.038 rather than by design, and the crunchy half of
+# the subsampled bracket cannot fire at all, since nothing at that density comes
+# near 1.15. On the 28-frame fixture that half is documentation; the half doing
+# the work there is the soft one.
+#
+# Be clear about what the number below is. The bracket's wording - "crunchier
+# than Helicon at its lightest smoothing" - would put the bound at 1.0, and the
+# shipped default is already 1.112, so the literal reading fails for every
+# setting at this density and always did. Nobody has re-derived what "inside
+# the range" ought to mean on the full stack. Until somebody does, this is the
+# weaker claim that can be defended: do not get crunchier than we already are.
+# It is set just above the shipped measurement, which gives about 8% of headroom
+# for a real improvement while still catching what the subsampled search waves
+# through - selectivity 10 measures 1.157 here and 16 measures 1.233.
+#
+# The method is deterministic and the stack is fixed, so there is no run-to-run
+# jitter for this margin to absorb; it is entirely a budget for change.
+MAX_SHARE_AGAINST_LIGHTEST_FULL = 1.20    # measured 1.112
+MIN_SHARE_AGAINST_HEAVIEST_FULL = 1.05    # measured 1.419
 
 MAX_GRAIN_AGAINST_PUBLISHED = 0.90   # measured 0.74 (1.580 against 2.136)
 MIN_REGISTERED_QABF_GAIN = 0.02      # measured 0.053 (0.1618 -> 0.2145)
@@ -233,6 +260,11 @@ def _pyramid_settings(options):
         "coherence": number("PyramidCoherence"),
         "base_selectivity": number("PyramidBaseWeighting"),
         "noise_gate": flag("PyramidNoiseGate"),
+        # Absent from renders written before the control was exposed, which is
+        # what the filter at the end of this function is for: those runs took
+        # the method's own percentile, and leaving the key out is how they say
+        # so.
+        "noise_percentile": number("PyramidGrainEstimate"),
         "envelope": flag("PyramidEnvelopeClip"),
     }
     for key in ("levels", "energy_window"):
@@ -831,11 +863,16 @@ def test_the_whole_capture_fuses(rendered):
     assert agreement > MIN_AGREEMENT, (
         f"tile agreement with {COUNTERPART} is {agreement:.3f}")
 
+    # Against the full-stack pair, not the subsampled one - see the comment
+    # beside them. This is the assertion that catches a default chosen on a
+    # subsample: selectivity 16 passes every 28-frame reading and reaches 1.233
+    # here.
     light = _against(result, rendered[LIGHTEST_HELICON_PYRAMID])[1]
     heavy = _against(result, rendered[HEAVIEST_HELICON_PYRAMID])[1]
-    assert light < MAX_SHARE_AGAINST_LIGHTEST, (
+    assert light < MAX_SHARE_AGAINST_LIGHTEST_FULL, (
         f"recovered {light:.3f} of the tile contrast of "
-        f"{LIGHTEST_HELICON_PYRAMID} on the full stack")
-    assert heavy > MIN_SHARE_AGAINST_HEAVIEST, (
+        f"{LIGHTEST_HELICON_PYRAMID} on the full stack - the default is "
+        f"crunchier than Helicon's pyramid at its lightest smoothing")
+    assert heavy > MIN_SHARE_AGAINST_HEAVIEST_FULL, (
         f"recovered {heavy:.3f} of the tile contrast of "
         f"{HEAVIEST_HELICON_PYRAMID} on the full stack")

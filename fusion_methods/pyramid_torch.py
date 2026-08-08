@@ -23,8 +23,9 @@ import torch.nn.functional as F
 from fusion_methods import torch_depth
 from fusion_methods.gff_torch import _load_stack
 from fusion_methods.pyramid import (
-    NOISE_FLOOR, NOISE_FLOOR_RATIO, NOISE_PERCENTILE,
-    _resolve_coherence, _resolve_exponent, _resolve_levels, _resolve_window,
+    NOISE_FLOOR, NOISE_FLOOR_RATIO,
+    _resolve_coherence, _resolve_exponent, _resolve_levels, _resolve_percentile,
+    _resolve_window,
     BASE_SELECTIVITY, ENVELOPE_CLIP, NOISE_GATE, SELECTIVITY,
 )
 from utils import bitdepth
@@ -80,7 +81,7 @@ def _box_energy(band, box_kernel, window):
     return F.conv2d(squared, box_kernel).clamp_(min=0.0)
 
 
-def _noise_level(energy):
+def _noise_level(energy, percentile):
     """The level below which this band of this frame resolves nothing.
 
     The same subsampled low percentile as the CPU path, taken with the same
@@ -92,7 +93,7 @@ def _noise_level(energy):
     live = sample[sample > 0.0]
     if live.numel() == 0:
         return NOISE_FLOOR
-    cuts = torch.tensor([NOISE_PERCENTILE / 100.0, 0.5], device=live.device)
+    cuts = torch.tensor([percentile / 100.0, 0.5], device=live.device)
     level, middle = torch.quantile(live, cuts)
     return torch.clamp(torch.maximum(level, middle * NOISE_FLOOR_RATIO),
                        min=NOISE_FLOOR)
@@ -163,7 +164,8 @@ class _Accumulator:
 
 def pyramid_torch_impl(input_source, img_resize=None, levels=None, device=None,
                        energy_window=None, selectivity=None, coherence=None,
-                       noise_gate=None, base_selectivity=None, envelope=None):
+                       noise_gate=None, noise_percentile=None,
+                       base_selectivity=None, envelope=None):
     """
     Laplacian-pyramid fusion on a torch device.
 
@@ -176,6 +178,8 @@ def pyramid_torch_impl(input_source, img_resize=None, levels=None, device=None,
         selectivity: How sharply the weights favour the sharpest frame
         coherence: How much of a band's decision comes from the coarser bands
         noise_gate: Compare frames in units of their own noise
+        noise_percentile: What share of each band the gate assumes resolves
+                          nothing, in [0.5, 50]
         base_selectivity: The weighting exponent for the coarse base band
         envelope: Clamp the result to the range its own frames span
 
@@ -198,6 +202,7 @@ def pyramid_torch_impl(input_source, img_resize=None, levels=None, device=None,
     base_selectivity = _resolve_exponent(base_selectivity, BASE_SELECTIVITY)
     coherence = _resolve_coherence(coherence)
     noise_gate = NOISE_GATE if noise_gate is None else bool(noise_gate)
+    noise_percentile = _resolve_percentile(noise_percentile)
     envelope = ENVELOPE_CLIP if envelope is None else bool(envelope)
 
     stack_ori = _load_stack(input_source)
@@ -251,7 +256,7 @@ def pyramid_torch_impl(input_source, img_resize=None, levels=None, device=None,
 
             energies = [_box_energy(band, box_kernel, window) for band in detail]
             if noise_gate:
-                energies = [e / _noise_level(e) for e in energies]
+                energies = [e / _noise_level(e, noise_percentile) for e in energies]
 
             # Detail energies cascade down to the base grid and become the
             # frame's per-pixel weight in the coarse band (see pyramid.py).

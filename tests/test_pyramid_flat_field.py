@@ -33,6 +33,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import fusion_methods.pyramid as pyramid_module
+from constants import (
+    PYRAMID_BASE_DEFAULT, PYRAMID_BASE_PRESETS,
+    PYRAMID_COHERENCE_DEFAULT, PYRAMID_COHERENCE_PRESETS,
+    PYRAMID_NOISE_PERCENTILE_DEFAULT, PYRAMID_NOISE_PERCENTILE_PRESETS,
+    PYRAMID_SELECTIVITY_DEFAULT, PYRAMID_SELECTIVITY_PRESETS,
+)
 from fusion_methods.pyramid import pyramid_impl
 from tests import fusion_scenarios as scenarios
 from tests.fusion_metrics import psnr
@@ -167,6 +174,7 @@ def test_veil_frames_still_win_where_they_are_the_sharp_ones(veiled):
     ("selectivity", {"selectivity": 2.0}),
     ("coherence", {"coherence": 0.5}),
     ("noise_gate", {"noise_gate": False}),
+    ("noise_percentile", {"noise_percentile": 2.0}),
     ("base_selectivity", {"base_selectivity": 0.0}),
     ("envelope", {"envelope": False}),
 ])
@@ -178,6 +186,51 @@ def test_every_control_changes_the_result(veiled, name, kwargs):
     assert other.shape == base.shape
     moved = float(np.abs(other.astype(np.int32) - base.astype(np.int32)).mean())
     assert moved > 0.01, f"{name} changed nothing ({moved:.4f} levels)"
+
+
+@pytest.mark.parametrize("presets,default,constant", [
+    (PYRAMID_SELECTIVITY_PRESETS, PYRAMID_SELECTIVITY_DEFAULT, "SELECTIVITY"),
+    (PYRAMID_BASE_PRESETS, PYRAMID_BASE_DEFAULT, "BASE_SELECTIVITY"),
+    (PYRAMID_NOISE_PERCENTILE_PRESETS, PYRAMID_NOISE_PERCENTILE_DEFAULT,
+     "NOISE_PERCENTILE"),
+    (PYRAMID_COHERENCE_PRESETS, PYRAMID_COHERENCE_DEFAULT, "COHERENCE"),
+])
+def test_the_panels_default_preset_is_the_methods_default(presets, default,
+                                                          constant):
+    """
+    The preset the panel opens on has to be the number the method would have
+    used with no panel at all.
+
+    These live in two files - the values in fusion_methods/pyramid.py, the
+    ladder the UI offers in constants.py - and nothing else connects them. When
+    they disagree the app renders one thing and every headless caller, test and
+    report renders another, which is invisible from either side: both look
+    internally consistent. Retuning a default therefore means moving two
+    numbers, and this is what says so.
+    """
+    assert dict(presets)[default] == getattr(pyramid_module, constant), (
+        f"the panel opens on {default!r} = {dict(presets)[default]!r} while "
+        f"pyramid.{constant} is {getattr(pyramid_module, constant)!r}")
+
+
+def test_the_grain_estimate_is_inert_while_the_gate_is_off(veiled):
+    """
+    The percentile only exists to calibrate the noise gate, so with the gate
+    off it must do nothing at all - not merely little.
+
+    Worth its own test because the two are separate controls in the panel and
+    the pairing is invisible from either one. If the percentile ever reached
+    something outside the gate, the UI would be greying out a control that was
+    still changing the render, which is worse than not greying it out.
+    """
+    stack, _, _ = veiled
+    off = pyramid_impl(list(stack), noise_gate=False)
+    for percentile in (2.0, 20.0, 50.0):
+        assert np.array_equal(
+            pyramid_impl(list(stack), noise_gate=False,
+                         noise_percentile=percentile), off), (
+            f"grain estimate {percentile} moved the result with the noise "
+            f"gate off")
 
 
 def test_the_published_rule_is_still_reachable(drifting):

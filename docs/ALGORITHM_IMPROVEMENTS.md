@@ -2610,8 +2610,50 @@ item 19. Average (2) and Soft (4) blend more of the stack into every band -
 smoother backgrounds, softer real detail. Strict (32) and Winner takes all
 (inf) approach the published rule; the last is the published rule, and brings
 its stitched backgrounds with it (flat-field noise 1.39 against 0.63 on the
-veil fixture). 8 and 16 are within a few tenths of a dB of each other on every
-scenario; 2 costs 3-8 dB on the ones with real detail.
+veil fixture). 2 costs 3-8 dB on the scenarios with real detail.
+
+**16 was tried as the default in 1.44.0 and reverted.** It is worth writing
+down, because everything short of the full capture says to make the change.
+Re-measured against Helicon Focus method C on `electronics_ant` with the guard
+widened to five ground-truth scenes, 16 gains **+1.08 dB** on `deep_stack`,
+**+0.93** on `fine_texture`, **+0.71** on the veil and **+0.55** on
+`long_stack` for 0.08 dB on `depth_edge`; on the 28-frame subsample the search
+runs on, recovered tile contrast against `HF-C-1` goes 0.916 -> 0.947, which
+reads as moving toward the reference.
+
+On all 333 frames it reads 1.112 -> 1.233, which is moving *past* it, and out
+of the bracket. Two things were wrong with the earlier reading:
+
+* **Recovered contrast does not survive a change of stack density.** The module
+  docstring says so about frame count and the autotune says so about quick
+  runs; it applies just as much to the 28-frame fixture the search uses, where
+  the crunchy half of the bracket cannot fire at all. A default chosen there
+  has to be confirmed on the whole capture, which `confirm_at_full_density` in
+  tests/fusion_autotune.py now does before anything is written.
+* **The extra contrast is grain, not detail.** `band_ratios` splits fine-detail
+  energy by how busy the reference found each region precisely to tell those
+  apart. At 16 the render stands **4.02x** above `HF-C-1` where `HF-C-1`
+  resolved nothing and **0.82x** where it resolved the most, against 3.78 and
+  0.78 at the default: it is sharpening the grain faster than the picture.
+  Flat-field noise goes 1.74 -> 2.02 and `reference_gap`, the pooled distance
+  from the reference over all five zones, gets *worse* - 0.675 -> 0.710.
+
+The ground-truth scenarios are not wrong, they are unrepresentative: their
+defocus is a Gaussian the generator applied and their grain is not this
+sensor's. Where the two disagree about a default, the photograph wins.
+
+One further reading, recorded because it was nearly acted on:
+`defocus_seam_visible` on `deep_stack` goes 2.70% -> 4.76% at 16. That is a
+block-lattice measure applied to a method with no lattice, and it is not
+monotone in this control - 2.0 scores 16.3%, 8.0 scores 2.76% and the published
+choose-max 2.79% - so it is too noisy here to have carried the decision either
+way. The full-density bracket is what carried it.
+
+Also worth knowing: at *every* setting this method is far grainier than
+Helicon's in the regions neither resolves - 3.78x in the quietest zone at the
+shipped default - and slightly softer where the detail is (0.78x). That is a
+real gap, it is not what this control fixes, and nothing in the suite currently
+holds it. See reports/pyramid_reference_report.html.
 
 **`coherence` (Scale coherence, default Off).** How much of a band's decision
 comes from the coarser bands above it, so the bands of one frame decide
@@ -2626,17 +2668,41 @@ a base that came from somewhere else - and the UI stops at Strong (0.75)
 because 1.0 hands every band the coarsest band's decision and scores 17.3 dB on
 `fine_texture`. Not a setting to render with; the end of a range.
 
-**`base_selectivity` (Base band, default Balanced = 3).** How hard the coarse
+**`base_selectivity` (Base band, default Balanced = 8).** How hard the coarse
 base follows the frames that won the detail bands. Mean (0) is the pre-1.11.3
 behaviour and the veil fixture shows why it went: 13.9 dB. Gentle (1) is item
-16's weighting, 30.4 dB. Balanced (3) is 35.1, Strong (8) is 35.9 and the gain
-has flattened; against that, Strong costs 0.2 dB on `saturated_colour`. Nothing
-between Gentle and Strong moves the other six scenarios by more than 0.1 dB.
+16's weighting, 30.4 dB. Moderate (3) is 35.1 and was the default until the
+2026.08.08 retune; 8 is 35.98 on the veil and 37.73 on `deep_stack` against
+37.31, with `fine_texture`, `long_stack` and `depth_edge` unmoved to two
+decimals and tile agreement with `HF-C-1` up rather than down. The gain is
+small - it really has flattened by 5 - but it is a gain with nothing on the
+other side of it, measured at every rung of the selectivity ladder, so the
+default sits at the top of the curve instead of three-quarters of the way up.
 
 **`noise_gate` (Ignore grain when nothing is sharp, default on).** Off is an
 absolute comparison between frames, which is the published behaviour and what
 lets a bright grainy frame win regions that hold no detail. Worth turning off
 only to see what it is doing.
+
+**`noise_percentile` (Grain estimate, default Balanced = 10).** What share of
+each band that gate assumes holds nothing the band can resolve - the noise
+level is read off the picture as this percentile of the band's own pooled
+energies, so the number describes the frame rather than the sensor. Exposed in
+the 2026.08.08 retune; before that it was a module constant the search could
+reach and the panel could not, which made it the one dial of item 19 a user
+could not act on.
+
+Both ends are scene-dependent, which is the argument for a control. Minimal (2)
+takes the estimate from whatever the single quietest corner is - a vignette, a
+shadow - and so understates the grain over the rest of a frame that is not
+evenly lit: on the ground-truth fixtures it costs 2.0 dB on `depth_edge` and
+2.9 on `fine_texture`. Broad (20) reads it off pixels that are resolving
+something and divides part of that signal away with the grain, which shows on
+the veil fixture (-1.0 dB at the old base weighting; the current default
+absorbs it). Between them the setting follows how much of the frame is subject:
+Low (5) where the subject fills it, Broad (20) where it is mostly empty
+background. Inert while the gate above is off, and the panel greys it out to
+say so.
 
 **`envelope` (Keep pixels within the source range, default on).** Off is what a
 collapsed pyramid does unaided. Worth turning off only to measure the clamp's
@@ -2648,9 +2714,10 @@ coarsest band keeps both sides >= 2 px, which is what every render did before
 the control existed. Fewer levels decide focus on coarser structure and can
 miss fine in-focus detail; more separate scales finely and cost time.
 
-**`NOISE_PERCENTILE`, `NOISE_FLOOR_RATIO` and the pyramid kernel stay
-internal.** The first two are the gate's own calibration and have no meaning a
-user could act on; the third is Burt-Adelson's.
+**`NOISE_FLOOR_RATIO`, `NOISE_FLOOR` and the pyramid kernel stay internal.** The
+first two are the guards on the gate's own arithmetic - what to do with a band
+that has no measurable noise level at all - and have no meaning a user could
+act on; the third is Burt-Adelson's.
 
 All of it is inherited by batch jobs from the main window, and anything not at
 its default goes into the output filename, the way DCT's tuning already does.

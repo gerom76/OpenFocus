@@ -243,6 +243,7 @@ class MultiFocusFusion:
                       selectivity: Optional[float] = None,
                       coherence: Optional[float] = None,
                       noise_gate: Optional[bool] = None,
+                      noise_percentile: Optional[float] = None,
                       base_selectivity: Optional[float] = None,
                       envelope: Optional[bool] = None,
                       **kwargs) -> np.ndarray:
@@ -263,6 +264,9 @@ class MultiFocusFusion:
             coherence: How much of a band's decision comes from the coarser
                        bands above it, in [0, 1]
             noise_gate: Compare frames in units of their own grain
+            noise_percentile: What share of each band the gate above assumes
+                       resolves nothing, in [0.5, 50]; inert while the gate is
+                       off
             base_selectivity: The same weighting exponent for the coarse base
             envelope: Clamp the result to the range its own frames span
 
@@ -276,8 +280,8 @@ class MultiFocusFusion:
 
         tuning = dict(levels=levels, energy_window=energy_window,
                       selectivity=selectivity, coherence=coherence,
-                      noise_gate=noise_gate, base_selectivity=base_selectivity,
-                      envelope=envelope)
+                      noise_gate=noise_gate, noise_percentile=noise_percentile,
+                      base_selectivity=base_selectivity, envelope=envelope)
 
         if self.use_gpu:
             try:

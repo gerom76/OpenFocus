@@ -158,6 +158,7 @@ class RenderWorker(QThread):
         pyramid_selectivity=None,
         pyramid_coherence=None,
         pyramid_noise_gate=None,
+        pyramid_noise_percentile=None,
         pyramid_base=None,
         pyramid_envelope=None,
     ):
@@ -219,6 +220,7 @@ class RenderWorker(QThread):
         self.pyramid_selectivity = pyramid_selectivity
         self.pyramid_coherence = pyramid_coherence
         self.pyramid_noise_gate = pyramid_noise_gate
+        self.pyramid_noise_percentile = pyramid_noise_percentile
         self.pyramid_base = pyramid_base
         self.pyramid_envelope = pyramid_envelope
         # Optional IFCNN refinement stage, applied to the fusion result
@@ -506,6 +508,7 @@ class RenderWorker(QThread):
                 selectivity=self.pyramid_selectivity,
                 coherence=self.pyramid_coherence,
                 noise_gate=self.pyramid_noise_gate,
+                noise_percentile=self.pyramid_noise_percentile,
                 base_selectivity=self.pyramid_base,
                 envelope=self.pyramid_envelope,
                 thread_count=self.thread_count,
@@ -844,6 +847,7 @@ class BatchWorker(QThread):
                     selectivity=fusion_params.get('selectivity'),
                     coherence=fusion_params.get('coherence'),
                     noise_gate=fusion_params.get('noise_gate'),
+                    noise_percentile=fusion_params.get('noise_percentile'),
                     base_selectivity=fusion_params.get('base_selectivity'),
                     envelope=fusion_params.get('envelope'),
                     thread_count=self.thread_count,
@@ -955,6 +959,7 @@ class BatchWorker(QThread):
                 pyramid_coherence=fusion_params.get('coherence'),
                 pyramid_base=fusion_params.get('base_selectivity'),
                 pyramid_noise_gate=fusion_params.get('noise_gate'),
+                pyramid_noise_percentile=fusion_params.get('noise_percentile'),
                 pyramid_envelope=fusion_params.get('envelope'),
                 result_dtype=getattr(result, "dtype", None),
                 thread_count=self.thread_count,

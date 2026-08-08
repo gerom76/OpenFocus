@@ -2,33 +2,35 @@
  "champion": {
   "admissible": true,
   "agreement": {
-   "Affinity": 0.6487893213096293,
-   "HF-A-1-2": 0.6148427066706297,
-   "HF-A-30-1": 0.5989029709515528,
-   "HF-A-50-2": 0.5901211994862849,
-   "HF-B-1-2": 0.6050404575329613,
-   "HF-B-30-1": 0.6014432990361213,
-   "HF-B-50-2": 0.5866834868025883,
-   "HF-C-1": 0.5933787535663011,
-   "HF-C-10": 0.6128070608631354,
-   "HF-C-4": 0.5963216776773379,
-   "HF-C-6": 0.5995186217428052
+   "Affinity": 0.6487072424138854,
+   "HF-A-1-2": 0.6145584310284822,
+   "HF-A-30-1": 0.5982945781483214,
+   "HF-A-50-2": 0.5892317048132946,
+   "HF-B-1-2": 0.6048795109854648,
+   "HF-B-30-1": 0.6010168202911637,
+   "HF-B-50-2": 0.5867005708135059,
+   "HF-C-1": 0.5939783210801034,
+   "HF-C-10": 0.6135980260921526,
+   "HF-C-4": 0.5968870741254535,
+   "HF-C-6": 0.6003201124115721
   },
   "envelope": [
    0,
    0
   ],
-  "fitness": 0.604349959603577,
+  "fitness": 0.6043793083821273,
   "guard_psnr": {
-   "depth_edge": 37.855848924070074,
-   "fine_texture": 46.045893171479406,
-   "long_stack": 46.117072437603284
+   "deep_stack": 37.73153861121931,
+   "depth_edge": 37.88157568962083,
+   "fine_texture": 46.043663192686424,
+   "long_stack": 46.11977638822811,
+   "veil": 35.983783029596886
   },
   "origin": "incumbent",
   "reasons": [],
-  "seconds": 2.74,
+  "seconds": 3.16,
   "settings": {
-   "BASE_SELECTIVITY": 3.0,
+   "BASE_SELECTIVITY": 8.0,
    "COHERENCE": 0.0,
    "DEFAULT_LEVELS": 5,
    "ENERGY_WINDOW": 5,
@@ -36,17 +38,17 @@
    "SELECTIVITY": 8.0
   },
   "share": {
-   "Affinity": 0.4428061842918396,
-   "HF-A-1-2": 0.8279356360435486,
-   "HF-A-30-1": 1.2271040678024292,
-   "HF-A-50-2": 1.611864447593689,
-   "HF-B-1-2": 0.7431502342224121,
-   "HF-B-30-1": 0.7749207019805908,
-   "HF-B-50-2": 0.8361467123031616,
-   "HF-C-1": 0.9157680869102478,
-   "HF-C-10": 1.1680251359939575,
-   "HF-C-4": 0.96941739320755,
-   "HF-C-6": 1.0185786485671997
+   "Affinity": 0.442275732755661,
+   "HF-A-1-2": 0.8272910118103027,
+   "HF-A-30-1": 1.22298002243042,
+   "HF-A-50-2": 1.6082618236541748,
+   "HF-B-1-2": 0.741381049156189,
+   "HF-B-30-1": 0.7733456492424011,
+   "HF-B-50-2": 0.8343672752380371,
+   "HF-C-1": 0.9141652584075928,
+   "HF-C-10": 1.1663404703140259,
+   "HF-C-4": 0.9666221141815186,
+   "HF-C-6": 1.0147371292114258
   }
  },
  "runs": [
@@ -171,6 +173,140 @@
     "fine_texture",
     "depth_edge",
     "long_stack"
+   ],
+   "guard_tolerance_db": 0.3,
+   "note": "Written by `python -m tests.fusion_autotune`. `champion.settings` is what fusion_methods/pyramid.py should hold if applied_to_source is true; tests/test_fusion_autotune.py checks that it does.",
+   "stack_step": 12
+  },
+  {
+   "applied_to_source": false,
+   "capture": "electronics_ant",
+   "champion": {
+    "admissible": true,
+    "agreement": {
+     "Affinity": 0.644344775154632,
+     "HF-A-1-2": 0.6118979922681039,
+     "HF-A-30-1": 0.5959853096680515,
+     "HF-A-50-2": 0.5872479071414615,
+     "HF-B-1-2": 0.601274096855589,
+     "HF-B-30-1": 0.5981941943617961,
+     "HF-B-50-2": 0.5833511200030553,
+     "HF-C-1": 0.5919932442753453,
+     "HF-C-10": 0.6122656493952441,
+     "HF-C-4": 0.5950484715809347,
+     "HF-C-6": 0.5984354659415029
+    },
+    "envelope": [
+     0,
+     0
+    ],
+    "fitness": 0.6018216569677924,
+    "guard_psnr": {
+     "deep_stack": 38.388152019371844,
+     "depth_edge": 37.7769622891713,
+     "fine_texture": 46.979142334026804,
+     "long_stack": 46.664033414981475,
+     "veil": 35.82938084508316
+    },
+    "origin": "incumbent",
+    "reasons": [],
+    "seconds": 4.02,
+    "settings": {
+     "BASE_SELECTIVITY": 8.0,
+     "COHERENCE": 0.0,
+     "DEFAULT_LEVELS": 5,
+     "ENERGY_WINDOW": 5,
+     "NOISE_PERCENTILE": 10.0,
+     "SELECTIVITY": 16.0
+    },
+    "share": {
+     "Affinity": 0.4582997262477875,
+     "HF-A-1-2": 0.8565624356269836,
+     "HF-A-30-1": 1.2682220935821533,
+     "HF-A-50-2": 1.6664974689483643,
+     "HF-B-1-2": 0.7675594687461853,
+     "HF-B-30-1": 0.800700306892395,
+     "HF-B-50-2": 0.8640219569206238,
+     "HF-C-1": 0.947120189666748,
+     "HF-C-10": 1.208240270614624,
+     "HF-C-4": 1.0027711391448975,
+     "HF-C-6": 1.0524508953094482
+    }
+   },
+   "considered": 22,
+   "guard_scenarios": [
+    "fine_texture",
+    "depth_edge",
+    "long_stack",
+    "deep_stack",
+    "veil"
+   ],
+   "guard_tolerance_db": 0.3,
+   "note": "Written by `python -m tests.fusion_autotune`. `champion.settings` is what fusion_methods/pyramid.py should hold if applied_to_source is true; tests/test_fusion_autotune.py checks that it does.",
+   "stack_step": 12
+  },
+  {
+   "applied_to_source": false,
+   "capture": "electronics_ant",
+   "champion": {
+    "admissible": true,
+    "agreement": {
+     "Affinity": 0.6487072424138854,
+     "HF-A-1-2": 0.6145584310284822,
+     "HF-A-30-1": 0.5982945781483214,
+     "HF-A-50-2": 0.5892317048132946,
+     "HF-B-1-2": 0.6048795109854648,
+     "HF-B-30-1": 0.6010168202911637,
+     "HF-B-50-2": 0.5867005708135059,
+     "HF-C-1": 0.5939783210801034,
+     "HF-C-10": 0.6135980260921526,
+     "HF-C-4": 0.5968870741254535,
+     "HF-C-6": 0.6003201124115721
+    },
+    "envelope": [
+     0,
+     0
+    ],
+    "fitness": 0.6043793083821273,
+    "guard_psnr": {
+     "deep_stack": 37.73153861121931,
+     "depth_edge": 37.88157568962083,
+     "fine_texture": 46.043663192686424,
+     "long_stack": 46.11977638822811,
+     "veil": 35.983783029596886
+    },
+    "origin": "incumbent",
+    "reasons": [],
+    "seconds": 3.16,
+    "settings": {
+     "BASE_SELECTIVITY": 8.0,
+     "COHERENCE": 0.0,
+     "DEFAULT_LEVELS": 5,
+     "ENERGY_WINDOW": 5,
+     "NOISE_PERCENTILE": 10.0,
+     "SELECTIVITY": 8.0
+    },
+    "share": {
+     "Affinity": 0.442275732755661,
+     "HF-A-1-2": 0.8272910118103027,
+     "HF-A-30-1": 1.22298002243042,
+     "HF-A-50-2": 1.6082618236541748,
+     "HF-B-1-2": 0.741381049156189,
+     "HF-B-30-1": 0.7733456492424011,
+     "HF-B-50-2": 0.8343672752380371,
+     "HF-C-1": 0.9141652584075928,
+     "HF-C-10": 1.1663404703140259,
+     "HF-C-4": 0.9666221141815186,
+     "HF-C-6": 1.0147371292114258
+    }
+   },
+   "considered": 22,
+   "guard_scenarios": [
+    "fine_texture",
+    "depth_edge",
+    "long_stack",
+    "deep_stack",
+    "veil"
    ],
    "guard_tolerance_db": 0.3,
    "note": "Written by `python -m tests.fusion_autotune`. `champion.settings` is what fusion_methods/pyramid.py should hold if applied_to_source is true; tests/test_fusion_autotune.py checks that it does.",

@@ -227,6 +227,7 @@ class SettingsManager:
             "pyramid_coherence": window.combo_pyr_coherence.currentData(),
             "pyramid_base": window.combo_pyr_base.currentData(),
             "pyramid_noise_gate": window.cb_pyr_noise_gate.isChecked(),
+            "pyramid_noise_pct": window.combo_pyr_noise_pct.currentData(),
             "pyramid_envelope": window.cb_pyr_envelope.isChecked(),
             "show_status_console": getattr(window, "status_console", None) is not None
                                    and window.status_console.isVisible(),
@@ -494,11 +495,14 @@ class SettingsManager:
         for key, combo in (("pyramid_levels", window.combo_pyr_levels),
                            ("pyramid_selectivity", window.combo_pyr_selectivity),
                            ("pyramid_coherence", window.combo_pyr_coherence),
-                           ("pyramid_base", window.combo_pyr_base)):
+                           ("pyramid_base", window.combo_pyr_base),
+                           ("pyramid_noise_pct", window.combo_pyr_noise_pct)):
             index = combo.findData(data.get(key))
             if index >= 0:
                 combo.setCurrentIndex(index)
         if "pyramid_noise_gate" in data:
+            # After the combo above, so the enabled state the toggle drives
+            # matches the box that was just restored.
             window.cb_pyr_noise_gate.setChecked(bool(data["pyramid_noise_gate"]))
         if "pyramid_envelope" in data:
             window.cb_pyr_envelope.setChecked(bool(data["pyramid_envelope"]))

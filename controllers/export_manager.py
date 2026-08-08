@@ -10,7 +10,8 @@ from constants import (
     DCT_BLOCK_SIZE_DEFAULT, DCT_PLATEAU_DEFAULT,
     AVERAGE_SELECTIVITY_DEFAULT,
     DEPTH_SMOOTHING_DEFAULT,
-    PYRAMID_BASE_DEFAULT, PYRAMID_COHERENCE_DEFAULT, PYRAMID_SELECTIVITY_DEFAULT,
+    PYRAMID_BASE_DEFAULT, PYRAMID_COHERENCE_DEFAULT,
+    PYRAMID_NOISE_PERCENTILE_DEFAULT, PYRAMID_SELECTIVITY_DEFAULT,
 )
 from core import contrast
 from core.app import OpenFocusApplication
@@ -299,6 +300,13 @@ class ExportManager:
                     parts.append(f"{tag}-{preset}")
             if not window.cb_pyr_noise_gate.isChecked():
                 parts.append("nogate")
+            else:
+                # Only while the gate is on: with it off the percentile is
+                # never read, and naming it would put a setting in the filename
+                # that had no part in the pixels.
+                preset = window.combo_pyr_noise_pct.currentData()
+                if preset and preset != PYRAMID_NOISE_PERCENTILE_DEFAULT:
+                    parts.append(f"grain-{preset}")
             if not window.cb_pyr_envelope.isChecked():
                 parts.append("unclamped")
         except Exception:

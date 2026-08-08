@@ -229,12 +229,15 @@ def test_a_marginal_gain_does_not_churn_the_source(incumbent):
 # ---------------------------------------------------------------------------
 
 def test_the_rewriter_changes_the_named_constants_and_nothing_else():
+    # Both values have to differ from what the module currently ships, or the
+    # rewrite is a no-op and the line count below proves nothing. 4.0 is a
+    # declared rung of the selectivity grid that the default is not.
     with open(auto.SOURCE, "r", encoding="utf-8") as handle:
         original = handle.read()
 
-    updated = auto.rewrite_source(original, {"SELECTIVITY": 16.0, "COHERENCE": 0.25})
+    updated = auto.rewrite_source(original, {"SELECTIVITY": 4.0, "COHERENCE": 0.25})
 
-    assert "\nSELECTIVITY = 16.0\n" in updated
+    assert "\nSELECTIVITY = 4.0\n" in updated
     assert "\nCOHERENCE = 0.25\n" in updated
 
     changed = [(a, b) for a, b in
@@ -252,7 +255,7 @@ def test_the_rewriter_keeps_the_comments_that_explain_the_constants():
     """
     with open(auto.SOURCE, "r", encoding="utf-8") as handle:
         original = handle.read()
-    updated = auto.rewrite_source(original, {"SELECTIVITY": 16.0})
+    updated = auto.rewrite_source(original, {"SELECTIVITY": 4.0})
 
     assert updated.count("#") == original.count("#")
     assert "The published rule is choose-max" in updated
@@ -274,7 +277,7 @@ def test_applying_to_a_copy_reads_back_what_was_written(tmp_path, monkeypatch):
     copied = tmp_path / "pyramid_copy.py"
     shutil.copy(auto.SOURCE, copied)
 
-    settings = {"SELECTIVITY": 16.0, "COHERENCE": 0.25}
+    settings = {"SELECTIVITY": 4.0, "COHERENCE": 0.25}
     reloaded = {}
 
     def fake_reload(module):
@@ -313,7 +316,7 @@ def test_a_rewrite_that_does_not_take_is_reverted(tmp_path, monkeypatch):
     monkeypatch.setattr(pyramid_module, "SELECTIVITY", 999.0, raising=False)
 
     with pytest.raises(RuntimeError, match="reads back"):
-        auto.apply_to_source({"SELECTIVITY": 16.0}, path=str(copied),
+        auto.apply_to_source({"SELECTIVITY": 4.0}, path=str(copied),
                              log=lambda *a: None)
 
     with open(copied, "r", encoding="utf-8") as handle:

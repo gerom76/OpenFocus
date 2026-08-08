@@ -46,6 +46,24 @@ ENERGY_WINDOW = 5
 # frames tie, they average instead, which is the correct answer for "nothing is
 # in focus here" and removes the filaments with it.
 #
+# 16 was tried as the default in 1.44.0 and reverted, which is worth recording
+# because the rendered fixtures argue for it and they are wrong here. On the
+# five scenarios that have a ground truth it gains 0.5-1.1 dB, and on every
+# subsampled reading of samples/electronics_ant it looks better too. On the
+# whole 333-frame capture - the density Helicon rendered from, and the one a
+# user renders at - it recovers 1.233 of HF-C-1's tile contrast against 1.112
+# here, which is outside the bracket the method is held to, and the extra is
+# not detail: split by how busy the reference found each region, 16 stands 4.02
+# times above HF-C-1 where HF-C-1 resolved nothing and 0.82 where it resolved
+# the most, against 3.78 and 0.78 at this default. Flat-field noise goes 1.74
+# to 2.02, and the pooled distance from the reference gets worse, 0.675 to
+# 0.710. It sharpens grain faster than it sharpens the picture.
+#
+# The lesson is about the measurement, not the number: recovered contrast does
+# not survive a change of stack density, so anything chosen on a subsample has
+# to be confirmed on the whole capture before it means anything. The autotune
+# now does that itself - see confirm_at_full_density in tests/fusion_autotune.py.
+#
 # 0 averages every frame equally, inf restores the published choose-max.
 SELECTIVITY = 8.0
 
@@ -88,6 +106,16 @@ NOISE_GATE = True
 # The noise level is read off each band as this percentile of its pooled
 # energies - low enough to land in whatever that band's quietest region is,
 # which in a focus stack is always somewhere out of focus.
+#
+# Which percentile is a statement about the frame, not about the sensor: it is
+# the share of the picture assumed to hold nothing this band can resolve. Too
+# low and the estimate is read off the single quietest corner - a vignette, a
+# shadow - which understates the grain everywhere else and lets the gate under-
+# correct; too high and it is read off pixels that do carry detail, so the
+# divisor swallows the signal the frame was going to win with. Both ends are
+# scene-dependent, which is why this is a control rather than a constant: a
+# frame that is nearly all subject wants a low percentile, one that is mostly
+# empty background can afford a high one.
 NOISE_PERCENTILE = 10.0
 
 # Pixels carrying exactly no energy are left out of that percentile. A frame
@@ -118,9 +146,15 @@ NOISE_FLOOR = 1e-12
 # the veil fixture 24 frames of bright haze outvote the few that resolve the
 # subject, and the base comes back hazed. Raising the exponent lets the frames
 # that carry detail carry the base with it: 18.5 dB at the plain mean, 30.4 at
-# 1, 34.0 at 2, 35.1 at 3, and flat past 4. The gain elsewhere is small but the
-# cost is too - 0.09 dB on saturated_colour, nothing measurable on the rest.
-BASE_SELECTIVITY = 3.0
+# 1, 34.0 at 2, 35.1 at 3.
+#
+# It was recorded as flat past 4, and it is nearly: 3 -> 8 is another 0.86 dB
+# on veil and 0.42 on deep_stack, with fine_texture, long_stack and depth_edge
+# unmoved to two decimals and tile agreement with HF-C-1 up rather than down.
+# Small, but it is a gain with nothing on the other side of it, measured at
+# every selectivity on the ladder, so the default sits at the top of the curve
+# rather than three-quarters of the way up it.
+BASE_SELECTIVITY = 8.0
 
 # Hold the result inside the range its own frames span at each pixel.
 #
@@ -198,6 +232,27 @@ def _resolve_coherence(requested):
     return min(max(value, 0.0), 1.0)
 
 
+def _resolve_percentile(requested):
+    """Coerce the noise percentile to [0.5, 50]; None keeps the default.
+
+    Bounded above at the median because past it the "level below which this
+    band resolves nothing" would be read off pixels that are resolving
+    something, and the gate would divide the signal away rather than the grain.
+    Bounded below because a percentile of zero is the minimum of the sample,
+    which on any real band is one pixel of whatever is darkest and is not an
+    estimate of anything.
+    """
+    if requested is None:
+        return NOISE_PERCENTILE
+    try:
+        value = float(requested)
+    except (TypeError, ValueError):
+        return NOISE_PERCENTILE
+    if value != value:
+        return NOISE_PERCENTILE
+    return min(max(value, 0.5), 50.0)
+
+
 def _laplacian_pyramid(img, levels):
     """Return (detail levels 0..levels-1, coarsest Gaussian base).
 
@@ -245,7 +300,7 @@ def _band_energy(detail, window):
     return np.maximum(pooled, 0.0, out=pooled)
 
 
-def _noise_level(energy):
+def _noise_level(energy, percentile=None):
     """The level below which this band of this frame resolves nothing.
 
     Read as a low percentile of the pooled energies, on a subsample - a
@@ -253,12 +308,14 @@ def _noise_level(energy):
     costs more than the pyramid it is measuring. Every fourth row and column of
     a 4K band still leaves a quarter of a million samples behind one number.
     """
+    if percentile is None:
+        percentile = NOISE_PERCENTILE
     step = max(1, int(np.sqrt(energy.size / 65536.0)))
     sample = energy[::step, ::step]
     live = sample[sample > 0.0]
     if live.size == 0:
         return NOISE_FLOOR
-    level, middle = np.percentile(live, [NOISE_PERCENTILE, 50.0])
+    level, middle = np.percentile(live, [percentile, 50.0])
     return max(float(level), float(middle) * NOISE_FLOOR_RATIO, NOISE_FLOOR)
 
 
@@ -391,7 +448,8 @@ class _Accumulator:
                              else weight)
 
 
-def _frame_salience(detail, base_shape, window, coherence, noise_gate):
+def _frame_salience(detail, base_shape, window, coherence, noise_gate,
+                    noise_percentile=None):
     """One frame's per-band selection salience, plus its base-band activity.
 
     Returns (salience per detail band, activity on the base grid). Both are
@@ -403,7 +461,7 @@ def _frame_salience(detail, base_shape, window, coherence, noise_gate):
     energies = [_band_energy(band, window) for band in detail]
     if noise_gate:
         for energy in energies:
-            energy /= _noise_level(energy)
+            energy /= _noise_level(energy, noise_percentile)
 
     activity = None
     for i, energy in enumerate(energies):
@@ -422,7 +480,8 @@ def _frame_salience(detail, base_shape, window, coherence, noise_gate):
 
 def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None,
                  energy_window=None, selectivity=None, coherence=None,
-                 noise_gate=None, base_selectivity=None, envelope=None):
+                 noise_gate=None, noise_percentile=None, base_selectivity=None,
+                 envelope=None):
     """Laplacian-pyramid multi-focus fusion.
 
     Each frame is split into band-pass detail levels plus a low-frequency base.
@@ -459,6 +518,12 @@ def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None,
         noise_gate: Compare frames in units of their own noise rather than
             absolutely, so a bright grainy frame cannot win regions that hold
             no detail. None uses NOISE_GATE.
+        noise_percentile: What share of each band the gate above assumes holds
+            nothing that band can resolve, as a percentile in [0.5, 50]. Low
+            reads the level off the frame's quietest corner and under-corrects
+            a frame whose grain varies across it; high reads it off pixels that
+            do carry detail and divides some of that away with the grain.
+            Inert while `noise_gate` is off. None uses NOISE_PERCENTILE.
         base_selectivity: The same weighting exponent for the coarse base band,
             where a hard selection shows as blotches rather than as detail.
             0 restores the plain mean.
@@ -482,6 +547,7 @@ def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None,
     base_selectivity = _resolve_exponent(base_selectivity, BASE_SELECTIVITY)
     coherence = _resolve_coherence(coherence)
     noise_gate = NOISE_GATE if noise_gate is None else bool(noise_gate)
+    noise_percentile = _resolve_percentile(noise_percentile)
     envelope = ENVELOPE_CLIP if envelope is None else bool(envelope)
 
     # ---------- Data loading ----------
@@ -542,7 +608,8 @@ def pyramid_impl(input_source, img_resize=None, levels=None, thread_count=None,
         frame, image = load_frame(k)
         detail, base = _laplacian_pyramid(image, levels)
         salience, activity = _frame_salience(detail, base_shape, window,
-                                             coherence, noise_gate)
+                                             coherence, noise_gate,
+                                             noise_percentile)
         return detail, base, salience, activity, frame
 
     lowest = highest = None

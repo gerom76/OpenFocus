@@ -18,6 +18,7 @@ from constants import (
     PYRAMID_BASE_DEFAULT, PYRAMID_BASE_PRESETS,
     PYRAMID_COHERENCE_DEFAULT, PYRAMID_COHERENCE_PRESETS,
     PYRAMID_ENVELOPE_DEFAULT, PYRAMID_NOISE_GATE_DEFAULT,
+    PYRAMID_NOISE_PERCENTILE_DEFAULT, PYRAMID_NOISE_PERCENTILE_PRESETS,
     PYRAMID_SELECTIVITY_DEFAULT, PYRAMID_SELECTIVITY_PRESETS,
 )
 from utils import auto_params, bitdepth
@@ -131,6 +132,7 @@ def _pyramid_options(levels: Optional[int],
                      coherence: Any,
                      base_selectivity: Any,
                      noise_gate: Optional[bool],
+                     noise_percentile: Any,
                      envelope: Optional[bool],
                      levels_used: Optional[str] = None) -> Dict[str, str]:
     """The pyramid's own tuning, as XMP properties.
@@ -154,6 +156,13 @@ def _pyramid_options(levels: Optional[int],
             base_selectivity, PYRAMID_BASE_PRESETS, PYRAMID_BASE_DEFAULT),
         "PyramidNoiseGate": _on_off(
             PYRAMID_NOISE_GATE_DEFAULT if noise_gate is None else noise_gate),
+        # Quoted whether or not the gate ran. A render that turned the gate off
+        # still had a percentile selected, and a reader comparing two files
+        # needs to see that they agreed on it before concluding the gate is what
+        # separates them.
+        "PyramidGrainEstimate": _preset(
+            noise_percentile, PYRAMID_NOISE_PERCENTILE_PRESETS,
+            PYRAMID_NOISE_PERCENTILE_DEFAULT),
         "PyramidEnvelopeClip": _on_off(
             PYRAMID_ENVELOPE_DEFAULT if envelope is None else envelope),
     }
@@ -203,6 +212,7 @@ def describe(
     pyramid_coherence: Any = None,
     pyramid_base: Any = None,
     pyramid_noise_gate: Optional[bool] = None,
+    pyramid_noise_percentile: Any = None,
     pyramid_envelope: Optional[bool] = None,
     result_dtype: Any = None,
     device_name: Optional[str] = None,
@@ -283,7 +293,8 @@ def describe(
         if algorithm == "pyramid":
             options.update(_pyramid_options(
                 pyramid_levels, pyramid_selectivity, pyramid_coherence,
-                pyramid_base, pyramid_noise_gate, pyramid_envelope,
+                pyramid_base, pyramid_noise_gate, pyramid_noise_percentile,
+                pyramid_envelope,
                 levels_used=auto_params.value_of(
                     resolved_auto, auto_params.PYRAMID_LEVELS),
             ))

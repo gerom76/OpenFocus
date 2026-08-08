@@ -36,7 +36,9 @@ the way, and none of them is optional.
 * **The bracket, as a constraint rather than a target.** Recovered contrast has
   to stay between Helicon's lightest and heaviest smoothing. Maximising
   similarity of contrast would reward sharpening artefacts; requiring only that
-  it stay in range does not.
+  it stay in range does not. Because that measure rises with frame count and
+  the search is subsampled, the bracket is checked again on the whole capture
+  before anything is written - see CONFIRM_AT_FULL_DENSITY.
 * **The envelope.** A candidate that reconstructs pixels no frame contained is
   rejected outright, at any score.
 
@@ -106,11 +108,31 @@ BLOCK = 64
 STACK_STEP = 12
 QUICK_STACK_STEP = 48
 
-# The rendered scenarios the guard re-checks. Three rather than all seven:
+# The rendered scenarios the guard re-checks. Five rather than all seven:
 # every candidate pays for them, and these are the ones the pyramid's own
 # tuning notes cite as the settings' cost centres.
-GUARD_SCENARIOS = ("fine_texture", "depth_edge", "long_stack")
+#
+# deep_stack and veil joined the list after a sweep found settings that gained
+# on all three of the others while quietly costing a decibel on veil. They are
+# the two fixtures item 19 of docs/ALGORITHM_IMPROVEMENTS.md was written
+# against - the reconstructed-pixel artefact and the bright-grain wash - so a
+# guard that did not watch them was not watching the defects this method's
+# departures from choose-max exist to prevent. veil is borrowed from the DCT
+# suite rather than declared in fusion_scenarios.py, exactly as
+# tests/visualize_pyramid_quality.py borrows it.
+GUARD_SCENARIOS = ("fine_texture", "depth_edge", "long_stack", "deep_stack",
+                   "veil")
 QUICK_GUARD_SCENARIOS = ("depth_edge",)
+
+
+def build_guard(name):
+    """(stack, reference) for one guard scenario, wherever it is declared."""
+    if name == "veil":
+        from tests.test_dct_defocus_wash import _veil_stack
+        stack, reference, _interior = _veil_stack()
+        return stack, reference
+    stack, reference, _ = sc.build(name)
+    return stack, reference
 
 # How much ground-truth reconstruction a candidate may give up, in dB, before
 # it is rejected whatever it scores against Helicon. Small on purpose: the
@@ -122,6 +144,26 @@ LIGHTEST = "HF-C-1"
 HEAVIEST = "HF-C-10"
 MAX_SHARE_AGAINST_LIGHTEST = 1.15
 MIN_SHARE_AGAINST_HEAVIEST = 0.85
+
+# The bracket above is the one constraint that does not mean the same thing at
+# the density the search runs at, and it is the reason for the confirmation
+# pass below.
+#
+# Recovered contrast rises with the number of frames: on this capture the
+# shipped settings measure 0.916 of HF-C-1 over 28 frames and 1.112 over all
+# 333. So at STACK_STEP every candidate lands around 0.9-1.0 and the "crunchier
+# than 1.15" half of the bracket cannot fire at all - it is not a loose
+# constraint there, it is an absent one. A candidate can therefore sweep the
+# search, satisfy every guard, and still be outside the bracket on the stack a
+# user actually renders. That is not hypothetical: selectivity 16 did exactly
+# that, winning on all five ground-truth scenarios and reaching 1.233 at full
+# density (see SELECTIVITY in fusion_methods/pyramid.py).
+#
+# So the champion is re-measured on the whole capture before it may be written
+# to source or recorded in the ledger. One fuse of 333 frames is about half a
+# minute and 2.2 GB, which is affordable once per run and not once per
+# candidate - which is also why the search itself stays subsampled.
+CONFIRM_AT_FULL_DENSITY = True
 
 # A candidate has to beat the incumbent by this much to displace it. Below it
 # the two are the same setting wearing different numbers, and churning source
@@ -266,17 +308,17 @@ class Tunable:
 
 
 TUNABLES = [
-    Tunable("ENERGY_WINDOW", "energy_window", [3, 5, 9, 15],
+    Tunable("ENERGY_WINDOW", "energy_window", [3, 5, 7, 9, 15],
             "window the band energy is pooled over"),
-    Tunable("SELECTIVITY", "selectivity", [4.0, 8.0, 16.0, 32.0],
+    Tunable("SELECTIVITY", "selectivity", [4.0, 8.0, 16.0, 32.0, 64.0],
             "how sharply the weights favour the sharpest frame"),
     Tunable("COHERENCE", "coherence", [0.0, 0.125, 0.25, 0.5],
             "how much of a band's decision comes from the coarser bands"),
-    Tunable("BASE_SELECTIVITY", "base_selectivity", [1.0, 3.0, 8.0],
+    Tunable("BASE_SELECTIVITY", "base_selectivity", [1.0, 3.0, 5.0, 8.0],
             "how hard the coarse base follows the frames that won the detail"),
-    Tunable("NOISE_PERCENTILE", None, [5.0, 10.0, 20.0],
+    Tunable("NOISE_PERCENTILE", "noise_percentile", [2.0, 5.0, 10.0, 20.0],
             "percentile of a band's energies read as its noise level"),
-    Tunable("DEFAULT_LEVELS", "levels", [4, 5, 6],
+    Tunable("DEFAULT_LEVELS", "levels", [3, 4, 5, 6, 7],
             "band-pass levels the frame is split into"),
 ]
 
@@ -351,8 +393,7 @@ class Fixture:
         names = QUICK_GUARD_SCENARIOS if quick else GUARD_SCENARIOS
         self.guard_scenarios = {}
         for name in names:
-            stack, reference, _ = sc.build(name)
-            self.guard_scenarios[name] = (stack, reference)
+            self.guard_scenarios[name] = build_guard(name)
 
 
 def measure(fixture, settings, keep_image=False):
@@ -417,6 +458,53 @@ def measure(fixture, settings, keep_image=False):
 def _without_image(scored):
     """A candidate record fit for JSON: everything but the frame itself."""
     return {key: value for key, value in scored.items() if key != "image"}
+
+
+def confirm_at_full_density(settings, log=print):
+    """
+    Re-measure one candidate's bracket on every frame of the capture.
+
+    Returns (ok, report). `ok` is False when the settings leave the bracket or
+    the stack envelope at full density, whatever they scored during the search -
+    see the note above CONFIRM_AT_FULL_DENSITY for why that can differ.
+
+    Loads its own copy of the stack and drops it again: this runs once per
+    session, and holding 2.2 GB for the length of a search to use it at the end
+    would be the expensive way round.
+    """
+    frames, _meta = captures.load_capture(CAPTURE)
+    try:
+        fused = fuse(frames, settings)
+
+        shares = {}
+        for key in (LIGHTEST, HEAVIEST):
+            render = captures.load_render(CAPTURE, key)
+            if render is None:
+                return False, f"{key} did not decode; cannot confirm the bracket"
+            ours, theirs = captures.fit_render(fused, render)
+            shares[key] = fm.detail_agreement(ours, theirs, BLOCK)[1]
+
+        lo = np.min(np.stack(frames), axis=0).astype(np.int32)
+        hi = np.max(np.stack(frames), axis=0).astype(np.int32)
+        result = fused.astype(np.int32)
+        excursion = (int(np.maximum(lo - result, 0).max()),
+                     int(np.maximum(result - hi, 0).max()))
+    finally:
+        frames = None
+
+    reasons = []
+    if shares[LIGHTEST] >= MAX_SHARE_AGAINST_LIGHTEST:
+        reasons.append(f"crunchier than {LIGHTEST} on the full stack "
+                       f"({shares[LIGHTEST]:.3f} >= {MAX_SHARE_AGAINST_LIGHTEST})")
+    if shares[HEAVIEST] <= MIN_SHARE_AGAINST_HEAVIEST:
+        reasons.append(f"softer than {HEAVIEST} on the full stack "
+                       f"({shares[HEAVIEST]:.3f} <= {MIN_SHARE_AGAINST_HEAVIEST})")
+    if excursion != (0, 0):
+        reasons.append(f"left the stack envelope by {excursion}")
+
+    log(f"full density: share {LIGHTEST} {shares[LIGHTEST]:.3f}, "
+        f"{HEAVIEST} {shares[HEAVIEST]:.3f}, envelope {excursion}")
+    return not reasons, "; ".join(reasons)
 
 
 def guard_holds(candidate, incumbent, tolerance=GUARD_TOLERANCE_DB):
@@ -652,6 +740,27 @@ def main(argv=None):
             for constant, value in sorted(changed.items()):
                 session.log(f"  {constant}: {default_settings()[constant]!r} "
                             f"-> {value!r}")
+
+        # The search ran on every STACK_STEP-th frame, where the bracket cannot
+        # bite. Nothing that changed a constant may reach source or the ledger
+        # until it has been re-measured on the whole capture.
+        confirmed, why = True, None
+        if changed and not args.quick and CONFIRM_AT_FULL_DENSITY:
+            session.log(f"confirming the champion on all "
+                        f"{captures.capture_meta(CAPTURE)['frame_count']} frames...")
+            confirmed, why = confirm_at_full_density(champion["settings"],
+                                                     log=session.log)
+            champion["full_density_confirmed"] = confirmed
+            if not confirmed:
+                champion["full_density_reasons"] = why
+                session.log(f"REJECTED at full density: {why}")
+                session.log("the search's own stack is subsampled, and recovered "
+                            "contrast rises with frame count - see the note above "
+                            "CONFIRM_AT_FULL_DENSITY. The shipped constants stand.")
+                champion = measure(fixture, default_settings())
+                champion = _without_image(champion)
+                champion["origin"] = "incumbent (champion rejected at full density)"
+                changed = {}
 
         applied = False
         if args.apply and changed:

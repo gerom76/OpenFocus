@@ -95,7 +95,8 @@ from constants import (
     halo_radius_ceiling,
     DEPTH_SMOOTHING_DEFAULT,
     PYRAMID_BASE_PRESETS, PYRAMID_COHERENCE_PRESETS,
-    PYRAMID_LEVELS, PYRAMID_SELECTIVITY_PRESETS,
+    PYRAMID_LEVELS, PYRAMID_NOISE_PERCENTILE_PRESETS,
+    PYRAMID_SELECTIVITY_PRESETS,
 )
 
 class _KernelSpec(NamedTuple):
@@ -419,6 +420,7 @@ class OpenFocus(QMainWindow):
         self.combo_pyr_coherence = right_panel_components.combo_pyr_coherence
         self.combo_pyr_base = right_panel_components.combo_pyr_base
         self.cb_pyr_noise_gate = right_panel_components.cb_pyr_noise_gate
+        self.combo_pyr_noise_pct = right_panel_components.combo_pyr_noise_pct
         self.cb_pyr_envelope = right_panel_components.cb_pyr_envelope
         self.pyramid_widget = right_panel_components.pyramid_widget
         self.combo_contrast = right_panel_components.combo_contrast
@@ -1510,6 +1512,7 @@ class OpenFocus(QMainWindow):
         c.lbl_pyr_coherence.setText(trans.t('label_pyr_coherence'))
         c.lbl_pyr_base.setText(trans.t('label_pyr_base'))
         c.cb_pyr_noise_gate.setText(trans.t('label_pyr_noise_gate'))
+        c.lbl_pyr_noise_pct.setText(trans.t('label_pyr_noise_pct'))
         c.cb_pyr_envelope.setText(trans.t('label_pyr_envelope'))
         for i, depth in enumerate(PYRAMID_LEVELS):
             if depth == 0:
@@ -1517,7 +1520,9 @@ class OpenFocus(QMainWindow):
         for combo, presets, prefix in (
                 (c.combo_pyr_selectivity, PYRAMID_SELECTIVITY_PRESETS, 'label_pyr_selectivity'),
                 (c.combo_pyr_coherence, PYRAMID_COHERENCE_PRESETS, 'label_pyr_coherence'),
-                (c.combo_pyr_base, PYRAMID_BASE_PRESETS, 'label_pyr_base')):
+                (c.combo_pyr_base, PYRAMID_BASE_PRESETS, 'label_pyr_base'),
+                (c.combo_pyr_noise_pct, PYRAMID_NOISE_PERCENTILE_PRESETS,
+                 'label_pyr_noise_pct')):
             for i, (key, _value) in enumerate(presets):
                 combo.setItemText(i, trans.t(f'{prefix}_{key}'))
 

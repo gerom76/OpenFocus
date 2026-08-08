@@ -43,6 +43,8 @@ from constants import (
     PYRAMID_LEVELS,
     PYRAMID_LEVELS_DEFAULT,
     PYRAMID_NOISE_GATE_DEFAULT,
+    PYRAMID_NOISE_PERCENTILE_DEFAULT,
+    PYRAMID_NOISE_PERCENTILE_PRESETS,
     PYRAMID_SELECTIVITY_DEFAULT,
     PYRAMID_SELECTIVITY_PRESETS,
 )
@@ -111,12 +113,14 @@ class RightPanelComponents:
     combo_pyr_coherence: QComboBox
     combo_pyr_base: QComboBox
     cb_pyr_noise_gate: QCheckBox
+    combo_pyr_noise_pct: QComboBox
     cb_pyr_envelope: QCheckBox
     pyramid_widget: QWidget
     lbl_pyr_levels: QLabel
     lbl_pyr_selectivity: QLabel
     lbl_pyr_coherence: QLabel
     lbl_pyr_base: QLabel
+    lbl_pyr_noise_pct: QLabel
     combo_contrast: QComboBox
     slider_contrast: QSlider
     contrast_value_label: QLabel
@@ -469,6 +473,20 @@ def create_right_panel() -> RightPanelComponents:
     cb_pyr_noise_gate.setChecked(PYRAMID_NOISE_GATE_DEFAULT)
     pyramid_layout.addWidget(cb_pyr_noise_gate)
 
+    # How much of each band that gate reads its noise level off. Directly under
+    # the checkbox it qualifies, and greyed out with it: with the gate off the
+    # frames are compared absolutely and no percentile is taken at all.
+    lbl_pyr_noise_pct, combo_pyr_noise_pct = _preset_row(
+        'label_pyr_noise_pct', PYRAMID_NOISE_PERCENTILE_PRESETS,
+        PYRAMID_NOISE_PERCENTILE_DEFAULT)
+
+    def _sync_noise_percentile(checked):
+        lbl_pyr_noise_pct.setEnabled(checked)
+        combo_pyr_noise_pct.setEnabled(checked)
+
+    cb_pyr_noise_gate.toggled.connect(_sync_noise_percentile)
+    _sync_noise_percentile(cb_pyr_noise_gate.isChecked())
+
     cb_pyr_envelope = QCheckBox(trans.t('label_pyr_envelope'))
     cb_pyr_envelope.setChecked(PYRAMID_ENVELOPE_DEFAULT)
     pyramid_layout.addWidget(cb_pyr_envelope)
@@ -681,12 +699,14 @@ def create_right_panel() -> RightPanelComponents:
         combo_pyr_coherence=combo_pyr_coherence,
         combo_pyr_base=combo_pyr_base,
         cb_pyr_noise_gate=cb_pyr_noise_gate,
+        combo_pyr_noise_pct=combo_pyr_noise_pct,
         cb_pyr_envelope=cb_pyr_envelope,
         pyramid_widget=pyramid_widget,
         lbl_pyr_levels=lbl_pyr_levels,
         lbl_pyr_selectivity=lbl_pyr_selectivity,
         lbl_pyr_coherence=lbl_pyr_coherence,
         lbl_pyr_base=lbl_pyr_base,
+        lbl_pyr_noise_pct=lbl_pyr_noise_pct,
         combo_contrast=combo_contrast,
         slider_contrast=slider_contrast,
         contrast_value_label=contrast_value_label,

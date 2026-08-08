@@ -122,7 +122,8 @@ class TestParameterRelevance:
         # and an absent property would read as "this build had no such control".
         assert set(options) >= {
             "PyramidLevels", "PyramidSelectivity", "PyramidCoherence",
-            "PyramidBaseWeighting", "PyramidNoiseGate", "PyramidEnvelopeClip",
+            "PyramidBaseWeighting", "PyramidNoiseGate", "PyramidGrainEstimate",
+            "PyramidEnvelopeClip",
         }
         assert not any(name.startswith("Pyramid") for name in
                        render_options.describe(algorithm="dct", pyramid_levels=4))
@@ -194,7 +195,8 @@ class TestWording:
         options = render_options.describe(
             algorithm="pyramid", kernel_size=5, pyramid_levels=6,
             pyramid_selectivity=32.0, pyramid_coherence=0.25, pyramid_base=0.0,
-            pyramid_noise_gate=False, pyramid_envelope=True,
+            pyramid_noise_gate=False, pyramid_noise_percentile=2.0,
+            pyramid_envelope=True,
         )
         assert options["KernelSize"] == "5 px"
         assert options["PyramidLevels"] == "6"
@@ -202,6 +204,9 @@ class TestWording:
         assert options["PyramidCoherence"] == "Light (0.25)"
         assert options["PyramidBaseWeighting"] == "Mean (0)"
         assert options["PyramidNoiseGate"] == "Off"
+        # Recorded even with the gate off - see _pyramid_options for why the
+        # setting is worth quoting when it did not run.
+        assert options["PyramidGrainEstimate"] == "Minimal (2)"
         assert options["PyramidEnvelopeClip"] == "On"
 
     def test_pyramid_defaults_are_named_rather_than_left_blank(self):
@@ -212,8 +217,9 @@ class TestWording:
         assert options["PyramidLevels"] == "Auto"
         assert options["PyramidSelectivity"] == "Balanced (8)"
         assert options["PyramidCoherence"] == "Off (0)"
-        assert options["PyramidBaseWeighting"] == "Balanced (3)"
+        assert options["PyramidBaseWeighting"] == "Balanced (8)"
         assert options["PyramidNoiseGate"] == "On"
+        assert options["PyramidGrainEstimate"] == "Balanced (10)"
         assert options["PyramidEnvelopeClip"] == "On"
 
     def test_auto_depth_quotes_what_the_render_resolved_it_to(self):
