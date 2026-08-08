@@ -130,7 +130,18 @@ class StatusConsole(QWidget):
         self.output.setFont(font)
         layout.addWidget(self.output)
 
-        self.setMinimumHeight(header.sizeHint().height())
+        # Keep at least 2 text rows visible so the splitter can't squeeze
+        # the output view down to a sliver while it's still expanded.
+        metrics = self.output.fontMetrics()
+        self._output_min_height = (
+            metrics.lineSpacing() * 2
+            + self.output.frameWidth() * 2
+            + int(self.output.document().documentMargin() * 2)
+        )
+        self.output.setMinimumHeight(self._output_min_height)
+
+        self._header_height = header.sizeHint().height()
+        self.setMinimumHeight(self._header_height + self._output_min_height)
 
         self._collapsed = False
         self._pending = ""  # Incomplete line waiting for its newline
@@ -244,8 +255,10 @@ class StatusConsole(QWidget):
             trans.t('console_expand') if collapsed else trans.t('console_collapse'))
         if collapsed:
             self.setMaximumHeight(self.sizeHint().height())
+            self.setMinimumHeight(self._header_height)
         else:
             self.setMaximumHeight(16777215)
+            self.setMinimumHeight(self._header_height + self._output_min_height)
 
     def is_collapsed(self) -> bool:
         return self._collapsed
