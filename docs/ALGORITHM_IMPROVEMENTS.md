@@ -62,11 +62,12 @@ mitigation shipped but the underlying issue remains.
 | 25 | Depth Map (Average) | Quality | The blend selects hard once it selects at all, and had nothing to make that selection coherent, so a region no frame resolves broke into blotches - *fixed in 1.38.0* | High | Medium | 100% |
 | 26 | Depth Map (Average) | Quality | No coherence along the frame axis, so the busiest fifth of the frame stayed 18% above the reference at every spatial setting - *fixed in 1.39.0* | Medium | Medium | 100% |
 | 27 | Depth Map (Max) | Quality | Every pixel comes from one frame, so no dial could divide its grain and the residual against the reference was pinned - *fixed in 1.42.0* | Medium | Low | 100% |
+| 28 | Depth Map (Max) | Quality | No edge-aware stage over the depth field, so tile agreement stalled at 0.96 in the mid-detail regions the trust gate declines to touch - *fixed in 1.43.0* | Medium | Low | 100% |
 
 Row 24b is numbered that way because it is a sub-finding of item 24 and is
 documented inside it; every other row matches its `## N` section below.
 
-**Overall: 89% done** - 25 of 28 rows fully fixed, item 8 partially (the GPU
+**Overall: 90% done** - 26 of 29 rows fully fixed, item 8 partially (the GPU
 default shipped; the CPU cost itself is untouched, and 1.30.13 showed the
 pairwise fold was not what made it grow), 2 untouched. Since 1.17.1 a
 quality ratchet (`tests/test_fusion_regression.py`, described after item 19)
@@ -2400,6 +2401,104 @@ that isolates the dial here.
 
 ---
 
+## 28. Depth Map (Max) has no edge-aware stage, and its depth is noisy where the measure was merely adequate
+
+**Method:** Depth Map (Max) | **Category:** Quality | **Impact:** Medium |
+**Effort:** Low | **Fixed in 1.43.0**
+
+Item 27 closed the RefGap and left RefAgree exactly where every earlier sweep
+had: **0.958 to 0.962**, across 51 renders spanning every kernel, smoothing,
+halo and slice setting. Two measurements say why, and neither is a dial set
+wrong.
+
+**Where the disagreement is.** Splitting the 32 px tiles by how much detail
+Helicon found in each and correlating within each fifth:
+
+| fifth of *their* detail | 1 | 2 | 3 | 4 | 5 |
+|---|---:|---:|---:|---:|---:|
+| within-fifth correlation | 0.57 | 0.42 | 0.35 | 0.58 | 0.93 |
+
+The busiest fifth tracks at 0.93. The middle tracks at 0.35. `depth_smoothing`
+cannot reach that: it is gated on trust, so it acts hardest where the measure
+said least and declines to act over exactly the regions the measure found
+*merely adequate* - which is what the middle fifths are made of.
+
+**It is not the registration either.** Sweeping that
+(`tests/render_matrix_suites.depthmap_max_registration`, 6 settings on the full
+capture) moves RefAgree by **0.002** for the stage that models focus breathing,
+and **down 0.012** for a first-frame reference.
+
+**Fix.** Pass the finished depth map through a guided filter, with the
+all-in-focus picture as the guide - the stage MODE_AVERAGE was given at 1.38.0,
+over the field this mode decides in. The guide costs nothing to obtain: whichever
+frame is winning a pixel is the frame whose luminance belongs there, so it is
+accumulated in the reduction that already finds the depth.
+
+A depth map is piecewise-smooth *against the picture* - constant across a
+surface, stepping where the picture shows an occlusion - which is exactly the
+prior a guided filter encodes and exactly what an isotropic low-pass of the same
+reach cannot honour without rounding the step off too.
+
+Measured on the full capture at kernel 25 (`depthmap_max_coherence`):
+
+| Setting | RefAgree | RefGap | FlatNoise | bands 1..5 |
+|---|---:|---:|---:|---|
+| ds50 (item 27's baseline) | 0.9624 | 0.241 | 3.15 | 1.53 1.26 1.20 1.13 1.07 |
+| ds50 edge4 | 0.9693 | 0.206 | 2.94 | 1.46 1.20 1.16 1.10 1.06 |
+| **ds50 edge8** | **0.9704** | 0.150 | 2.51 | 1.35 1.10 1.08 1.07 1.05 |
+| ds50 edge8 slice2 | 0.9692 | **0.058** | 2.25 | 1.13 1.04 1.03 1.01 1.00 |
+| ds50 edge16 | 0.9520 | 0.123 | 1.82 | 1.29 0.95 0.92 0.95 0.99 |
+
+Both columns move together for the first time. Before this stage, slice pooling
+bought RefGap by giving up RefAgree (item 27: 0.240 -> 0.108 cost 0.004); with
+the depth field coherent first, `edge8 slice2` reaches a gap of **0.058** while
+*still* scoring above every unfiltered row. Radius 16 is past the useful range
+and below the unfiltered baseline, which is where `COHERENCE_RADIUS_MAX_DMAP`
+puts the slider's ceiling at 12.
+
+### What RefAgree cannot be pushed past, and why
+
+**0.98 is not reachable on this metric, and the reason is not the fusion.**
+`detail_agreement` correlates tile maps, so it only measures fusion once both
+renders are on one geometry - and they never are. Three measurements bound it:
+
+- **The residual.** After `fit_reference`'s similarity warp, our render sits
+  **4.6 px rms** from Helicon's (median 2.2, p90 11.8, growing from 1.9 px at
+  the centre of the frame to 6.0 px at the edge - the signature of focus
+  breathing, which is a per-frame magnification no single warp removes). Two
+  Helicon renders sit **0.5 px** apart, because they share an alignment.
+- **What that costs.** Drifting a render by the measured field and scoring it
+  against itself - zero content difference by construction - gives 0.9916 at
+  block 32. Removing the same geometry from a real pair moves ours by
+  **+0.004 to +0.009** and moves the already-aligned Helicon pair by **0.0000**,
+  which is the control that says the procedure is not manufacturing agreement.
+- **The ceiling.** Two settings of Helicon's *own* method B score **0.9872**
+  against each other at that 0.5 px. Reading above 0.98 through a 4.6 px
+  geometry difference would require our render to match `HF-B-30-1` more closely
+  than Helicon's own `HF-B-1-2` does.
+
+So the honest reading of this stage is: **0.962 -> 0.970 measured**, and
+**0.966 -> 0.973 like-for-like** with the geometry removed. At 64 px tiles -
+which `detail_map`'s own rule argues for at an offset this large, "a tile
+several times wider than that offset" - the same render reads **0.9819** against
+0.9750 unfiltered. That block size is not what the harness reports and has not
+been changed here; it is quoted so the number is not mistaken for a ceiling of
+the method rather than of the comparison.
+
+**Off by default**, like the average's, and for the same reason: the reach is
+the risk, and how far a depth field is smooth is a property of the scene.
+
+**Guarded by** `tests/test_depthmap_coherence.py` - radius 0 reproducing both of
+MODE_MAX's rendering paths byte for byte, the render staying inside the stack it
+gathered from, and the property that makes it a guided filter rather than a blur:
+a two-frame fixture whose correct depth steps down the middle of the picture,
+where a radius of 12 must leave the step standing because the guide steps there
+too. CPU/GPU parity in `tests/test_depthmap_gpu.py`, where the device builds the
+guide in its own reduction and the host runs the filter, so the two agree on the
+depth field exactly.
+
+---
+
 ## Tuning Depth Map
 
 What the two modes expose, what each dial was measured to do, and what is
@@ -2446,12 +2545,25 @@ the arithmetic mean of every frame; every setting from 50 up is within a few
 hundredths of a dB of the others on the report scenarios, and 100 is where item
 26's sweep put all of its best rows once the coherence stages existed.
 
-**`coherence_radius` (Weight coherence, default off, Average only).** Item 25's
-stage: each frame's share of the blend through an edge-aware filter before the
-pixels are gathered. Measured best at **16** on this capture and at **0 to 4** on
-the banded synthetic stacks in `tests/fusion_scenarios.py`, which step depth every
-27 px - the reach is the whole risk, and the disagreement between those two is
-the scene and not the number. Costs a second pass over the stack.
+**`coherence_radius` (Weight coherence / Edge coherence, default off, both
+modes).** Items 25 and 28: an edge-aware filter over the field each mode decides
+in, before the pixels are gathered. The two want very different numbers, which is
+why the slider is relabelled and re-ranged per mode.
+
+| | Average (weight shares) | Max (depth map) |
+|---|---|---|
+| best on this capture | 16 | 8 |
+| at the ceiling | 24 still gaining | 16 already below baseline |
+| slider ceiling | 32 | 12 (`COHERENCE_RADIUS_MAX_DMAP`) |
+| cost | a second pass over the stack | one plane, and the guide is free |
+
+A weight share varies over the picture and tolerates being pooled a long way; a
+depth field is nearly flat across a surface and steps at an occlusion, so past
+roughly the pooling window the filter averages across the step instead of along
+the surface. On the banded synthetic stacks in `tests/fusion_scenarios.py`, which
+step depth every 27 px, the average wants **0 to 4** - the reach is the whole
+risk in both modes, and the disagreement between fixture and capture is the scene
+and not the number.
 
 **`slice_radius` (Slice coherence, default off, both modes).** Items 26 and 27:
 pooling along the frame axis, in the only form each mode can carry it. **4 to 5**

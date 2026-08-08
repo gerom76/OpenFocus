@@ -181,6 +181,23 @@ AVERAGE_SELECTIVITY_DEFAULT = 50
 COHERENCE_RADIUS_MAX = 32
 COHERENCE_RADIUS_DEFAULT = 0
 
+# --- Depth Map (Max) edge coherence exposed in the UI ----------------------
+# The same slider, over the hard select's depth map instead of the average's
+# weight shares, and guided by the all-in-focus picture so it follows edges
+# rather than reaching over them. See _filter_depth in fusion_methods/depthmap.py
+# for what it is fixing and why depth_smoothing cannot reach it.
+#
+# The ceiling is lower than the average's because the field is a different
+# shape. A weight share varies over the picture and tolerates being pooled a long
+# way; a depth field is nearly flat across a surface and steps at an occlusion,
+# so past roughly the pooling window the filter starts averaging across the step
+# instead of along the surface. Measured on the reference ant capture at kernel
+# 25, agreement with Helicon's own depth map against the unfiltered render's
+# 0.962: 0.969 at radius 4, 0.970 at 8, and 0.952 at 16 - past the baseline and
+# still falling. 12 is short of where it turns bad and past where it stops
+# helping, which is the same rule the halo ceiling follows.
+COHERENCE_RADIUS_MAX_DMAP = 12
+
 # --- Depth Map slice coherence exposed in the UI ---------------------------
 # Reach along the stack, in slices either side, and the one dial both depth-map
 # modes read: the average pools each frame's share of the blend over the band,

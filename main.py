@@ -88,6 +88,8 @@ from constants import (
     DCT_PLATEAU_PRESETS,
     AVERAGE_SELECTIVITY_DEFAULT,
     COHERENCE_RADIUS_DEFAULT,
+    COHERENCE_RADIUS_MAX,
+    COHERENCE_RADIUS_MAX_DMAP,
     SLICE_RADIUS_DEFAULT,
     HALO_RADIUS_MAX,
     halo_radius_ceiling,
@@ -154,11 +156,16 @@ class OpenFocus(QMainWindow):
         # the hard select builds an index map the coherent-depth dial
         # regularises, the average blends the stack on weights selectivity
         # shapes, and neither of those has anything to act on in the other mode.
-        # Slice coherence is the exception - it pools along the stack rather than
-        # inside a frame, which both modes can carry - so both rows show it.
+        # The two coherence stages are the exception. Both pool the decision
+        # before it is acted on rather than making it, so each mode carries them
+        # over whatever field it decides in - the average over its weight shares,
+        # the hard select over its depth map - and both rows show them. The
+        # spatial one is relabelled per mode by update_slider_availability,
+        # because the field it acts on is the whole of what it means.
         _MethodControls("rb_dmap_max", _KernelSpec(
             "dmap", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_DMAP),
-            ("halo_widget", "coherent_widget", "slice_widget")),
+            ("halo_widget", "coherent_widget", "avg_coherence_widget",
+             "slice_widget")),
         _MethodControls("rb_dmap_avg", _KernelSpec(
             "dmap", KERNEL_SIZE_MAX, KERNEL_SIZE_DEFAULT_DMAP),
             ("halo_widget", "selectivity_widget", "avg_coherence_widget",
@@ -765,6 +772,24 @@ class OpenFocus(QMainWindow):
         self.slider_halo.blockSignals(False)
         self.handle_halo_slider_change(self.slider_halo.value())
 
+    def _set_coherence_range(self, ceiling):
+        """Point the shared coherence slider at one mode's usable range.
+
+        The slider drives a different field in each depth-map mode - the
+        average's weight shares, the hard select's depth map - and the second
+        turns harmful well before the first stops helping; see
+        COHERENCE_RADIUS_MAX_DMAP. Same behaviour as the halo range above: a
+        value above the new ceiling comes down to meet it.
+        """
+        if self.slider_avg_coherence.maximum() == ceiling:
+            return
+        current = self.slider_avg_coherence.value()
+        self.slider_avg_coherence.blockSignals(True)
+        self.slider_avg_coherence.setMaximum(ceiling)
+        self.slider_avg_coherence.setValue(min(current, ceiling))
+        self.slider_avg_coherence.blockSignals(False)
+        self.handle_avg_coherence_slider_change(self.slider_avg_coherence.value())
+
     def handle_halo_slider_change(self, value):
         """Update the halo-radius display label; 0 reads as Off."""
         radius = int(value)
@@ -847,6 +872,17 @@ class OpenFocus(QMainWindow):
             visible.add("smooth_widget")
         for name in self._METHOD_BLOCKS:
             getattr(self, name).setVisible(name in visible)
+
+        # One slider, one number, two fields: the average pools each frame's
+        # share of the blend, the hard select pools the depth map. Naming it
+        # after the field is what stops the panel claiming a stage that is not
+        # the one running.
+        hard_select = self.rb_dmap_max.isChecked()
+        self.right_panel_components.lbl_avg_coherence.setText(
+            trans.t('label_max_coherence' if hard_select
+                    else 'label_avg_coherence'))
+        self._set_coherence_range(COHERENCE_RADIUS_MAX_DMAP if hard_select
+                                  else COHERENCE_RADIUS_MAX)
 
         if kernel:
             self._set_kernel_range(kernel.maximum)
@@ -1459,7 +1495,9 @@ class OpenFocus(QMainWindow):
         c.lbl_halo.setText(trans.t('label_halo'))
         c.lbl_depth_smooth.setText(trans.t('label_depth_smooth'))
         c.lbl_avg_selectivity.setText(trans.t('label_avg_selectivity'))
-        c.lbl_avg_coherence.setText(trans.t('label_avg_coherence'))
+        # Set from the method rather than fixed: the spatial coherence label
+        # names the field the stage acts on, which differs between the two
+        # depth-map modes. update_slider_availability owns that choice.
         c.lbl_avg_slice.setText(trans.t('label_avg_slice'))
         c.lbl_dct_block.setText(trans.t('label_dct_block'))
         c.lbl_dct_plateau.setText(trans.t('label_dct_plateau'))
@@ -1488,6 +1526,8 @@ class OpenFocus(QMainWindow):
         self.handle_avg_selectivity_slider_change(self.slider_avg_selectivity.value())
         self.handle_avg_coherence_slider_change(self.slider_avg_coherence.value())
         self.handle_avg_slice_slider_change(self.slider_avg_slice.value())
+        # Picks up the new language for the per-method coherence label as well.
+        self.update_slider_availability()
         c.btn_reset.setText(trans.t('btn_reset'))
         c.btn_render.setText(trans.t('btn_render'))
         c.btn_stop.setText(trans.t('btn_stop'))

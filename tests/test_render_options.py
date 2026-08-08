@@ -51,19 +51,31 @@ class TestParameterRelevance:
         assert render_options.describe(algorithm="depthmap_average")["HaloRadius"] == "Off"
         assert "HaloRadius" not in render_options.describe(algorithm="dct")
 
-    def test_weight_coherence_is_only_reported_for_the_average(self):
-        options = render_options.describe(
+    def test_each_mode_names_the_field_its_coherence_radius_filtered(self):
+        """One dial, two stages: the report has to say which one ran.
+
+        The average filters every frame's weight share, the hard select filters
+        its depth map. Quoting one name for both would claim a stage that did
+        not run.
+        """
+        avg = render_options.describe(
             algorithm="depthmap_average", coherence_radius=16)
-        assert options["WeightCoherenceRadius"] == "16 px"
-        # Off is stated rather than omitted, same as the halo radius above: the
-        # average reads the dial whether or not it was moved.
-        off = render_options.describe(algorithm="depthmap_average")
-        assert off["WeightCoherenceRadius"] == "Off"
-        # The hard select has no weight field to filter, so quoting a radius for
-        # it would claim a stage that never ran.
+        assert avg["WeightCoherenceRadius"] == "16 px"
+        assert "EdgeCoherenceRadius" not in avg
+
         hard = render_options.describe(
-            algorithm="depthmap_max", coherence_radius=16)
+            algorithm="depthmap_max", coherence_radius=8)
+        assert hard["EdgeCoherenceRadius"] == "8 px"
         assert "WeightCoherenceRadius" not in hard
+
+        # Off is stated rather than omitted, same as the halo radius above: both
+        # modes read the dial whether or not it was moved.
+        assert render_options.describe(
+            algorithm="depthmap_average")["WeightCoherenceRadius"] == "Off"
+        assert render_options.describe(
+            algorithm="depthmap_max")["EdgeCoherenceRadius"] == "Off"
+        assert "EdgeCoherenceRadius" not in render_options.describe(
+            algorithm="pyramid", coherence_radius=8)
 
     def test_slice_coherence_is_reported_for_both_depth_map_modes(self):
         """The one dial the two modes share, so the one both have to report.

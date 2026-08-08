@@ -53,11 +53,12 @@ COHERENT_DEPTH_METHODS = {"depthmap_max"}
 # whatever the weights look like.
 AVERAGE_SELECTIVITY_METHODS = {"depthmap_average"}
 
-# The weight-coherence radius pools that same weighting across the frame before
-# it is applied. Same reasoning as selectivity above - there are no weights to
-# pool where the pixel comes from one frame whole - so the same methods, named
-# separately because it is a separate stage and one could move without the other.
+# The coherence radius pools the decision across the frame before it is acted
+# on, and both modes read it - but over different fields, so each reports the
+# field it actually filtered. Quoting one name for both would say a stage ran
+# that did not.
 AVERAGE_COHERENCE_METHODS = {"depthmap_average"}
+DEPTH_COHERENCE_METHODS = {"depthmap_max"}
 
 # The slice radius pools along the stack instead, and that axis both modes can
 # reach: the average pools each frame's share of the blend over the band, the
@@ -261,6 +262,9 @@ def describe(
                 f"{int(average_selectivity)}%" if average_selectivity else _OFF)
         if algorithm in AVERAGE_COHERENCE_METHODS:
             options["WeightCoherenceRadius"] = (
+                f"{int(coherence_radius)} px" if coherence_radius else _OFF)
+        if algorithm in DEPTH_COHERENCE_METHODS:
+            options["EdgeCoherenceRadius"] = (
                 f"{int(coherence_radius)} px" if coherence_radius else _OFF)
         if algorithm in SLICE_COHERENCE_METHODS:
             # What the render asked for. depthmap_impl narrows this to what the

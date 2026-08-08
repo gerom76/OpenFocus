@@ -111,14 +111,66 @@ def test_zero_reproduces_the_unfiltered_blend_exactly(incoherent):
     assert np.array_equal(plain, off)
 
 
-def test_the_dial_does_nothing_to_the_hard_select(incoherent):
-    """MODE_MAX gathers whole pixels from one frame; it has no weight field."""
+def test_zero_reproduces_the_unfiltered_hard_select_exactly(incoherent):
+    """MODE_MAX reads the same dial over its depth field; 0 still has to be off.
+
+    Both of the mode's rendering paths, for the reason the slice tests check
+    both: with the smoothing dial off it copies pixels, with it on it gathers a
+    tent, and a radius of 0 must leave each exactly where it was.
+    """
     stack, _ = incoherent
-    low = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
-                        coherence_radius=0)
-    high = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
-                         coherence_radius=16)
-    assert np.array_equal(low, high)
+    for smoothing in (0, 50):
+        plain = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                              depth_smoothing=smoothing)
+        off = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                            depth_smoothing=smoothing, coherence_radius=0)
+        assert np.array_equal(plain, off), f"smoothing {smoothing}"
+
+
+def test_the_depth_filter_still_renders_from_the_stack(incoherent):
+    """A filtered depth is still a depth: no frame invented, none reached past."""
+    stack, _ = incoherent
+    filtered = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                             coherence_radius=8)
+    lo = np.min(np.stack(stack), axis=0)
+    hi = np.max(np.stack(stack), axis=0)
+    assert np.all(filtered >= lo) and np.all(filtered <= hi)
+
+
+def test_the_depth_filter_follows_the_picture_rather_than_reaching_over_it():
+    """The property that makes it a guided filter and not a blur.
+
+    Two frames, one sharp on the left half and one on the right, so the correct
+    depth is a step down the middle of the picture and the picture has an edge in
+    exactly that place. A filter of radius 12 - wide enough for an isotropic
+    low-pass to smear that step over 24 px - has to leave it standing, because
+    the guide it is fitted against steps there too.
+
+    Read as the width of the transition in the *rendered* result rather than of
+    the depth map, since the depth map is internal and the render is what the
+    claim is about.
+    """
+    rng = np.random.default_rng(23)
+    texture = (cv2.GaussianBlur(rng.random((SIZE, SIZE, 3), dtype=np.float32),
+                                (0, 0), 0.8) * 255)
+    # Each half is a different tone as well as differently focused, so the seam
+    # between the two sources is visible in the output at all.
+    texture[:, :SIZE // 2] *= 0.45
+    left, right = texture.copy(), texture.copy()
+    left[:, SIZE // 2:] = cv2.GaussianBlur(texture, (0, 0), 4.0)[:, SIZE // 2:]
+    right[:, :SIZE // 2] = cv2.GaussianBlur(texture, (0, 0), 4.0)[:, :SIZE // 2]
+    stack = [np.clip(f, 0, 255).astype(np.uint8) for f in (left, right)]
+
+    fused = depthmap_impl(list(stack), mode=MODE_MAX, kernel_size=KERNEL,
+                          depth_smoothing=0, coherence_radius=12)
+    # How far the render sits from the nearer of the two sources, column by
+    # column: a depth that has been smeared across the step renders a band that
+    # matches neither frame.
+    fused32 = fused.astype(np.float32)
+    away = np.minimum(np.abs(fused32 - stack[0]), np.abs(fused32 - stack[1]))
+    per_column = away.mean(axis=(0, 2))
+    smeared = int((per_column > 2.0).sum())
+    assert smeared <= 8, f"{smeared} columns sit between the two sources"
 
 
 def test_the_result_stays_inside_the_range_of_the_frames_it_blended(incoherent):

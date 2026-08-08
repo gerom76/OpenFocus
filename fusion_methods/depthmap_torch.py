@@ -51,6 +51,7 @@ from fusion_methods.depthmap import (
     _BASELINE_FRACTION,
     _WEIGHT_FLOOR,
     _blend_width,
+    _filter_depth,
     _index_dtype,
     _near_window,
     _coherent_depth,
@@ -326,7 +327,8 @@ def _repair_index(stack, fused, index, count, chunk, upload):
 
 
 def _gather_coherent(stack, index, energy_sum, energy_sq_sum, count, chunk,
-                     upload, smoothing, width, rows, cols, channels, dev):
+                     upload, smoothing, width, guide, depth_coherence,
+                     rows, cols, channels, dev):
     """Settle the depth map on the host, then gather the pixels on the device.
 
     The depth map and the trust map it is smoothed by are one plane each, so the
@@ -341,6 +343,11 @@ def _gather_coherent(stack, index, energy_sum, energy_sq_sum, count, chunk,
     `width` is the tent's half-width in slices; with the smoothing dial off it is
     the only reason this path runs at all, and the depth is then the index map
     itself - see depthmap._blend_width.
+
+    `guide` is the winning frames' luminance, gathered on the device in the same
+    reduction that found the depth, and `depth_coherence` the radius its filter
+    runs at. Like everything else here it is settled by the host's own helper, so
+    the two paths agree on the depth field exactly rather than approximately.
     """
     raw = index.to("cpu").numpy().astype(_index_dtype(count), copy=False)
     despeckled = _regularise_index(raw)
@@ -350,6 +357,9 @@ def _gather_coherent(stack, index, energy_sum, energy_sq_sum, count, chunk,
         depth = _coherent_depth(despeckled, trust, smoothing)
     else:
         depth = despeckled.astype(np.float32)
+    if depth_coherence:
+        depth = _filter_depth(depth, guide.to("cpu").numpy(), depth_coherence,
+                              count)
 
     depth_dev = torch.from_numpy(np.ascontiguousarray(depth)).to(dev)
 
@@ -397,12 +407,12 @@ def _resolve_device(device):
 
 def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
                     channels, img_resize, smoothing=0, exponent=1.0,
-                    coherence=0, slices=0):
+                    coherence=0, slices=0, depth_coherence=0):
     """One full pass over the stack on `dev`, returning a (C, H, W) tensor."""
     coherent = mode == MODE_MAX and smoothing > 0
-    # Either dial sends MODE_MAX through the tent gather instead of the copy;
-    # see the branch in depthmap.depthmap_impl this mirrors.
-    blended = mode == MODE_MAX and (coherent or slices > 0)
+    # Any of the three sends MODE_MAX through the tent gather instead of the
+    # copy; see the branch in depthmap.depthmap_impl this mirrors.
+    blended = mode == MODE_MAX and (coherent or slices > 0 or depth_coherence > 0)
     lap_kernel = _laplacian_kernel(channels, dev)
     box_kernel = _box_kernel(window, dev) if window > 1 else None
     near = _near_window(window)
@@ -432,10 +442,15 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
                                                  device=dev)
         energy_sum = torch.zeros((rows, cols), device=dev) if coherent else None
         energy_sq_sum = torch.zeros((rows, cols), device=dev) if coherent else None
+        # The all-in-focus picture the depth filter is guided by, built in the
+        # same reduction that finds the depth; see depthmap._filter_depth.
+        guide = (torch.zeros((rows, cols), device=dev)
+                 if depth_coherence else None)
 
         for start in range(0, count, chunk):
             batch = upload(stack[start:start + chunk])
             energy = measure(batch)
+            grey = _grey(batch) if depth_coherence else None
             if coherent:
                 energy_sum += energy.sum(dim=(0, 1))
                 energy_sq_sum += energy.square().sum(dim=(0, 1))
@@ -451,14 +466,16 @@ def _fuse_on_device(stack, mode, window, radius, dev, chunk, rows, cols,
                 torch.where(better, energy[i, 0], best, out=best)
                 if fused is not None:
                     torch.where(better.unsqueeze(0), batch[i], fused, out=fused)
+                if guide is not None:
+                    torch.where(better, grey[i, 0], guide, out=guide)
                 index[better] = start + i
-            del batch, energy
+            del batch, energy, grey
         del best
 
         if blended:
             return _gather_coherent(stack, index, energy_sum, energy_sq_sum,
                                     count, chunk, upload, smoothing,
-                                    _blend_width(slices),
+                                    _blend_width(slices), guide, depth_coherence,
                                     rows, cols, channels, dev)
 
         return _repair_index(stack, fused, index, count, chunk, upload)
@@ -602,8 +619,10 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         chunk_size: Frames per device batch; None sizes it from free VRAM
         depth_smoothing: Depth-map coherence strength, 0-100 (MODE_MAX)
         selectivity: Focus-weight selectivity, 0-100 (MODE_AVERAGE)
-        coherence_radius: Weight-coherence radius in pixels; 0 disables it
-                          (MODE_AVERAGE)
+        coherence_radius: How far the decision is pooled across the frame, in
+                          pixels; 0 disables it. Both modes read it, over the
+                          field each has - MODE_AVERAGE filters every frame's
+                          weight share, MODE_MAX filters the depth map
         slice_radius: Slice-coherence radius in frames; 0 disables it. Both
                       modes read it - MODE_AVERAGE pools each frame's share of
                       the blend over the band, MODE_MAX widens the tent it
@@ -627,6 +646,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
         _resolve_percent(selectivity, DEFAULT_SELECTIVITY))
     coherence = (_resolve_coherence_radius(coherence_radius)
                  if mode == MODE_AVERAGE else 0)
+    depth_coherence = (_resolve_coherence_radius(coherence_radius)
+                       if mode == MODE_MAX else 0)
 
     stack_ori = _load_stack(input_source)
     if not stack_ori:
@@ -652,7 +673,7 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
     # cv2 borders have no such limit) is the one that can do the work. The
     # measurement prefilter and the coherence filter pad too, so either can set
     # the floor when the pooling window is the smaller of the three.
-    max_pad = max(1, window // 2, coherence,
+    max_pad = max(1, window // 2, coherence, depth_coherence,
                   MEASURE_BLUR_KSIZE // 2 if MEASURE_SIGMA > 0 else 1)
     if min(rows, cols) <= max_pad:
         raise ValueError(
@@ -668,7 +689,8 @@ def depthmap_torch_impl(input_source, img_resize=None, mode=MODE_MAX,
             with torch.no_grad():
                 fused = _fuse_on_device(stack_ori, mode, window, radius, dev,
                                         chunk, rows, cols, channels, img_resize,
-                                        smoothing, exponent, coherence, slices)
+                                        smoothing, exponent, coherence, slices,
+                                        depth_coherence)
             break
         except torch.cuda.OutOfMemoryError:
             # Sizing from free VRAM can still be beaten by another process

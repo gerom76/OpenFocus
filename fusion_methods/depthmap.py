@@ -933,6 +933,40 @@ def _fill_depth(depth, weight, levels):
     return num / np.maximum(den, 1e-8)
 
 
+def _filter_depth(depth, guide, radius, count):
+    """Edge-aware smoothing of the depth field, guided by the all-in-focus picture.
+
+    The counterpart of MODE_AVERAGE's `coherence_radius`, and it is here for the
+    reason that one is: `depth_smoothing`'s fill is isotropic and gated on trust,
+    so it acts hardest where the measurement said least and declines to act
+    everywhere else - which leaves the depth as noisy as the argmax made it over
+    every region the measure was merely *adequate* on. Those are the mid-detail
+    regions, and they are where this method's tile-level disagreement with
+    another program's depth map turns out to live.
+
+    A guided filter is the right shape for that because a depth map is
+    piecewise-smooth against the picture: it varies continuously across a surface
+    and steps where the picture shows an occlusion. Fitting depth ~ a*guide + b
+    over each window follows those steps and averages everything between them,
+    which an isotropic low-pass of the same reach cannot do without rounding the
+    steps off too.
+
+    The depth is normalised onto [0, 1] before the fit, so `COHERENCE_EPS` means
+    the same thing here as it does over there - a floor on the local contrast the
+    guide must have before the depth is allowed to follow it - rather than
+    something that drifts with how many frames the stack happens to hold.
+    """
+    scale = max(float(count - 1), 1.0)
+    normalised = depth / scale
+    filtered = _guided_filter(normalised, guide, radius, COHERENCE_EPS)
+    # The linear model is fitted rather than constrained, so the result can leave
+    # the range the depth actually spans; a depth outside the stack would put the
+    # render tent past the last frame and gather nothing there.
+    np.clip(filtered, 0.0, 1.0, out=filtered)
+    filtered *= scale
+    return filtered
+
+
 def _coherent_depth(despeckled, trust, strength):
     """The depth the renderer follows: measured where trusted, smoothed where not.
 
@@ -1082,11 +1116,14 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
     # MODE_AVERAGE is already a blend of every frame by construction; there is
     # no index map to fill, so the dial has nothing to act on.
     coherent = mode == MODE_MAX and smoothing > 0
-    # And the converse: MODE_MAX gathers whole pixels from one frame, so it has
-    # no weight field for this to filter. The two modes get the same fix in the
-    # only form each can carry it - and along the frame axis, below, both can.
+    # The same dial in the only form each mode can carry it: MODE_AVERAGE has a
+    # weight field to filter, MODE_MAX has a depth field. Both are "pool the
+    # decision this far across the frame before acting on it", and both are
+    # guided by the picture so the pooling stops at an occlusion.
     coherence = (_resolve_coherence_radius(coherence_radius)
                  if mode == MODE_AVERAGE else 0)
+    depth_coherence = (_resolve_coherence_radius(coherence_radius)
+                       if mode == MODE_MAX else 0)
     slices = 0      # resolved once the stack is loaded and its depth is known
 
     # ---------- Data loading ----------
@@ -1152,6 +1189,20 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
         if halo_element is not None:
             energy = cv2.dilate(energy, halo_element)
         return energy
+
+    def measure_energy_guide(k):
+        """Focus energy of frame k, and the grey picture it was measured on.
+
+        The guide the depth filter needs is the all-in-focus picture, and the
+        only place each frame's pixels exist is here - so the winning frame's
+        luminance is carried out of the measurement rather than reconstructed by
+        a second pass. One extra plane per in-flight task; see _worker_bytes.
+        """
+        img = load_float(k)
+        energy = _focus_energy(img, window)
+        if halo_element is not None:
+            energy = cv2.dilate(energy, halo_element)
+        return energy, _guide_of(img)
 
     def _weigh(energy, baseline, scale, exponent):
         """Turn a measured energy map into a MODE_AVERAGE weight, in place."""
@@ -1227,26 +1278,35 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
         # plane exactly as it always did.
         energy_sum = np.zeros((rows, cols), dtype=np.float32) if coherent else None
         energy_sq_sum = np.zeros((rows, cols), dtype=np.float32) if coherent else None
+        # The all-in-focus picture the depth filter is guided by, accumulated in
+        # the same reduction that finds the depth: whichever frame is winning a
+        # pixel is the frame whose luminance belongs there.
+        best_guide = (np.zeros((rows, cols), dtype=np.float32)
+                      if depth_coherence else None)
+        measure = measure_energy_guide if depth_coherence else measure_energy
 
-        for k, energy in _map_in_order(measure_energy, num_images, max_workers):
+        for k, measured in _map_in_order(measure, num_images, max_workers):
+            energy, guide = measured if depth_coherence else (measured, None)
             if coherent:
                 energy_sum += energy
                 energy_sq_sum += np.square(energy)
             better = energy > best_energy
             np.copyto(best_energy, energy, where=better)
             np.copyto(best_index, k, where=better)
-            del energy, better
+            if best_guide is not None:
+                np.copyto(best_guide, guide, where=better)
+            del energy, guide, better, measured
 
         # The depth map is despeckled before anything is gathered, so a pixel
         # whose winner was decided by noise takes its neighbourhood's frame
         # instead of tearing away from it.
         despeckled = _regularise_index(best_index)
 
-        # Either dial renders the depth map through a tent rather than copying
-        # from it: one because the depth is no longer an integer, the other
-        # because the pixel is wanted from a band of frames. They meet in the
-        # same gather, so having both on costs no more than having either.
-        if coherent or slices:
+        # Any of the three dials renders the depth map through a tent rather than
+        # copying from it: the depth is no longer an integer, or the pixel is
+        # wanted from a band of frames. They meet in the same gather, so having
+        # them all on costs no more than having any one.
+        if coherent or slices or depth_coherence:
             del best_energy, best_index
             if coherent:
                 trust = _trust_map(energy_sum, energy_sq_sum, num_images,
@@ -1254,10 +1314,15 @@ def depthmap_impl(input_source, img_resize=None, mode=MODE_MAX,
                 depth = _coherent_depth(despeckled, trust, smoothing)
                 del trust
             else:
-                # Slice pooling alone: the depth is still exactly the frame each
-                # pixel's argmax named, and only the width around it changes.
+                # Without the smoothing dial the depth is still exactly the frame
+                # each pixel's argmax named, and only what is done around it
+                # changes.
                 depth = despeckled.astype(np.float32)
             del energy_sum, energy_sq_sum, despeckled
+            if depth_coherence:
+                depth = _filter_depth(depth, best_guide, depth_coherence,
+                                      num_images)
+                del best_guide
             return _gather_blended(load_float, num_images, depth,
                                    out_dtype, rows, cols, _blend_width(slices))
 

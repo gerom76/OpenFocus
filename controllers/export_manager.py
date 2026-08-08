@@ -350,22 +350,24 @@ class ExportManager:
         return ("" if selectivity == AVERAGE_SELECTIVITY_DEFAULT
                 else f"_sel{selectivity}")
 
-    def _avg_coherence_suffix(self) -> str:
-        """Return a '_wc<n>' suffix for the Depth Map (Avg) weight coherence.
+    def _coherence_suffix(self) -> str:
+        """Return the spatial-coherence radius, tagged by the field it filtered.
 
-        Off by default, so the halo suffix's rule applies rather than the
-        selectivity one above: named only when it is on, which keeps the name a
-        render used to get and still separates two renders that differ only in
-        how far the weights were pooled.
+        `wc` for the average's weight shares and `ec` for the hard select's depth
+        map: one slider, but two stages, and two renders that differ in which one
+        ran must not collide on a name. Off by default, so the halo suffix's rule
+        applies rather than the selectivity one above - named only when it is on.
         """
         window = self.window
-        if not window.rb_dmap_avg.isChecked():
+        tag = ("wc" if window.rb_dmap_avg.isChecked()
+               else "ec" if window.rb_dmap_max.isChecked() else None)
+        if tag is None:
             return ""
         try:
             coherence = int(window.slider_avg_coherence.value())
         except Exception:
             return ""
-        return f"_wc{coherence}" if coherence > 0 else ""
+        return f"_{tag}{coherence}" if coherence > 0 else ""
 
     def _slice_suffix(self) -> str:
         """Return a '_sc<n>' suffix for the slice-coherence radius.
@@ -414,7 +416,7 @@ class ExportManager:
         fusion_method += self._halo_suffix()
         fusion_method += self._coherent_suffix()
         fusion_method += self._selectivity_suffix()
-        fusion_method += self._avg_coherence_suffix()
+        fusion_method += self._coherence_suffix()
         fusion_method += self._slice_suffix()
 
         # The IFCNN stage runs on top of the method above, so it reads as an addition

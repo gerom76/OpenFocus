@@ -125,11 +125,13 @@ def _pyramid_torch(stack, levels=None, img_resize=None, device=None, **tuning):
 
 
 def _depthmap_max(stack, kernel_size=9, halo_radius=0, depth_smoothing=None,
-                  slice_radius=None, img_resize=None, thread_count=None):
+                  coherence_radius=None, slice_radius=None, img_resize=None,
+                  thread_count=None):
     from fusion_methods.depthmap import depthmap_impl, MODE_MAX
     return depthmap_impl(stack, img_resize, mode=MODE_MAX,
                          kernel_size=kernel_size, halo_radius=halo_radius,
                          depth_smoothing=depth_smoothing,
+                         coherence_radius=coherence_radius,
                          slice_radius=slice_radius,
                          thread_count=thread_count)
 
@@ -146,12 +148,13 @@ def _depthmap_average(stack, kernel_size=9, halo_radius=0, selectivity=None,
 
 
 def _depthmap_max_torch(stack, kernel_size=9, halo_radius=0,
-                        depth_smoothing=None, slice_radius=None,
-                        img_resize=None, device=None):
+                        depth_smoothing=None, coherence_radius=None,
+                        slice_radius=None, img_resize=None, device=None):
     from fusion_methods.depthmap_torch import depthmap_torch_impl, MODE_MAX
     return depthmap_torch_impl(stack, img_resize, mode=MODE_MAX,
                                kernel_size=kernel_size, halo_radius=halo_radius,
                                depth_smoothing=depth_smoothing,
+                               coherence_radius=coherence_radius,
                                slice_radius=slice_radius,
                                device=device)
 
@@ -339,6 +342,19 @@ METHODS = [
              "opposite ends of the stack and the region tears into a mosaic of "
              "hard-edged patches. Higher declines to select over more of the "
              "frame; too high and real depth structure is flattened with it."),
+            ("coherence_radius", [0, 4, 8, 12, 16],
+             "Radius of the edge-aware filter the finished depth map is passed "
+             "through, guided by the all-in-focus picture. The smoothing dial "
+             "above is gated on trust, so it acts hardest where the measure "
+             "said least and declines to act over the regions it found merely "
+             "adequate - and those are where this method's depth is noisiest "
+             "without being obviously wrong. A depth map is piecewise-smooth "
+             "against the picture, so fitting it to the guide averages within a "
+             "surface and steps at an occlusion, which an isotropic low-pass of "
+             "the same reach cannot do without rounding the step off too. 0 is "
+             "off. Much smaller than the average mode's equivalent wants: a "
+             "depth field is flatter than a weight field, and past roughly the "
+             "pooling window the filter starts reaching over real depth steps."),
             ("slice_radius", [0, 2, 3, 4, 6],
              "Slices either side of its own depth each pixel is rendered from. "
              "0 is the select this mode is named for - one frame, whole - which "
@@ -498,6 +514,10 @@ METHODS = [
                  "Same dial as the CPU depth map; the depth field itself is "
                  "settled by the host's own helpers, so the two agree on it "
                  "exactly and only the gather runs on the device."),
+                ("coherence_radius", [0, 4, 8, 12, 16],
+                 "Same dial as the CPU depth map; the guide is built on the "
+                 "device in the same reduction that finds the depth, and the "
+                 "filter itself runs on the host's own helper."),
                 ("slice_radius", [0, 2, 3, 4, 6],
                  "Same dial as the CPU depth map; it widens the same tent the "
                  "device already gathers the depth map through.")),

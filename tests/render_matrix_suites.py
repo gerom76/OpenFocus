@@ -347,6 +347,133 @@ def depthmap_max_slices() -> Plan:
     )
 
 
+def depthmap_max_coherence() -> Plan:
+    """Depth Map (Max): the edge-aware depth filter, against the dials it joins.
+
+    `depthmap_max_slices` closed the RefGap and left RefAgree at 0.958-0.962,
+    which is where every setting of every earlier sweep also left it. Two
+    measurements say why, and neither is a fusion dial being set wrong:
+
+    - The tile disagreement is concentrated in the *middle* detail bands. Within
+      the busiest fifth of tiles we track Helicon at r=0.93; within the second
+      and third fifths, at 0.42 and 0.35. `depth_smoothing` cannot reach those:
+      it is gated on trust, so it acts hardest where the measure said least and
+      declines to act over exactly the regions the measure found merely adequate.
+    - Registration is not the term either. Sweeping it (`depthmap_max_registration`)
+      moves RefAgree by 0.002 for the stage that models focus breathing, and
+      *down* by 0.012 for a first-frame reference.
+
+    So the missing stage is the one MODE_AVERAGE was given at 1.38.0 and this
+    mode never was: an edge-aware filter over the field the decision lives in.
+    There it is the weight share; here it is the depth itself, guided by the
+    all-in-focus picture the reduction already has. Swept against the two dials
+    it has to share the frame with.
+    """
+    variants = _grid(
+        "depthmap_max",
+        kernel_size=[9, 25],
+        depth_smoothing=[25, 50],
+        # The subsampled read put the peak at 6-8 and the falloff past 12; 0 is
+        # the control and 16 is the Average mode's best setting, which this
+        # field does not want.
+        coherence_radius=[0, 4, 8, 16],
+    )
+    # Whether the frame axis still adds anything once the depth field is
+    # coherent, at the corner the grid above is expected to land on.
+    variants += _grid(
+        "depthmap_max",
+        kernel_size=[25],
+        depth_smoothing=[50],
+        coherence_radius=[8],
+        slice_radius=[1, 2, 4],
+    )
+
+    return Plan(
+        stack=StackSpec(source=ELECTRONICS_ANT),
+        destination=WORK,
+        reference=HELICON_B30,
+        suites=[Suite(
+            name="Depth Map (Max) - depth coherence x smoothing x kernel",
+            fusion="depthmap_max",
+            registration=ECC_HOMOGRAPHY,
+            variants=variants,
+            note="`coherence_radius` 0 is the unfiltered depth field, byte for "
+                 "byte. Rows without a `sc` tag ran at slice_radius 0.",
+        )],
+    )
+
+
+def depthmap_max_registration() -> Plan:
+    """Depth Map (Max): what actually caps RefAgree, which is not a fusion dial.
+
+    `depthmap_max_slices` closed the RefGap and left RefAgree where it found it -
+    0.958 to 0.962 across every setting either sweep tried, against 0.983 for two
+    settings of Helicon's *own* method B compared with each other. Chasing that
+    with more fusion tuning is chasing the wrong term.
+
+    `detail_agreement` correlates tile maps, so it is only measuring the fusion
+    once the two renders are on the same geometry - and they are not. Each
+    program aligned the stack its own way and focus breathing means the
+    magnification each removed differs frame to frame, so `fit_reference`'s
+    similarity warp leaves a residual local drift no rigid transform can take
+    out. Measured on this capture: **4.2 px rms** between our render and Helicon's
+    after the fit, against 0.2 px between two of our own renders off one aligned
+    stack. And a render scored against a smoothly drifted copy of *itself* loses
+    exactly what that predicts - 0.989 at 3 px, 0.973 at 5 px, at the 32 px tile
+    the harness reports on.
+
+    So the ceiling our own registration sets is around 0.98 and we sit 0.02 under
+    it, which is the only part fusion could ever have moved. This suite sweeps the
+    term that sets the ceiling instead. The fusion is pinned at the previous run's
+    best two settings and repeated under each registration, so any movement is the
+    alignment's.
+
+    The `scale` stage is the one to watch: focus breathing is a per-frame
+    magnification, which is exactly what it estimates and what neither homography
+    nor ECC is being asked to model here.
+    """
+    fusion = _grid(
+        "depthmap_max",
+        kernel_size=[25],
+        depth_smoothing=[50],
+        slice_radius=[0, 4],
+    )
+
+    registrations = [
+        ("homography+ecc", "middle", 1024),        # the shipped baseline
+        ("homography+ecc", "first", 1024),
+        ("scale+homography+ecc", "middle", 1024),
+        ("scale+homography+ecc", "first", 1024),
+        ("scale+ecc", "middle", 1024),
+        ("homography+ecc", "middle", 1600),        # finer detection
+    ]
+
+    suites = []
+    for method, reference_mode, width in registrations:
+        suites.append(Suite(
+            name=f"Depth Map (Max) - {method}, reference {reference_mode}, "
+                 f"detection {width} px",
+            fusion="depthmap_max",
+            registration=RegistrationSpec(
+                method=method,
+                downscale_width=width,
+                reference_mode=reference_mode,
+                ecc_parallel=True,
+            ),
+            variants=fusion,
+            note="The fusion is identical in every suite of this run; the "
+                 "registration is the only thing that changes. Read RefAgree "
+                 "across the run folders, not within one.",
+        ))
+
+    return Plan(
+        stack=StackSpec(source=ELECTRONICS_ANT),
+        destination=WORK,
+        reference=HELICON_B30,
+        suites=suites,
+    )
+
+
 def depthmap_modes() -> Plan:
     """Both depth-map modes at their defaults, from one registration.
 
@@ -379,6 +506,8 @@ SUITES = {
     "depthmap_average_halo": depthmap_average_halo,
     "depthmap_max": depthmap_max,
     "depthmap_max_slices": depthmap_max_slices,
+    "depthmap_max_coherence": depthmap_max_coherence,
+    "depthmap_max_registration": depthmap_max_registration,
     "depthmap_modes": depthmap_modes,
 }
 

@@ -132,17 +132,23 @@ def test_halo_radius_matches_the_cpu_path(stack, mode):
     assert _psnr(gpu[inner], cpu[inner]) > 55.0
 
 
-def test_coherence_radius_matches_the_cpu_path(stack):
-    """The two-pass filtered blend, which is the newest place the paths can drift.
+@pytest.mark.parametrize("mode", [MODE_MAX, MODE_AVERAGE])
+def test_coherence_radius_matches_the_cpu_path(stack, mode):
+    """The filtered decision, which is the newest place the paths can drift.
 
     Scored a coherence radius in from the edge rather than a kernel, since the
     filter is the widest thing either path pads for and its border convention is
     the one difference between them.
+
+    Both modes, because the dial reaches a different field in each and the device
+    reaches it a different way: MODE_AVERAGE filters every frame's weight share
+    on the device, MODE_MAX builds the guide on the device and filters one depth
+    plane on the host.
     """
     radius = 8
-    cpu = depthmap_impl(list(stack), mode=MODE_AVERAGE, kernel_size=KERNEL,
+    cpu = depthmap_impl(list(stack), mode=mode, kernel_size=KERNEL,
                         coherence_radius=radius)
-    gpu = depthmap_torch_impl(list(stack), mode=MODE_AVERAGE, kernel_size=KERNEL,
+    gpu = depthmap_torch_impl(list(stack), mode=mode, kernel_size=KERNEL,
                               coherence_radius=radius, device=DEV)
     assert gpu.shape == cpu.shape and gpu.dtype == cpu.dtype
     inner = (slice(radius, -radius), slice(radius, -radius))
